@@ -1,0 +1,1 @@
+seg,hop,t0_s,t1_s,dt_s,lin_m,set_duration_s,min_duration_s,dwell,over_vel,over_acc,over_time,fault_vel_joints,fault_vel_rad_s,max_vel_rad_s,fault_acc_joints,fault_acc_rad_s2,max_acc_rad_s2,worst_vel,worst_acc,speed_rad_s,acc_rad_s2

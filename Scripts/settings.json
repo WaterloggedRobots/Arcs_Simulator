@@ -1,0 +1,29 @@
+{
+  "joint_vel_deg": [
+    223,
+    223,
+    223,
+    267,
+    267,
+    267
+  ],
+  "joint_acc_deg": [
+    496,
+    496,
+    496,
+    594,
+    594,
+    594
+  ],
+  "spacing": 0.02,
+  "path_window_radius": 1,
+  "path_window_on": false,
+  "auto_sample": false,
+  "hold_lin_mps": 0.01,
+  "burner_duration": 2,
+  "grid_spacing": 0.01,
+  "snap_to_grid": false,
+  "dev_mode": false,
+  "camera_urdf": "",
+  "stored_points": []
+}

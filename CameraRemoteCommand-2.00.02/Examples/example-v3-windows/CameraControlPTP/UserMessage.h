@@ -1,0 +1,6 @@
+﻿// User defined messages
+#define WM_CAMERA_CONNECTION (WM_APP + 1)
+#define WM_CAMERA_DISCONNECTION (WM_APP + 2)
+#define WM_CAMERA_EXPIRE_UPDATA (WM_APP + 3)
+#define WM_MTP_CONNECTION (WM_APP + 4)
+#define WM_MTP_DISCONNECTION (WM_APP + 5)

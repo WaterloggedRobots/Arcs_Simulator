@@ -1,0 +1,438 @@
+
+import math
+import time
+import numpy as np
+import pyaubo_sdk
+
+robot_ip = "192.168.2.124"#"192.168.0.101"
+robot_port = 30004
+
+class RobotArcs:
+    def __init__(self, ip=robot_ip, port=robot_port, user="aubo", pwd="123456"):
+        self.client = pyaubo_sdk.RpcClient()
+        self.client.setRequestTimeout(1500)
+        self.client.connect(ip, port)
+        if not self.client.hasConnected():
+            raise RuntimeError("RPC connect failed")
+        self.client.login(user, pwd)
+
+        # pick first robot & get interface
+        names = self.client.getRobotNames()
+        if not names:
+            raise RuntimeError("No robots on controller")
+        self.name = names[0]
+        self.interface = self.client.getRobotInterface(self.name)
+
+        # one-time setup
+        self.mc  = self.interface.getMotionControl()
+        cfg = self.interface.getRobotConfig()
+        self.mc.setSpeedFraction(0.75)
+        #mc.setAccelFraction(0.75)
+        cfg.setTcpOffset([0,0,0,0,0,0])
+
+        # capture starting poses
+        self.initPos = [-1.4687596998706127, 0.6089765683721227, 1.9923472065558696, -0.1984839510809548, 1.57996713558883, 0.1695107834780384]  # [x,y,z,rx,ry,rz]
+        self.loadPosJ = [0, -15*math.pi/180, 100*math.pi/180, 25*math.pi/180, 90*math.pi/180, 0]
+
+    def wait_arrival(self, start_timeout_s=2.0):
+        t0 = time.time()
+        while self.mc.getExecId() == -1:
+            if time.time() - t0 > start_timeout_s:
+                return -1
+            time.sleep(0.05)
+        while self.mc.getExecId() != -1:
+            time.sleep(0.05)
+        return 0
+
+    def MoveLAwait(self, pose_xyzrpy, vel=1.2, acc=0.25, blend_r=0.0, blend_type=0):
+        self.mc.moveLine(pose_xyzrpy, float(vel), float(acc), float(blend_r), int(blend_type))
+        return self.wait_arrival()
+
+    def MoveLAsync(self, pose_xyzrpy, vel=1.2, acc=0.25, blend_r=0.0, blend_type=0.02):
+        print("moving")
+        self.mc.moveLine(pose_xyzrpy, float(vel), float(acc), float(blend_r), int(blend_type))
+        return None
+
+    def MoveJAwait(self, q, jvel=80*math.pi/180, jacc=60*math.pi/180, blend_r=0.0, blend_type=0):    #input as rad
+        self.mc.moveJoint(q, float(jvel), float(jacc), float(blend_r), int(blend_type))
+        return self.wait_arrival()
+
+    def MoveJAsync(self, q, jvel=0.4, jacc=0.2, blend_r=0.0, blend_type=0):
+        self.mc.moveJoint(
+            [float(v) for v in q[:6]],
+            float(jvel), float(jacc), float(blend_r), int(blend_type),
+        )
+        return None
+
+    def GetTcpPose(self):  # base->TCP
+        return self.interface.getRobotState().getTcpPose()
+
+    def GetToolPose(self):  # base->Tool
+        return self.interface.getRobotState().getToolPose()
+
+    def GetJoints(self):    #joints as rad
+        return self.interface.getRobotState().getJointPositions()
+
+    def StopMove(self):
+        """Hard stop: stopMove is only a pause. Also stopJoint + clearPath."""
+        try:
+            self.mc.stopMove(True, True)
+        except Exception:
+            pass
+        try:
+            self.mc.stopJoint(8.0)
+        except Exception:
+            pass
+        try:
+            self.mc.stopLine(4.0, 8.0)
+        except Exception:
+            pass
+        try:
+            self.mc.clearPath()
+        except Exception:
+            pass
+
+    def PauseMove(self):
+        try:
+            self.mc.stopMove(True, True)
+        except Exception:
+            pass
+
+    def AbortPathBuffer(self, name="rec"):
+        """Stop executing movePathBuffer and drop the named buffer."""
+        name = str(name or "rec")
+        self.StopMove()
+        try:
+            self.mc.pathBufferFree(name)
+        except Exception:
+            pass
+        try:
+            t0 = time.time()
+            while self.mc.getExecId() != -1 and time.time() - t0 < 0.25:
+                try:
+                    self.mc.stopJoint(8.0)
+                except Exception:
+                    pass
+                time.sleep(0.02)
+        except Exception:
+            pass
+
+    def StartMove(self):
+        self.mc.clearPath()
+        self.mc.startMove()
+
+    def Close(self):
+        self.client.logout()
+        self.client.disconnect()
+
+    def GetFK(self, q):
+        pose, err = self.interface.getRobotAlgorithm(q) # rad, J1..J6
+        if not err:             # err  = 0 on success
+            return pose         # pose = [x, y, z, rx, ry, rz]   meters + rad (RPY)
+        else:
+            return -1
+
+    def GetIK(self, targetPose, seed=None):
+        pose = [float(v) for v in targetPose]
+        if seed is None:
+            seed = self.GetJoints()
+        q_near = [float(v) for v in np.asarray(seed, dtype=float).reshape(-1)[:6]]
+
+        q, code = self.interface.getRobotAlgorithm().inverseKinematics(q_near, pose)
+        print("IK code", code, "q", q)
+        if int(code) != 0:
+            return None
+        q = [float(v) for v in q]
+        if len(q) != 6 or np.allclose(q[:3], pose[:3], atol=1e-4):
+            return None
+        return q
+
+    def SetSpeed(self,new_speed):
+        self.mc.setSpeedFraction(new_speed)
+
+    # pathBuffer types from AUBO pathBufferAlloc:
+    # 1 toppra, 2 cubic_spline (recorded traj), 3 joint B-spline
+    PATH_BUF_TOPPRA = 1
+    PATH_BUF_CUBIC_SPLINE = 2
+    PATH_BUF_JOINT_BSPLINE = 3
+
+    def _as_joint_list(self, points):
+        out = []
+        for p in points or []:
+            if isinstance(p, dict):
+                q = p.get("q") or p.get("joints") or p.get("pose")
+            else:
+                q = p
+            if q is None:
+                continue
+            q = [float(v) for v in list(q)[:6]]
+            if len(q) == 6:
+                out.append(q)
+        return out
+
+    def _unwrap_traj(self, traj):
+        out = []
+        prev = None
+        for q in traj:
+            q = [float(v) for v in q[:6]]
+            if prev is not None:
+                for j in range(6):
+                    d = q[j] - prev[j]
+                    while d > math.pi:
+                        q[j] -= 2.0 * math.pi
+                        d = q[j] - prev[j]
+                    while d < -math.pi:
+                        q[j] += 2.0 * math.pi
+                        d = q[j] - prev[j]
+            out.append(q)
+            prev = q
+        return out
+
+    def _resample_traj(self, traj, times=None, dt=0.01, src_interval=None, max_n=4000):
+        traj = self._unwrap_traj(traj)
+        if times is None or len(times) != len(traj):
+            step = src_interval if src_interval and float(src_interval) > 1e-6 else dt
+            times = [i * float(step) for i in range(len(traj))]
+        times = [float(t) for t in times]
+        t_end = max(times[-1] - times[0], dt)
+        n = max(2, int(round(t_end / dt)) + 1)
+        if n > max_n:
+            dt = t_end / float(max_n - 1)
+            n = max_n
+        t0 = times[0]
+        out = []
+        j = 0
+        for i in range(n):
+            t = t0 + min(i * dt, t_end)
+            while j + 1 < len(times) and times[j + 1] < t:
+                j += 1
+            if j + 1 >= len(times):
+                out.append(list(traj[-1]))
+                continue
+            span = times[j + 1] - times[j]
+            a, b = traj[j], traj[j + 1]
+            if max(abs(a[k] - b[k]) for k in range(6)) < 1e-9:
+                out.append(list(a))
+                continue
+            u = 0.0 if span < 1e-9 else (t - times[j]) / span
+            u = max(0.0, min(1.0, u))
+            out.append([(1.0 - u) * a[k] + u * b[k] for k in range(6)])
+        return out, dt
+
+    def prepare_path_buffer(self, points, name="rec", interval=0.01,
+                            path_type=None, chunk=10, times=None):
+        """Load joint waypoints into a controller pathBuffer. Does NOT execute.
+
+        Matches Aubo demo: cubic_spline + ~10 ms samples.
+        pathBufferEval -5 = invalid args (do not wait on Valid).
+        """
+        raw = self._unwrap_traj(self._as_joint_list(points))
+        if len(raw) < 2:
+            raise ValueError("pathBuffer needs at least 2 joint points")
+        # Keep same-q samples that span real time (dwells). Collapsing them
+        # to one knot makes _resample_traj lerp the previous move across the
+        # hold, which is the type-2 crawl at pose B.
+        if times is not None and len(times) == len(raw):
+            kept_q, kept_t = [raw[0]], [float(times[0])]
+            for q, t in zip(raw[1:], times[1:]):
+                t = float(t)
+                prev = kept_q[-1]
+                dt = t - kept_t[-1]
+                same = max(abs(q[k] - prev[k]) for k in range(6)) < 1e-4
+                if same and dt < 1e-3:
+                    kept_t[-1] = t
+                    continue
+                kept_q.append(q)
+                kept_t.append(t)
+            raw, times = kept_q, kept_t
+        if len(raw) < 2:
+            raise ValueError("pathBuffer needs at least 2 joint points")
+        dt = 0.01
+        src_dt = float(interval) if interval and float(interval) > 1e-6 else dt
+        traj, dt = self._resample_traj(
+            raw, times=times, dt=dt, src_interval=src_dt, max_n=4000
+        )
+        play_s = (len(traj) - 1) * dt
+        expect_s = None
+        if times and len(times) == len(raw):
+            expect_s = float(times[-1]) - float(times[0])
+        elif src_dt:
+            expect_s = src_dt * (len(raw) - 1)
+        print(
+            "pathBuffer resample",
+            "in", len(raw),
+            "src_dt", src_dt,
+            "out", len(traj),
+            "dt", dt,
+            "play_s", play_s,
+            "expect_s", expect_s,
+        )
+        if expect_s and expect_s > 1.0 and play_s < 0.25 * expect_s:
+            raise ValueError(
+                "refusing pathBuffer: play time %.2fs would be far shorter than %.2fs"
+                % (play_s, expect_s)
+            )
+        # Always cubic spline (type 2). Type 1 TOPPRA / type 3 B-spline unused.
+        path_type = self.PATH_BUF_CUBIC_SPLINE
+        name = str(name or "rec")
+        n = len(traj)
+        chunk = max(int(chunk or 10), 40)
+        prev_to = 1500
+        try:
+            self.client.setRequestTimeout(120000)
+        except Exception:
+            pass
+        vmax = [3.892, 3.892, 3.892, 4.136, 4.136, 4.136]
+        amax = [8.65, 8.65, 8.65, 10.37, 10.37, 10.37]
+        wait_s = max(20.0, min(120.0, 10.0 + n * 0.008))
+        try:
+            try:
+                self.mc.pathBufferFree(name)
+            except Exception:
+                pass
+            self.mc.pathBufferAlloc(name, path_type, n)
+            i = 0
+            while i < n:
+                chunk_pts = [list(map(float, q)) for q in traj[i:i + chunk]]
+                self.mc.pathBufferAppend(name, chunk_pts)
+                i += chunk
+            # Empty limits first (keep sample timing). If firmware rejects
+            # that (-5) or never goes Valid, eval with joint vmax/amax.
+            ev = self.mc.pathBufferEval(name, [], [], dt)
+            print("pathBufferEval", name, "type", path_type, "n", n, "dt", dt, "ret", ev)
+            if ev == -5:
+                ev = self.mc.pathBufferEval(name, vmax, amax, dt)
+                print("pathBufferEval retry limits", "ret", ev)
+            t0 = time.time()
+            while not self.mc.pathBufferValid(name):
+                if time.time() - t0 > wait_s:
+                    raise TimeoutError(
+                        "pathBufferEval timed out for %s (n=%s type=%s ret=%s wait=%.1fs)"
+                        % (name, n, path_type, ev, wait_s)
+                    )
+                time.sleep(0.05)
+            return {"ok": True, "name": name, "count": n, "interval": dt, "type": path_type}
+        finally:
+            try:
+                self.client.setRequestTimeout(prev_to)
+            except Exception:
+                pass
+
+    def run_path_buffer(self, name="rec", wait=True):
+        """Execute a prepared pathBuffer. Call only when ready to move."""
+        try:
+            self.mc.startMove()
+        except Exception:
+            pass
+        try:
+            self.SetSpeed(1.0)
+        except Exception:
+            pass
+        self.mc.movePathBuffer(name)
+        if not wait:
+            return 0
+        while self.mc.getExecId() == -1:
+            time.sleep(0.05)
+        while self.mc.getExecId() != -1:
+            time.sleep(0.05)
+        return 0
+
+    def plan_joint_path(self, points, interval=0.01, name="rec", times=None):
+        """Validate + upload buffer only. Never starts motion."""
+        return self.prepare_path_buffer(
+            points, name=name, interval=interval, times=times
+        )
+
+    def estimate_move_duration(self, current_q, target_q, speed_fraction=0.3, max_joint_speed=100):
+        """
+        Estimate how long a joint move will take on the real robot.
+
+        Parameters
+        ----------
+        current_q : list or np.array
+            Current joint angles (rad)
+        target_q : list or np.array
+            Target joint angles (rad)
+        speed_fraction : float
+            Speed percentage used on the real robot (0.0 ~ 1.0)
+        max_joint_speed : float
+            Maximum joint speed of the robot (rad/s)
+
+        Returns
+        -------
+        duration : float
+            Estimated time in seconds
+        """
+        current_q = np.array(current_q)
+        target_q = np.array(target_q)
+
+        # Largest joint angle change
+        max_delta = np.max(np.abs(target_q - current_q))
+
+        # Effective speed
+
+        effective_speed = max_joint_speed * speed_fraction
+
+        # Avoid division by zero
+        if effective_speed < 1e-6:
+            return 10.0
+
+        duration = max_delta / effective_speed
+
+        # Add a small margin (real robot has acceleration/deceleration)
+        duration *= 1.15
+
+        return max(duration, 0.3)  # minimum 0.3
+
+def main():
+    try:
+
+        print(robot.mc.getExecId())
+
+        robot.MoveJAwait(robot.initPos)
+        print("robot at init pos")
+
+        pos1 = robot.GetToolPose()
+        print(pos1)
+        pos1[1]-=0.1
+        robot.MoveLAwait(pos1)
+        print("robot at pos 1: ",robot.GetToolPose())
+
+        pos2 = robot.GetToolPose()
+        pos2[0]-=0.15
+        robot.MoveLAsync(pos2)
+        print("robot moving to ", pos2)
+        t0 = time.time()
+        """ """
+        while robot.mc.getExecId() == -1 and (time.time() - t0) < 2.0:  #wait for robot to start moving
+            time.sleep(0.1)
+
+        robot.StopMove()    #interrupt
+        print("interrupt")
+        time.sleep(0.5)
+
+        robot.StartMove()
+        print("robot moving to init pos")
+        robot.MoveJAwait(robot.initPos)
+        """ """
+
+    except KeyboardInterrupt as e:
+        robot_rpc_client.disconnect()
+
+#Start up
+robot_rpc_client = pyaubo_sdk.RpcClient()
+robot_rpc_client.setRequestTimeout(1000)  # 接口调用: 设置 RPC 超时
+robot_rpc_client.connect(robot_ip, robot_port)  # 接口调用: 连接 RPC 服务
+
+if robot_rpc_client.hasConnected():
+    print("RPC客户端连接成功!")
+    robot = RobotArcs(robot_ip, robot_port)
+else:
+    print("RPC客户端连接失败!")
+
+if __name__ == '__main__':
+
+        main()
+
+        robot_rpc_client.logout()  # 退出登录
+        robot_rpc_client.disconnect()  # 断开连接

@@ -1,0 +1,19 @@
+# Aubo path editor / Viser simulator
+# Python 3.10–3.12 recommended
+
+numpy>=1.24
+scipy>=1.10
+flask>=3.0
+werkzeug>=3.0
+
+# Viewer + URDF
+scikit-robot>=0.0.44
+viser>=0.2.23
+trimesh>=4.0
+
+# Optional: production web server if you wrap Flask with gunicorn
+# gunicorn>=21.0
+
+# Local / vendor (not on PyPI)
+# arcscontrol
+# libpyauboi5  (Aubo ARCS SDK .pyd + DLLs)
