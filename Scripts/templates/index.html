@@ -1,4 +1,4 @@
-<!-- version: beta.0904-ui2 -->
+<!-- version: v_beta10.06 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,8 +28,8 @@
       --sim-deep: var(--cobalt);
       --real: var(--orange);
       --real-deep: var(--coral);
-      --btn-disabled: #6e6f78;
-      --btn-disabled-fg: #ececf2;
+      --btn-disabled: #1a1b20;
+      --btn-disabled-fg: #6a6b72;
       --on-bright: #fff;
       --tl-h: 168px;
       --spd-h: 168px;
@@ -60,7 +60,7 @@
     }
     .layout {
       display: grid;
-      grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
       grid-template-rows: 32px minmax(80px, 1fr) 10px var(--tl-h) 10px var(--spd-h);
       height: 100vh;
       width: 100%;
@@ -160,19 +160,51 @@
       border-bottom: 1px solid #111;
       flex: 0 0 auto;
     }
-    .hier-sec { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-    .hier-sec.objects { flex: 0 0 var(--hier-obj-h); position: relative; overflow: visible; min-height: 56px; }
-    .hier-sec.waypoints { flex: 1 1 auto; min-height: 56px; }
-    .hier-sec.stored { flex: 0 0 var(--hier-pose-h); flex-shrink: 0; }
-    .hier-split {
-      flex: 0 0 8px;
-      cursor: ns-resize;
-      background: #1a1b20;
-      border-top: 1px solid #4a4b54;
-      border-bottom: 1px solid #4a4b54;
-      touch-action: none;
+    .hier-sec { min-height: 0; display: none; flex-direction: column; overflow: hidden; flex: 1 1 auto; }
+    .hier-sec.on { display: flex; }
+    .hier-sec.objects { position: relative; overflow: visible; }
+    .hier-split { display: none; }
+    .hier-sec.stored.on #hierSplitPath {
+      display: block; flex: 0 0 8px; height: 8px; cursor: row-resize; background: #111;
     }
-    .hier-split:hover, .hier-split.drag { background: #3d4a62; }
+    .hier-sec.stored #hierPoses, .hier-sec.stored #hierPaths {
+      flex: 1 1 50%; min-height: 36px;
+    }
+    .hier-sec.stored #savedPathHead { flex: 0 0 auto; }
+    .hier-tabs {
+      display: flex;
+      align-items: flex-end;
+      flex-wrap: nowrap;
+      gap: 0;
+      flex: 0 0 auto;
+      padding: 4px 4px 0;
+      background: #16171c;
+      border-bottom: 1px solid #111;
+      overflow: hidden;
+    }
+    .hier-tab, .cam-tab {
+      background: #22232a;
+      color: #9a9aa3;
+      border: 1px solid #111;
+      border-bottom: none;
+      border-radius: 5px 5px 0 0;
+      padding: 3px 6px 4px;
+      font-size: 9px;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 0 1px 0 0;
+      line-height: 1.15;
+      position: relative;
+      top: 1px;
+      white-space: nowrap;
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+    .hier-tab.on, .cam-tab.on {
+      background: #2a3140;
+      color: #e8e8ee;
+      z-index: 1;
+    }
     .hier-list { flex: 1; overflow: auto; }
     .hier-row {
       display: flex; align-items: center; justify-content: space-between;
@@ -181,7 +213,8 @@
     .hier-row:nth-child(odd) { background: #16171c; }
     .hier-row:nth-child(even) { background: #1c1d22; }
     .hier-row:hover { background: #2a2b32; }
-    .hier-row.on { outline: 1px solid #3d8bfd; }
+    .hier-row.on { background: #2a3140; outline: none; }
+    .hier-row.on .hier-label { color: #e8e8ee; }
     .hier-row.stored .hier-label { color: #f4a0c8; }
     .hier-sort { position: relative; }
     .hier-sort-menu {
@@ -197,11 +230,26 @@
     .hier-sort:hover .hier-sort-menu { display: block; }
     .hier-sort-menu button { display: block; width: 100%; margin: 0; padding: 6px 10px; text-align: left; background: transparent; color: #ddd; font-size: 12px; }
     .hier-sort-menu button:hover { background: #2a2b32; }
-    #ptCtx { position: fixed; z-index: 80; min-width: 160px; background: #1c1d22; border: 1px solid #3a3b44; border-radius: 6px; padding: 4px 0; }
+    #ptCtx { position: fixed; z-index: 80; min-width: 168px; background: #1c1d22; border: 1px solid #3a3b44; border-radius: 6px; padding: 4px 0; }
     #ptCtx button { display: block; width: 100%; margin: 0; padding: 6px 10px; text-align: left; background: transparent; color: #ddd; font-size: 12px; }
     #ptCtx button:hover { background: #2a2b32; }
-    #wpGoBtn { width: 26px; min-width: 26px; margin: 0; padding: 0; background: #3a3b44; font-size: 14px; }
-    #wpSortBtn { width: 26px; min-width: 26px; margin: 0; padding: 0; background: #3a3b44; font-size: 11px; }
+    #ptCtx .sub { position: relative; }
+    #ptCtx .sub > button { display: block; width: 100%; }
+    #ptCtx .sub-menu {
+      display: none; position: absolute; left: 100%; top: 0; z-index: 81;
+      min-width: 148px; background: #1c1d22; border: 1px solid #3a3b44; border-radius: 6px; padding: 4px 0;
+    }
+    #ptCtx .sub:hover > .sub-menu { display: block; }
+    .hier-go {
+      width: 22px; min-width: 22px; height: 22px; margin: 0 2px 0 0; padding: 0;
+      background: #3a3b44; color: var(--on-bright); font-size: 13px; line-height: 1;
+      border: 0; border-radius: 4px; cursor: pointer;
+    }
+    #wpSortBtn {
+      width: 26px; min-width: 26px; height: 22px; margin: 0; padding: 0;
+      background: #3a3b44; font-size: 11px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
     .hier-row .hier-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .hier-row.drag-over { outline: 1px dashed #e39a3c; }
     .hier-eye {
@@ -292,6 +340,12 @@
     #bakeHint { font-size: 10px; color: #9aa0a8; min-height: 0; margin: 0; padding: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #status { font-size: 10px; line-height: 1.35; color: #9aa0a8; margin: 0 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .play-row button { flex: 1; margin: 0; }
+    .repeat-pair { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .repeat-pair input { width: 52px; min-width: 52px; max-width: 52px; flex: 0 0 52px; margin: 0; }
+    #playInf {
+      width: 28px; height: 28px; min-width: 28px; flex: 0 0 28px; margin: 0; padding: 0;
+      border-radius: 4px; line-height: 1;
+    }
     #addReal { background: var(--amber); color: var(--on-bright); }
     #addSim { background: var(--azure); color: var(--on-bright); }
     #simulate { background: var(--azure); color: var(--on-bright); }
@@ -299,8 +353,8 @@
     #runReal.move { background: var(--move); color: #1c1d21; }
     #poseGo { background: var(--cobalt); color: #fff; }
     #moveRobotPose { background: var(--coral); color: #fff; }
-    #bake { background: var(--mint); color: var(--on-bright); }
-    #clearBake { background: var(--peach); color: var(--on-bright); }
+    #bake { background: transparent; color: #7aa2ff; border: 1px solid #3d6ebd; }
+    #clearBake { background: transparent; color: #e39a3c; border: 1px solid #e39a3c; }
     #simToggle { background: var(--lilac); color: var(--on-bright); }
     #simStop { background: var(--cobalt); color: #fff; }
     #realToggle { background: var(--gold); color: var(--on-bright); }
@@ -318,17 +372,18 @@
       position: absolute;
       top: 0; left: 0; right: var(--props-w);
       height: var(--view-bar-h);
-      z-index: 6;
+      z-index: 4;
       display: flex;
       align-items: center;
       gap: 6px;
       padding: 0 8px;
-      background: #16171c;
-      border-bottom: 1px solid #111;
-      color: #ececf2;
+      background: #121316;
+      border-bottom: 1px solid #2a2b31;
+      color: #c8c8d0;
       font-size: 12px;
       font-weight: 600;
       pointer-events: auto;
+      box-sizing: border-box;
     }
     #worldBar { left: 0; right: var(--props-w); }
     .viewer-wrap.has-cam #worldBar { left: var(--cam-pct); right: var(--props-w); }
@@ -445,6 +500,11 @@
       visibility: hidden !important;
     }
     #camLiveRow { display: none; }
+    #camSimRow { display: none; }
+    #camViewport.all-mode #camSimRow { display: contents; }
+    #camViewport.all-mode #camSimRow iframe {
+      flex: 1 1 0; min-height: 0; width: 100%; border: 0; background: #111;
+    }
     #camViewport.all-mode #camLiveRow { display: contents; }
     #camViewport.all-mode #camLiveRow .cam-live {
       flex: 1 1 0;
@@ -545,7 +605,7 @@
       height: 20px;
       margin: 0 !important;
       padding: 0 !important;
-      background: #e39a3c !important;
+      background: #141518 !important;
       flex: 0 0 40px;
     }
     .props button.slide.deg,
@@ -635,9 +695,13 @@
       background: #3a3b44; font-size: 14px;
     }
     #trackWrap.simple .mode-simple { color: #e39a3c !important; }
-    #trackWrap.advanced .mode-advanced { color: #2f9e55 !important; }
-    #trackToggle { background: #e39a3c !important; }
-    #trackToggle.advanced { background: #2f9e55 !important; }
+    #trackWrap.advanced .mode-advanced { color: #7aa2ff !important; }
+    #trackToggle { background: #141518 !important; position: relative; z-index: 2; pointer-events: auto; }
+    #trackToggle.advanced { background: #3d6ebd !important; }
+    #camWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #camWrap.advanced .mode-advanced { color: #4aa3ff !important; }
+    #camEnable { background: #8a8a92 !important; }
+    #camEnable.advanced { background: #4aa3ff !important; }
     .hud-label { font-size: 11px; color: #c8c8c8; margin-right: 6px; }
     .track-row { display: grid; grid-template-columns: 1fr 28px 28px; gap: 4px; position: relative; }
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
@@ -714,10 +778,11 @@
     #tlSnapBtn {
       width: 28px; height: 22px; padding: 0; margin: 0 0 0 8px;
       display: inline-flex; align-items: center; justify-content: center;
-      border: 1px solid #3a3b44; border-radius: 5px; background: #2a2b32; color: #8a8a92;
-      font-size: 13px; line-height: 1; cursor: pointer; flex-shrink: 0;
+      border: 1px solid #3a3b44; border-radius: 5px; background: #2a2b32; color: #f4f4f4;
+      cursor: pointer; flex-shrink: 0;
     }
-    #tlSnapBtn.on { background: #3d6ebd; color: #fff; border-color: #5a86d4; }
+    #tlSnapBtn svg { width: 14px; height: 14px; display: block; }
+    #tlSnapBtn.on { background: #243044; border-color: #5a86d4; }
     .tl-mode {
       display: flex;
       flex-direction: row;
@@ -872,12 +937,12 @@
       gap: 8px;
       margin-bottom: 8px;
     }
-    #pathWinToggle { background: #c44a4a; }
-    #pathWinToggle.advanced { background: #2f9e55; }
+    #pathWinToggle { background: #141518; }
+    #pathWinToggle.advanced { background: #3d6ebd; }
     #pathWinWrap .mode-simple,
     #pathWinWrap .mode-advanced { color: #6b7385 !important; }
-    #pathWinWrap.simple .mode-simple { color: #c44a4a !important; }
-    #pathWinWrap.advanced .mode-advanced { color: #2f9e55 !important; }
+    #pathWinWrap.simple .mode-simple { color: #6a6b72 !important; }
+    #pathWinWrap.advanced .mode-advanced { color: #7aa2ff !important; }
     .path-win-row #pathWinRad {
       flex: 0 0 72px;
       width: 72px;
@@ -907,12 +972,14 @@
       flex: 0 0 40px;
       align-self: center;
       cursor: pointer;
-      background: #2f9e55;
+      background: #141518;
       transition: background 0.15s ease;
     }
-    .slide.advanced { background: #c44a4a; }
+    .slide.advanced { background: #3d6ebd; }
     #gizmoSpace { background: #e39a3c; }
     #gizmoSpace.advanced { background: #3d6ebd; }
+    #objSpace { background: #e39a3c !important; }
+    #objSpace.advanced { background: #3d6ebd !important; }
     .slide::after {
       content: "";
       position: absolute;
@@ -929,7 +996,7 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: 118px 1fr;
+      grid-template-columns: 78px 1fr;
       overflow: hidden;
     }
     .tl-labels {
@@ -949,6 +1016,7 @@
       border-bottom: 1px solid #111;
       flex-shrink: 0;
     }
+    body:not(.dev-on) .tl-add-track { display: none !important; }
     .tl-add-track {
       display: flex;
       align-items: center;
@@ -1040,7 +1108,8 @@
       width: 72px; min-width: 72px; flex: 0 0 72px; padding: 0;
     }
     .hier-head { justify-content: space-between; }
-    .hier-head-btns { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+    .hier-head-btns { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-left: auto; flex: 0 0 auto; }
+    .hier-sort { margin-left: auto; }
     .hier-titlebar {
       flex: 0 0 auto;
       display: flex;
@@ -1065,18 +1134,23 @@
       width: 26px; min-width: 26px; height: 22px; margin: 0; padding: 0;
       font-size: 16px; line-height: 1; border-radius: 4px;
     }
-    #addReal.hier-add { background: var(--azure); color: var(--on-bright); }
-    #addSim.hier-add { background: var(--orange); color: var(--on-bright); }
+    #addReal.hier-add, #poseAddReal.hier-add { background: var(--orange); color: var(--on-bright); }
+    #addSim.hier-add, #poseAddSim.hier-add { background: var(--azure); color: var(--on-bright); }
     #poseAdd.hier-add, #addObjBtn.hier-add { background: #3a3b44; color: var(--on-bright); }
     .hier-count { color: #8a8a92; font-weight: 500; font-size: 12px; margin-left: 6px; }
-    .cam-tabs { display: flex; gap: 2px; flex: 1; min-width: 0; height: 100%; align-items: center; overflow: hidden; }
+    .cam-tabs { display: flex; gap: 0; flex: 1; min-width: 0; height: 100%; align-items: flex-end; overflow: hidden; padding-top: 4px; }
     .cam-ctrl-row { display: flex !important; align-items: center; gap: 8px; }
     .cam-ctrl-row #camIndexRow { display: inline-flex; align-items: center; gap: 6px; }
     .cam-ctrl-row #camIndexRow[hidden] { display: none !important; }
     #camIndex { width: 3.2em !important; min-width: 3.2em; max-width: 3.2em; padding: 4px 6px; }
-    .cam-ctrl-row .rec-lab { margin-left: 4px; width: auto; }
-    .cam-tab { background: #2a2b32; color: #c8c8d0; border: 0; border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
-    .cam-tab.on { background: #3d4a62; color: #fff; }
+    .cam-ctrl-row .rec-lab { margin-left: 4px; width: auto; display: inline-flex; align-items: center; gap: 4px; }
+    #camRecBtn.cam-rec-btn {
+      width: 52px; min-width: 52px; height: 24px; margin: 0; padding: 0;
+      border-radius: 4px; background: #3d6ebd; color: #fff; font-size: 12px;
+      line-height: 1; cursor: pointer;
+    }
+    #camRecBtn.cam-rec-btn.on { background: #4a4b52; color: #c8c8ce; }
+    #camBar.view-topbar { align-items: flex-end; padding: 0 6px; }
     #camPane { padding-top: 28px; }
     #camStack { display: none; flex-direction: column; width: 100%; height: 100%; gap: 4px; overflow: auto; }
     #camStack.show { display: flex; }
@@ -1133,7 +1207,7 @@
     .pose-form .row.fk { grid-template-columns: 22px 1fr 28px; }
     .pose-form label { font-size: 11px; color: var(--muted); }
     .pose-form input { margin: 0; padding: 6px 8px; font-size: 12px; }
-    #clearBake { background: var(--peach); color: var(--on-bright); }
+    #clearBake { background: transparent; color: #e39a3c; border: 1px solid #e39a3c; }
     .kf-menu {
       position: fixed; z-index: 40; min-width: 168px; width: 168px;
       background: #1e1f26; border: 1px solid #3a3b44; border-radius: 6px;
@@ -1267,15 +1341,36 @@
     }
     .dev-only { display: none !important; }
     body.dev-on .dev-only { display: flex !important; }
+    #robotLinkWarn {
+      display: none;
+      margin: 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: #e23b3b;
+      line-height: 1.3;
+    }
+    body.no-real #robotLinkWarn { display: block; }
+    .tr-actions button.btn-ok {
+      background: #2f9e5f; color: #fff; border: 1px solid #247a49;
+    }
+    .tr-actions button.btn-cancel {
+      background: #6b6e76; color: #eee; border: 1px solid #55585f;
+    }
+    .hier-eye.locked { opacity: 0.28; pointer-events: none; cursor: default; }
     #pathWinWrap {
       margin: 0; padding: 0;
       background: transparent;
       border-radius: 0; pointer-events: auto;
     }
     .ctrl-card {
-      display: flex; width: 520px; height: 520px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px);
+      display: flex; flex-direction: column; width: 560px; height: 540px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px);
       background: #16171c; border: 1px solid #3a3b44; border-radius: 10px; overflow: hidden;
     }
+    .ctrl-title {
+      flex: 0 0 auto; padding: 10px 14px; font-weight: 600; font-size: 13px;
+      background: #1a1b21; border-bottom: 1px solid #2a2b32;
+    }
+    .ctrl-body { flex: 1; min-height: 0; display: flex; }
     .ctrl-pane { flex: 1; overflow: auto; min-height: 0; }
     .ctrl-side {
       width: 140px; background: #121318; border-right: 1px solid #2a2b32;
@@ -1283,22 +1378,20 @@
     }
     .ctrl-tab { width: 100%; text-align: left; background: transparent; font-size: 12px; padding: 8px; }
     .ctrl-tab.on { background: #2a3344; }
-    .ctrl-main { flex: 1; padding: 10px 14px 16px; display: flex; flex-direction: column; }
-    .ctrl-main header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-weight: 600; }
-    .ctrl-main header button { width: auto; padding: 4px 10px; font-size: 12px; }
+    .ctrl-main { flex: 1; padding: 10px 14px 16px; display: flex; flex-direction: column; min-width: 0; }
     .lim-head, .lim-row { display: grid; grid-template-columns: 36px 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 6px; }
     .lim-head { font-size: 11px; color: var(--muted); }
     #status { margin-top: 0; margin-bottom: 4px; font-size: 10px; color: var(--muted); white-space: nowrap; }
     /* complementary pairs: cool = sim, warm = real */
-    #addSim { background: var(--azure) !important; color: var(--on-bright) !important; }
-    #addReal { background: var(--amber) !important; color: var(--on-bright) !important; }
+    #addSim, #poseAddSim { background: var(--azure) !important; color: var(--on-bright) !important; }
+    #addReal, #poseAddReal { background: var(--orange) !important; color: var(--on-bright) !important; }
     #poseGo { background: var(--cobalt) !important; color: #fff !important; }
     #moveRobotPose { background: var(--coral) !important; color: #fff !important; }
     #simulate { background: var(--azure) !important; color: var(--on-bright) !important; }
     #runReal.run, #runRealGo.run { background: var(--orange) !important; color: var(--on-bright) !important; }
     #runReal.move { background: var(--move) !important; color: #1c1d21 !important; }
-    #bake { background: var(--mint) !important; color: var(--on-bright) !important; }
-    #clearBake { background: var(--peach) !important; color: var(--on-bright) !important; }
+    #bake { background: transparent !important; color: #7aa2ff !important; border: 1px solid #3d6ebd !important; box-shadow: none; }
+    #clearBake { background: transparent !important; color: #e39a3c !important; border: 1px solid #e39a3c !important; box-shadow: none; }
     #simToggle { background: var(--lilac) !important; color: var(--on-bright) !important; }
     #realToggle { background: var(--gold) !important; color: var(--on-bright) !important; }
     #simStop { background: var(--cobalt) !important; color: #fff !important; }
@@ -1310,7 +1403,13 @@
     #bake:disabled,
     #poseGo:disabled,
     #addSim:disabled,
-    #addReal:disabled {
+    #addReal:disabled,
+    #poseAddReal:disabled,
+    #poseFromReal:disabled,
+    #uploadReal:disabled,
+    #runReal:disabled,
+    #pauseReal:disabled,
+    #stopReal:disabled {
       background: var(--btn-disabled) !important;
       color: var(--btn-disabled-fg) !important;
       filter: none;
@@ -1318,7 +1417,7 @@
   </style>
 </head>
 <body>
-  <div id="appVersion">v beta.0904</div>
+  <div id="appVersion">v_beta10.06</div>
   <div class="layout" id="layout">
     <nav class="menubar">
       <div class="menu" id="menuFile">
@@ -1327,6 +1426,7 @@
           <button data-act="new">New</button>
           <button data-act="open">Open…</button>
           <button data-act="save">Save<span class="hintk">.arcspath</span></button>
+          <button data-act="save-as">Save as…</button>
           <button data-act="export">Export<span class="hintk">.json</span></button>
         </div>
       </div>
@@ -1335,7 +1435,8 @@
         <div class="menu-list">
           <button data-act="undo">Undo<span class="hintk">Ctrl+Z</span></button>
           <button data-act="redo">Redo<span class="hintk">Ctrl+Shift+Z</span></button>
-          <button data-act="settings">Control settings</button>
+          <button data-act="settings">Preferences</button>
+          <button data-act="robot-type">Robot type</button>
         </div>
       </div>
       <div class="menu" id="menuAdd">
@@ -1345,12 +1446,7 @@
           <button data-act="add-sphere">Sphere</button>
           <button data-act="add-cube">Cube</button>
           <button data-act="add-camera">Camera</button>
-        </div>
-      </div>
-      <div class="menu" id="menuPath">
-        <button type="button">Path</button>
-        <div class="menu-list">
-          <button data-act="dev-mode" id="pathDevBtn">Dev Mode</button>
+          <button data-act="add-import">Import object</button>
         </div>
       </div>
       <div class="menu" id="menuView">
@@ -1365,6 +1461,7 @@
       </div>
     </nav>
     <input id="fileOpen" type="file" accept=".arcspath,.json,application/json" hidden />
+    <input id="importObjFile" type="file" accept=".stl,.fbx,model/stl" hidden />
     <div class="left-col" id="leftCol">
     <aside class="sidebar">
       <div class="side-stack">
@@ -1394,9 +1491,11 @@
       </div>
       <div class="play-row" id="repeatRow" style="margin-top:6px;align-items:center;gap:6px;">
         <label class="field tight" style="margin:0;">Repeat</label>
-        <input id="playRepeat" type="number" min="0" step="1" value="0" style="width:52px;">
-        <button type="button" id="playInf" title="Infinite">∞</button>
-        <label class="field tight" style="margin:0;">Delay</label>
+        <span class="repeat-pair">
+          <input id="playRepeat" type="number" min="0" step="1" value="0">
+          <button type="button" id="playInf" title="Infinite">∞</button>
+        </span>
+        <label class="field tight" style="margin:0 0 0 18px;">Delay</label>
         <input id="playDelay" type="number" min="0" step="0.1" value="0" style="width:56px;">
         <span style="font-size:11px;color:#8a8a92;">s</span>
       </div>
@@ -1406,6 +1505,7 @@
         <button data-act="cut">Cut</button>
         <button data-act="paste" id="pasteBtn">Paste</button>
         <button data-act="delete">Delete</button>
+        <button data-act="unwrap" id="unwrapBtn">Unwrap path</button>
         <button data-act="merge" id="mergeBtn">Merge</button>
         <button data-act="force_fk" id="forceFkBtn">Force FK<span class="hintk" id="forceFkTick"></span></button>
         <div class="sep"></div>
@@ -1458,6 +1558,75 @@
           </div>
         </div>
       </div>
+      <div id="fileNewModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Start a new file?</h3>
+          <p style="max-width:280px;font-size:12px;color:#bbb;">This clears waypoints, objects, and camera components in the simulator.</p>
+          <div class="tr-actions">
+            <button type="button" id="fileNewCancel" class="btn-cancel">Cancel</button>
+            <button type="button" id="fileNewOk" class="btn-ok">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="fileAutoModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Load autosave?</h3>
+          <p id="fileAutoMsg" style="max-width:280px;font-size:12px;color:#bbb;">An autosave is newer than the last manual save.</p>
+          <div class="tr-actions">
+            <button type="button" id="fileAutoCancel" class="btn-cancel">Cancel</button>
+            <button type="button" id="fileAutoOk" class="btn-ok">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="fileRobotModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Robot type mismatch</h3>
+          <p id="fileRobotMsg" style="max-width:280px;font-size:12px;color:#bbb;">This file was saved for a different robot.</p>
+          <div class="tr-actions">
+            <button type="button" id="fileRobotCancel" class="btn-cancel">Cancel</button>
+            <button type="button" id="fileRobotOk" class="btn-ok">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="robotTypeWarn" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Switch robot type?</h3>
+          <p id="robotTypeWarnMsg" style="max-width:280px;font-size:12px;color:#bbb;">This will delete all timeline waypoints. Saved points are kept.</p>
+          <div class="tr-actions">
+            <button type="button" id="robotTypeWarnCancel" class="btn-cancel">Cancel</button>
+            <button type="button" id="robotTypeWarnOk" class="btn-ok">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="robotTypeModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Robot type</h3>
+          <p style="max-width:280px;font-size:12px;color:#bbb;">Select active robot type:</p>
+          <div id="robotTypeList" style="min-width:220px;margin:8px 0;"></div>
+          <div class="tr-actions">
+            <button type="button" id="robotTypeClose" class="btn-cancel">Close</button>
+          </div>
+        </div>
+      </div>
+      <div id="discModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Robot disconnected</h3>
+          <p style="max-width:280px;font-size:12px;color:#bbb;">The real arm is offline. Sim keeps running with backup IK.</p>
+          <div class="tr-actions">
+            <button type="button" id="discOk" class="btn-ok">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="reconnModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Robot reconnected</h3>
+          <p style="max-width:280px;font-size:12px;color:#bbb;">Snap the sim robot to the real pose?</p>
+          <div class="tr-actions">
+            <button type="button" id="reconnCancel" class="btn-cancel">Cancel</button>
+            <button type="button" id="reconnOk" class="btn-ok">OK</button>
+          </div>
+        </div>
+      </div>
       <div id="poseDelModal" class="tr-modal" hidden>
         <div class="tr-card">
           <h3>Remove pose?</h3>
@@ -1472,16 +1641,23 @@
       <div id="hopTip" class="hop-tip" hidden></div>
       <div id="ctrlSettings" class="tr-modal" hidden>
         <div class="ctrl-card">
+          <div class="ctrl-title">Preferences</div>
+          <div class="ctrl-body">
           <div class="ctrl-side">
             <button type="button" class="ctrl-tab on" data-tab="speed">Robot speed</button>
             <button type="button" class="ctrl-tab" data-tab="wps">Waypoints</button>
             <button type="button" class="ctrl-tab" data-tab="pwin">Path window</button>
             <button type="button" class="ctrl-tab" data-tab="tl">Timeline</button>
+            <button type="button" class="ctrl-tab" data-tab="prefs">Offline Mode</button>
             <button type="button" class="ctrl-tab" data-tab="dev">Developer Mode</button>
           </div>
           <div class="ctrl-main">
-            <header>Control settings</header>
             <div class="ctrl-pane" id="pane-speed">
+              <label class="field">Robot model</label>
+              <select id="robotModel" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
+                <option value="aubo_i5">aubo i5</option>
+              </select>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Restart Flask after changing model. Joint speed/accel below apply immediately to bake and hold moves.</p>
               <div class="lim-head"><span></span><span>Speed (°/s)</span><span>Accel (°/s²)</span></div>
               <div class="lim-row"><label>J1</label><input id="limV0" type="number" step="1"><input id="limA0" type="number" step="1"></div>
               <div class="lim-row"><label>J2</label><input id="limV1" type="number" step="1"><input id="limA1" type="number" step="1"></div>
@@ -1515,6 +1691,14 @@
               <input id="tlGrid" type="number" min="0.001" step="0.001" value="0.01" />
               <p style="font-size:11px;color:#8a8a92;margin:8px 0 0;">Snap-to-grid uses this step when the magnet is on.</p>
             </div>
+            <div class="ctrl-pane" id="pane-prefs" hidden>
+              <label class="field">Offline IK</label>
+              <select id="ikPref" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
+                <option value="backup">Use Backup IK</option>
+                <option value="always_aubo">Always use Aubo IK</option>
+              </select>
+              <p style="font-size:11px;color:#8a8a92;margin:0;">Always use Aubo IK: sim cursor drag and bake IK need a connected arm. Use Backup IK: local solver only while disconnected. Reconnect clears the bake.</p>
+            </div>
             <div class="ctrl-pane" id="pane-dev" hidden>
               <label class="field">Password</label>
               <input id="devPass" type="password" autocomplete="off" placeholder="Password" />
@@ -1529,6 +1713,7 @@
             <div class="tr-actions" style="margin-top:auto;">
               <button type="button" id="ctrlSettingsClose" class="play">OK</button>
             </div>
+          </div>
           </div>
         </div>
       </div>
@@ -1560,7 +1745,13 @@
       <div class="hier-titlebar">
         <h1 id="docTitle" title="Double-click to rename">Path editor</h1>
       </div>
-      <div class="hier-sec objects">
+      <div class="hier-tabs" id="hierTabs">
+        <button type="button" class="hier-tab on" data-htab="objects">Objects</button>
+        <button type="button" class="hier-tab" data-htab="waypoints">Waypoints</button>
+        <button type="button" class="hier-tab" data-htab="saved">Bookmarks</button>
+        <button type="button" class="hier-tab" data-htab="tracked">Tracked Points</button>
+      </div>
+      <div class="hier-sec objects on" data-hsec="objects">
         <div class="hier-head">
           <span>Objects <span class="hier-count" id="objCount"></span></span>
           <div class="hier-head-btns" style="position:relative;">
@@ -1571,41 +1762,52 @@
               <button type="button" data-act="add-sphere">Sphere</button>
               <button type="button" data-act="add-cube">Cube</button>
               <button type="button" data-act="add-camera">Camera</button>
+              <button type="button" data-act="add-import">Import object</button>
             </div>
           </div>
         </div>
         <div class="hier-list" id="hierObjects"></div>
       </div>
       <div class="hier-split" id="hierSplit" title="Drag to resize object / waypoint lists"></div>
-      <div class="hier-sec waypoints">
+      <div class="hier-sec waypoints" data-hsec="waypoints">
         <div class="hier-head">
           <span>Waypoints <span class="hier-count" id="wpCount"></span></span>
           <div class="hier-head-btns">
-            <button type="button" class="hier-eye" data-list-eye="wp" title="Toggle waypoints and stored points">👁</button>
-            <button type="button" id="wpGoBtn" title="Teleport sim to selected point" disabled>→</button>
-            <div class="hier-sort">
-              <button type="button" id="wpSortBtn" title="Sort">▾</button>
-              <div class="hier-sort-menu">
-                <button type="button" data-psort="time">By time added</button>
-                <button type="button" data-psort="type">By type</button>
-                <button type="button" data-psort="name">By name</button>
-              </div>
-            </div>
+            <button type="button" class="hier-eye" data-list-eye="wp" title="Toggle waypoints">👁</button>
             <button type="button" id="addReal" class="hier-add" title="Add waypoint on real robot (E)">+</button>
             <button type="button" id="addSim" class="hier-add" title="Add waypoint from sim cursor (R)">+</button>
-            <button type="button" id="poseAdd" class="hier-add" title="Add stored point">+</button>
           </div>
         </div>
         <div class="hier-list" id="hierWps"></div>
       </div>
       <div class="hier-split" id="hierSplit2" title="Drag to resize waypoint / stored lists"></div>
-      <div class="hier-sec stored">
+      <div class="hier-sec stored" data-hsec="saved">
         <div class="hier-head">
-          <span>Target Points <span class="hier-count" id="poseCount"></span></span>
+          <span>Saved Points <span class="hier-count" id="poseCount"></span></span>
           <div class="hier-head-btns">
+            <button type="button" class="hier-eye" data-list-eye="pose" title="Toggle saved points">👁</button>
+            <button type="button" id="poseAddReal" class="hier-add" title="Add saved point at real cursor">+</button>
+            <button type="button" id="poseAddSim" class="hier-add" title="Add saved point at sim cursor">+</button>
           </div>
         </div>
         <div class="hier-list" id="hierPoses"></div>
+        <div class="hier-split" id="hierSplitPath" title="Drag to resize saved points / saved paths"></div>
+        <div class="hier-head" id="savedPathHead">
+          <span>Saved Paths <span class="hier-count" id="pathCount"></span></span>
+          <div class="hier-head-btns">
+            <button type="button" id="pathAdd" class="hier-add" title="Save current timeline as a path">+</button>
+          </div>
+        </div>
+        <div class="hier-list" id="hierPaths"></div>
+      </div>
+      <div class="hier-sec tracked" data-hsec="tracked">
+        <div class="hier-head">
+          <span>Tracked Points <span class="hier-count" id="trackCount"></span></span>
+          <div class="hier-head-btns">
+            <button type="button" class="hier-eye" data-list-eye="track" title="Toggle tracked points">👁</button>
+          </div>
+        </div>
+        <div class="hier-list" id="hierTracked"></div>
       </div>
     </div>
     <div id="ptCtx" hidden></div>
@@ -1622,6 +1824,7 @@
           <img id="camFrame" alt="camera" hidden>
           <canvas id="camSim" hidden></canvas>
           <iframe id="camIframe" title="Camera POV" hidden></iframe>
+          <div id="camSimRow"></div>
           <div id="camLiveRow"></div>
           <div id="camClickDot"></div>
         </div>
@@ -1641,6 +1844,7 @@
           <button type="button" class="slide" id="pathWinToggle" title="Clip path to playhead window"></button>
           <span class="mode-advanced">On</span>
         </div>
+        <div id="robotLinkWarn">Robot not connected</div>
       </div>
       <div class="view-cube" id="viewCube" title="Click a face or corner to set the camera">
         <div class="view-cube-box">
@@ -1706,34 +1910,6 @@
             <label class="drag" data-k="erz">rz</label><input id="erz" type="number" step="0.001">
           </div>
           <div class="sec space-gap" aria-hidden="true"></div>
-          <div id="camProps" hidden>
-            <div class="sec">Camera</div>
-            <div class="row name-row"><label>Type</label>
-              <select id="camType" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;">
-                <option value="sim">simulator</option>
-                <option value="opencv">opencv</option>
-                <option value="sony">sony</option>
-                <option value="other">other</option>
-              </select>
-            </div>
-            <div class="row name-row"><label>VFOV</label><input id="camVfov" type="number" step="0.1" value="60"></div>
-            <div class="row name-row"><label>HFOV</label><input id="camHfov" type="number" step="0.1" value="90"></div>
-            <div class="row name-row cam-ctrl-row">
-              <span id="camIndexRow" hidden>
-                <label>Index</label>
-                <input id="camIndex" type="number" step="1" min="0" max="99" value="1">
-              </span>
-              <label class="rec-lab">Record</label>
-              <input id="camRecord" type="checkbox">
-            </div>
-            <div class="row name-row" id="camScriptRow" hidden>
-              <label>Script</label>
-              <button type="button" id="camScriptBtn">Choose .py…</button>
-              <input id="camScriptFile" type="file" accept=".py,text/x-python" hidden>
-              <input id="camScript" type="hidden" value="">
-            </div>
-            <p style="font-size:11px;color:#8a8a92;margin:6px 0 0;" hidden></p>
-          </div>
           <div id="primScaleBlock">
           <div class="sec">Scale</div>
           <div class="row triple">
@@ -1773,7 +1949,45 @@
           <div class="row fk-spd"><label class="drag" data-j="3">J4</label><input id="j4" type="number" step="0.001"><span class="unit" data-u>rad</span><span class="jspd" data-js="3">—</span></div>
           <div class="row fk-spd"><label class="drag" data-j="4">J5</label><input id="j5" type="number" step="0.001"><span class="unit" data-u>rad</span><span class="jspd" data-js="4">—</span></div>
           <div class="row fk-spd"><label class="drag" data-j="5">J6</label><input id="j6" type="number" step="0.001"><span class="unit" data-u>rad</span><span class="jspd" data-js="5">—</span></div>
+        </div>
           <hr id="trackSep" hidden>
+          <div id="camProps" class="track-comp" hidden>
+            <div class="track-head">
+              <span>Camera</span>
+              <div class="track-head-right">
+                <div class="tl-mode advanced" id="camWrap" title="Enable camera">
+                  <span class="mode-simple">Off</span>
+                  <button type="button" class="slide advanced" id="camEnable"></button>
+                  <span class="mode-advanced">On</span>
+                </div>
+                <button type="button" id="camTrash" class="track-trash" title="Remove component">🗑</button>
+              </div>
+            </div>
+            <div class="row name-row"><label>Type</label>
+              <select id="camType" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;">
+                <option value="sim">simulator</option>
+                <option value="opencv">opencv</option>
+                <option value="sony">sony</option>
+                <option value="other">other</option>
+              </select>
+            </div>
+            <div class="row name-row"><label>VFOV</label><input id="camVfov" type="number" step="0.1" value="60"></div>
+            <div class="row name-row"><label>HFOV</label><input id="camHfov" type="number" step="0.1" value="90"></div>
+            <div class="row name-row cam-ctrl-row">
+              <span id="camIndexRow" hidden>
+                <label>Index</label>
+                <input id="camIndex" type="number" step="1" min="0" max="99" value="1">
+              </span>
+              <button type="button" id="camRecBtn" class="cam-rec-btn" title="Record">▶</button>
+              <label class="rec-lab"><input id="camManual" type="checkbox"> Manual</label>
+            </div>
+            <div class="row name-row" id="camScriptRow" hidden>
+              <label>Script</label>
+              <button type="button" id="camScriptBtn">Choose .py…</button>
+              <input id="camScriptFile" type="file" accept=".py,text/x-python" hidden>
+              <input id="camScript" type="hidden" value="">
+            </div>
+          </div>
           <div id="trackComp" class="track-comp" hidden>
             <div class="track-head">
               <span>Track Object</span>
@@ -1808,8 +2022,8 @@
           <button type="button" id="simExtraAdd" class="sim-extra-add" title="Add">+</button>
           <div id="compMenu" class="kf-menu" hidden>
             <button type="button" data-comp="track">Track Object</button>
+            <button type="button" data-comp="camera">Camera</button>
           </div>
-        </div>
       </aside>
     </div>
     <div class="tl-resizer" id="tlResizer" title="Drag to resize timeline"></div>
@@ -1817,7 +2031,7 @@
       <div class="tl-toolbar">
         <span>Timeline</span>
         <span class="readout" id="tlReadout">0.00s  ·  100 px/s</span>
-        <button type="button" id="tlSnapBtn" class="on" title="Snap to grid">🧲</button>
+        <button type="button" id="tlSnapBtn" class="on" title="Snap to grid" aria-label="Snap to grid"><svg viewBox="0 0 24 24" fill="none" stroke="#f4f4f4" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4v4a4 4 0 0 0 8 0V4"/><path d="M8 4h2.2M13.8 4H16"/><path d="M12 12v8"/></svg></button>
         <div class="tl-mode simple dev-only" id="tlModeWrap">
           <span class="mode-simple">Simple</span>
           <button type="button" class="slide" id="tlMode" title="Simple (locked)" disabled></button>
@@ -1944,7 +2158,7 @@
       simBtn.textContent = "Simulate";
       if (upBtn) {
         upBtn.textContent = uploading ? "Uploading…" : "Upload";
-        upBtn.disabled = uploading || playing || !runnable || bakingBusy;
+        upBtn.disabled = uploading || playing || !runnable || bakingBusy || !!(window.__lastBake && window.__lastBake.pending);
       }
       if (showMove) {
         realBtn.textContent = "Move";
@@ -2357,7 +2571,7 @@
       t = Number(t);
       if (!Number.isFinite(t)) return 0;
       if (!snapToGrid) return Math.max(0, t);
-      const step = Math.max(0.001, Number(gridSpacing) || MIN_TIME_UNIT);
+      const step = Math.max(MIN_TIME_UNIT, tickStep());
       return Math.max(0, Math.round(t / step) * step);
     }
 
@@ -2396,12 +2610,14 @@
         }
         labelsEl.appendChild(d);
       }
-      const add = document.createElement("button");
-      add.type = "button";
-      add.className = "tl-add-track";
-      add.textContent = "+";
-      add.title = "Add track";
-      labelsEl.appendChild(add);
+      if (devMode) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "tl-add-track";
+        add.textContent = "+";
+        add.title = "Add track";
+        labelsEl.appendChild(add);
+      }
       labelsEl.scrollTop = scrollEl.scrollTop;
     }
 
@@ -2415,7 +2631,7 @@
         if (addBtn && labelsEl.contains(addBtn)) {
           ev.preventDefault();
           ev.stopPropagation();
-          addExtraTrack();
+          if (devMode) addExtraTrack();
           return;
         }
         const delBtn = ev.target.closest ? ev.target.closest(".tl-del-track") : null;
@@ -2463,7 +2679,7 @@
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-
+      try {
       ctx.fillStyle = "#16171b";
       ctx.fillRect(0, 0, w, h);
 
@@ -2526,17 +2742,33 @@
           fk: "#4aa3ff",
           force_fk: "#4aa3ff",
         };
-        spans.forEach((sp) => {
-          if (sp.t0 == null || sp.t1 == null) return;
-          if (!sp.status || sp.status === "pending") return;
-          let x0 = timeToX(Number(sp.t0));
-          let x1 = timeToX(Number(sp.t1));
-          if (x1 < x0) { const tmp = x0; x0 = x1; x1 = tmp; }
-          const nearKf = (t) => keyframes.some((kf) => kf.t != null && Math.abs(Number(kf.t) - Number(t)) < 1e-3);
-          x0 += nearKf(sp.t0) ? 11 : 7;
-          x1 -= nearKf(sp.t1) ? 11 : 7;
-          if (x1 - x0 < 1.5) return;
-          const col = lockEdits ? "#555" : (kfColor[sp.status] || kfColor.uncalc);
+        function kfNear(t) {
+          let best = null, dBest = 1e9;
+          keyframes.forEach((kf) => {
+            if (kf.t == null) return;
+            const d = Math.abs(Number(kf.t) - Number(t));
+            if (d < dBest) { dBest = d; best = kf; }
+          });
+          return dBest < 0.02 ? best : null;
+        }
+        function spanInsideClip(t0, t1) {
+          const a = kfNear(t0);
+          const b = kfNear(t1);
+          return !!(a && b && a.clip_id && a.clip_id === b.clip_id);
+        }
+        const clipRanges = {};
+        keyframes.forEach((kf) => {
+          if (!kf.clip_id || kf.t == null) return;
+          if (!clipRanges[kf.clip_id]) clipRanges[kf.clip_id] = { t0: kf.t, t1: kf.t };
+          clipRanges[kf.clip_id].t0 = Math.min(clipRanges[kf.clip_id].t0, kf.t);
+          clipRanges[kf.clip_id].t1 = Math.max(clipRanges[kf.clip_id].t1, kf.t);
+        });
+        const clipList = Object.keys(clipRanges).map((id) => clipRanges[id]);
+        function drawHop(t0, t1, status) {
+          if (!(t1 > t0 + 1e-6)) return;
+          const x0 = timeToX(t0);
+          const x1 = timeToX(t1);
+          const col = lockEdits ? "#555" : (kfColor[status] || kfColor.uncalc);
           ctx.strokeStyle = col;
           ctx.lineWidth = 5;
           ctx.lineCap = "butt";
@@ -2545,9 +2777,38 @@
           ctx.lineTo(x1, cy);
           ctx.stroke();
           ctx.lineWidth = 1;
+        }
+        spans.forEach((sp) => {
+          if (!sp || sp.t0 == null || sp.t1 == null) return;
+          if (!sp.status || sp.status === "pending") return;
+          let a = Number(sp.t0);
+          let b = Number(sp.t1);
+          if (b < a) { const tmp = a; a = b; b = tmp; }
+          const cuts = [a];
+          clipList.forEach((r) => {
+            if (r.t1 <= a || r.t0 >= b) return;
+            if (r.t0 > a) cuts.push(r.t0);
+            if (r.t1 < b) cuts.push(r.t1);
+          });
+          cuts.push(b);
+          cuts.sort((p, q) => p - q);
+          for (let i = 0; i < cuts.length - 1; i++) {
+            const lo = cuts[i];
+            const hi = cuts[i + 1];
+            const inside = clipList.some((r) => lo >= r.t0 - 1e-6 && hi <= r.t1 + 1e-6);
+            if (!inside) drawHop(lo, hi, sp.status);
+          }
         });
         if (showTlSamples) samples.forEach((sm) => {
           if (sm.t == null) return;
+          const inside = Object.keys(clipRanges).some((cid) => {
+            const r = clipRanges[cid];
+            return sm.t > r.t0 + 1e-4 && sm.t < r.t1 - 1e-4;
+          });
+          if (inside) return;
+          const a = keyframes.find((kf) => kf.index === sm.seg);
+          const b = keyframes.find((kf) => kf.index === sm.seg + 1);
+          if (a && b && a.clip_id && a.clip_id === b.clip_id) return;
           const x = timeToX(sm.t);
           ctx.fillStyle = lockEdits ? "#555" : (kfColor[sm.status] || "#888");
           ctx.beginPath();
@@ -2560,8 +2821,74 @@
             ctx.lineWidth = 1;
           }
         });
+        const clipGroups = {};
+        keyframes.forEach((kf) => {
+          if (!kf.clip_id || kf.t == null) return;
+          if (!clipGroups[kf.clip_id]) clipGroups[kf.clip_id] = [];
+          clipGroups[kf.clip_id].push(kf);
+        });
+        Object.keys(clipGroups).forEach((cid) => {
+          const grp = clipGroups[cid].slice().sort((a, b) => a.t - b.t);
+          const t0 = grp[0].t;
+          const t1 = grp[grp.length - 1].t;
+          const x0 = timeToX(t0);
+          const x1 = timeToX(t1);
+          let st = "unbaked";
+          if (grp.every((k) => k.status === "ok")) st = "ok";
+          else if (grp.some((k) => k.status === "fail")) st = "fail";
+          else if (grp.some((k) => k.status === "too_fast")) st = "too_fast";
+          else if (grp.every((k) => k.status === "fk" || k.status === "force_fk")) st = "force_fk";
+          else st = "unbaked";
+          const col = st === "unbaked" ? "#c8c8ce" : (kfColor[st] || "#c8c8ce");
+          ctx.fillStyle = col;
+          ctx.globalAlpha = 0.55;
+          const bx = Math.min(x0, x1);
+          const bw = Math.max(18, Math.abs(x1 - x0));
+          const by = cy - 11;
+          const bh = 22;
+          const rad = 6;
+          ctx.beginPath();
+          ctx.moveTo(bx + rad, by);
+          ctx.arcTo(bx + bw, by, bx + bw, by + bh, rad);
+          ctx.arcTo(bx + bw, by + bh, bx, by + bh, rad);
+          ctx.arcTo(bx, by + bh, bx, by, rad);
+          ctx.arcTo(bx, by, bx + bw, by, rad);
+          ctx.closePath();
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          const selClip = window.__selClipId;
+          if (selClip === cid || grp.some((k) => k.index === selectedKf)) {
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          }
+          ctx.fillStyle = "#2a2b31";
+          ctx.globalAlpha = window.__hoverClipId === cid ? 0.35 : 1;
+          ctx.font = "10px Segoe UI, sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          ctx.fillText(grp[0].clip_name || "path", Math.min(x0, x1) + 6, cy);
+          ctx.globalAlpha = 1;
+          if (window.__hoverClipId === cid) {
+            grp.forEach((kf) => {
+              const x = timeToX(kf.t);
+              ctx.globalAlpha = 0.35;
+              ctx.fillStyle = kfColor[kf.status] || "#f2f2f2";
+              ctx.beginPath();
+              ctx.moveTo(x, cy - 9);
+              ctx.lineTo(x + 8, cy);
+              ctx.lineTo(x, cy + 9);
+              ctx.lineTo(x - 8, cy);
+              ctx.closePath();
+              ctx.fill();
+              ctx.globalAlpha = 1;
+            });
+          }
+        });
         keyframes.forEach((kf) => {
           if (kf.t == null) return;
+          if (kf.clip_id) return;
           const x = timeToX(kf.t);
           ctx.fillStyle = lockEdits ? "#666" : (kfColor[kf.status] || "#f2f2f2");
           ctx.beginPath();
@@ -2585,7 +2912,7 @@
         for (let i = 0; i < ks.length - 1; i++) {
           const a = ks[i], b = ks[i + 1];
           if (a.t == null || b.t == null) continue;
-          ctx.strokeStyle = a.rec ? "#6ee08a" : "#e25b5b";
+          ctx.strokeStyle = a.rec ? "#4d9e61" : "#9e4040";
           ctx.lineWidth = 5;
           ctx.beginPath();
           ctx.moveTo(timeToX(Number(a.t)) + 11, cy);
@@ -2596,7 +2923,7 @@
         ks.forEach((k) => {
           if (k.t == null) return;
           const x = timeToX(Number(k.t));
-          ctx.fillStyle = k.rec ? "#6ee08a" : "#e25b5b";
+          ctx.fillStyle = k.rec ? "#4d9e61" : "#9e4040";
           ctx.beginPath();
           ctx.moveTo(x, cy - 14);
           ctx.lineTo(x + 13, cy);
@@ -2618,6 +2945,15 @@
       readoutEl.textContent =
         playhead.toFixed(2) + "s  ·  " + Math.round(pps) + " px/s  ·  tick " +
         tickStep() + "s  ·  " + vis.length + " tracks";
+      } catch (err) {
+        console.error("timeline draw", err);
+        ctx.fillStyle = "#16171b";
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = "#f2f2f2";
+        ctx.fillText("timeline draw failed", 8, 18);
+      }
+
+      renderLabels();
     }
 
     function syncModeUi() {
@@ -2819,10 +3155,49 @@
       }
       return { keys: keys, sms: sms, movingIds: movingIds };
     }
+    function snapBlockDt(group, dt) {
+      const keys = group.keys || [];
+      if (keys.length < 2) return clampGroupDt(group, dt);
+      const t0s = keys.map((rec) => rec.t0);
+      const origin = Math.min.apply(null, t0s);
+      const dur = Math.max.apply(null, t0s) - origin;
+      const moving = new Set(keys.map((rec) => rec.index));
+      const walls = keyframes
+        .filter((kf) => kf.t != null && !moving.has(kf.index))
+        .map((kf) => Number(kf.t))
+        .sort((a, b) => a - b);
+      const gaps = [{ lo: 0, hi: 1e9 }];
+      walls.forEach((wt) => {
+        const last = gaps[gaps.length - 1];
+        if (wt <= last.lo) return;
+        last.hi = Math.min(last.hi, wt - 0.02);
+        gaps.push({ lo: wt + 0.02, hi: 1e9 });
+      });
+      const want = Math.max(0, origin + dt);
+      let best = null;
+      let bestD = 1e9;
+      gaps.forEach((g) => {
+        const lo = g.lo;
+        const hi = g.hi - dur;
+        if (hi < lo - 1e-6) return;
+        const start = Math.min(Math.max(want, lo), hi);
+        const d = Math.abs(start - want);
+        if (d < bestD) { bestD = d; best = start; }
+      });
+      if (best == null) return 0;
+      return best - origin;
+    }
     function clampGroupDt(group, dt) {
       let lo = -1e9, hi = 1e9;
+      const moving = new Set(group.keys.map((rec) => rec.index));
       group.keys.forEach((rec) => {
         lo = Math.max(lo, -rec.t0);
+        keyframes.forEach((kf) => {
+          if (kf.t == null || moving.has(kf.index)) return;
+          const kt = Number(kf.t);
+          if (kt <= rec.t0) lo = Math.max(lo, (kt + 0.02) - rec.t0);
+          else hi = Math.min(hi, (kt - 0.02) - rec.t0);
+        });
       });
       group.sms.forEach((sm) => {
         const w = sampleWalls(sm, group.movingIds);
@@ -2862,13 +3237,23 @@
         }).catch(() => {});
       }
       if (group.sms.length) {
+        window.__holdSamples = true;
         fetch("/api/sample_time", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             moves: group.sms.map((sm) => ({ seg: sm.seg, index: sm.index, t: sm.t })),
           }),
-        });
+        }).then((r) => r.json()).then((d) => {
+          if (d && Array.isArray(d.moves)) {
+            d.moves.forEach((mv) => {
+              const sm = samples.find((s) => s.seg === mv.seg && s.index === mv.index);
+              if (sm && mv.t != null) sm.t = Number(mv.t);
+            });
+            renderTimeline();
+          }
+          window.__holdSamples = false;
+        }).catch(() => { window.__holdSamples = false; });
       }
       return req;
     }
@@ -2909,6 +3294,15 @@
       };
     }
     function doClip(kind) {
+      const clipIds = new Set();
+      selectedKfs.forEach((i) => {
+        const kf = keyframes.find((k) => k.index === i);
+        if (kf && kf.clip_id) clipIds.add(kf.clip_id);
+      });
+      if (window.__selClipId) clipIds.add(window.__selClipId);
+      clipIds.forEach((cid) => {
+        keyframes.forEach((kf) => { if (kf.clip_id === cid) selectedKfs.add(kf.index); });
+      });
       fetch(kind === "cut" ? "/api/cut" : "/api/copy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3184,14 +3578,35 @@
       if (!act) return;
       hideKfMenu();
       if (act === "delete") {
-        fetch("/api/delete_selected", { method: "POST" });
-        setTimeout(refresh, 150);
+        const cid = window.__selClipId || (keyframes.find((k) => k.index === selectedKf) || {}).clip_id;
+        const kf = cid ? keyframes.find((k) => k.clip_id === cid) : null;
+        const idx = kf ? kf.index : selectedKf;
+        const go = () => fetch("/api/delete_selected", { method: "POST" }).then(() => setTimeout(refresh, 150));
+        if (idx != null) {
+          fetch("/api/select_waypoint", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ index: idx, from_timeline: true, mode: "replace" }),
+          }).then(go);
+        } else go();
         return;
       }
       if (act === "copy") { doClip("copy"); return; }
       if (act === "cut") { doClip("cut"); return; }
       if (act === "paste") { doPaste(); return; }
-      if (act === "merge") { doMerge(); return; }
+      if (act === "unwrap") {
+        const i = selectedKf != null ? selectedKf : (selectedKfs.size ? Math.min(...selectedKfs) : null);
+        const kf = (i != null) ? keyframes[i] : keyframes.find((k) => k.clip_id && selectedKfs.has(k.index));
+        const clip = (kf && kf.clip_id) || window.__hitClipId;
+        if (clip) {
+          fetch("/api/saved_paths", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ act: "unwrap", clip_id: clip }),
+          }).then((r) => r.json()).then(() => refresh());
+        }
+        return;
+      }
       if (act === "force_fk") {
         const i = selectedKf != null ? selectedKf : (selectedKfs.size ? Math.min(...selectedKfs) : null);
         applyForceFk(i);
@@ -3262,10 +3677,36 @@
         return;
       }
       const hit = hitKeyframe(e.clientX, e.clientY);
+      const clipHit = hitClipAt(e.clientX, e.clientY);
+      const hitKf = hit >= 0 ? keyframes.find((k) => k.index === hit) : null;
+      if (clipHit && !(hitKf && hitKf.clip_id === clipHit)) {
+        const kf = keyframes.find((k) => k.clip_id === clipHit);
+        if (kf && !lockEdits) {
+          selectedKf = kf.index;
+          selectedKfs = new Set(keyframes.filter((k) => k.clip_id === clipHit).map((k) => k.index));
+          window.__selClipId = clipHit;
+          const tHit = Number(kf.t) || 0;
+          dragKf = { index: kf.index, pointer: e.pointerId, t0: tHit, moved: false, x0: e.clientX, tStart: Date.now(), legalDt: 0 };
+          dragGroup = snapshotGroup("key", kf.index);
+          scrollEl.setPointerCapture(e.pointerId);
+          renderTimeline();
+        }
+        return;
+      }
       if (hit >= 0) {
         if (lockEdits) return;
         const kf = keyframes.find((k) => k.index === hit);
         const tHit = kf && kf.t != null ? Number(kf.t) : 0;
+        if (kf && kf.clip_locked) {
+          selectedKf = hit;
+          selectedKfs = new Set(keyframes.filter((k) => k.clip_id === kf.clip_id).map((k) => k.index));
+          window.__selClipId = kf.clip_id;
+          dragKf = { index: hit, pointer: e.pointerId, t0: tHit, moved: false, x0: e.clientX, tStart: Date.now(), legalDt: 0 };
+          dragGroup = snapshotGroup("key", hit);
+          scrollEl.setPointerCapture(e.pointerId);
+          renderTimeline();
+          return;
+        }
         if (e.ctrlKey || e.metaKey) {
           if (selectedKfs.has(hit)) selectedKfs.delete(hit); else selectedKfs.add(hit);
         } else if (e.shiftKey && selAnchor != null) {
@@ -3353,7 +3794,6 @@
         const dt = clampGroupDt(group, raw - Number(dragSm._t0));
         applyGroupDt(group, dt);
         renderTimeline();
-        postGroupTimes(group, false);
         return;
       }
       if (!dragKf) return;
@@ -3368,15 +3808,54 @@
         dragKf.moved = true;
       }
       const group = dragGroup || snapshotGroup("key", dragKf.index);
-      const dt = clampGroupDt(group, t - Number(dragKf.t0));
+      let dt = (group.keys.length > 1) ? snapBlockDt(group, t - Number(dragKf.t0)) : clampGroupDt(group, t - Number(dragKf.t0));
+      if (!isFinite(dt)) dt = dragKf.legalDt || 0;
+      dragKf.legalDt = dt;
       applyGroupDt(group, dt);
       renderTimeline();
-      postGroupTimes(group, false);
     }
     scrollEl.addEventListener("pointermove", onTlPointerMove);
+    function hoverClipAt(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const vis = visibleTracks();
+      const armRow = vis.findIndex((tr) => tr.id === "arm");
+      if (armRow < 0) return null;
+      const cy = RULER_H + armRow * TRACK_H + TRACK_H / 2;
+      if (Math.abs(y - cy) > 12) return null;
+      const t = xToTime(x);
+      const groups = {};
+      keyframes.forEach((kf) => {
+        if (!kf.clip_id || kf.t == null) return;
+        if (!groups[kf.clip_id]) groups[kf.clip_id] = [];
+        groups[kf.clip_id].push(kf);
+      });
+      for (const cid of Object.keys(groups)) {
+        const grp = groups[cid];
+        const t0 = Math.min.apply(null, grp.map((k) => k.t));
+        const t1 = Math.max.apply(null, grp.map((k) => k.t));
+        const x0 = timeToX(t0);
+        const x1 = timeToX(t1);
+        if (x >= Math.min(x0, x1) && x <= Math.max(x0, x1) && t >= t0 - 0.02 && t <= t1 + 0.02) return cid;
+      }
+      return null;
+    }
+    scrollEl.addEventListener("pointermove", (e) => {
+      if (dragKf || dragSm) return;
+      const cid = hoverClipAt(e.clientX, e.clientY);
+      if (cid !== window.__hoverClipId) {
+        window.__hoverClipId = cid;
+        renderTimeline();
+      }
+    });
     scrollEl.addEventListener("pointerleave", () => {
       const tip = document.getElementById("hopTip");
       if (tip) tip.hidden = true;
+      if (window.__hoverClipId) {
+        window.__hoverClipId = null;
+        renderTimeline();
+      }
     });
     window.addEventListener("pointermove", (e) => {
       if (dragKf || dragSm) onTlPointerMove(e);
@@ -3405,7 +3884,9 @@
         return;
       }
       const group = dragGroup || snapshotGroup("key", dragKf.index);
-      const dt = clampGroupDt(group, t - Number(dragKf.t0));
+      let dt = (group.keys.length > 1) ? snapBlockDt(group, t - Number(dragKf.t0)) : clampGroupDt(group, t - Number(dragKf.t0));
+      if (!isFinite(dt)) dt = dragKf.legalDt || 0;
+      dragKf.legalDt = dt;
       applyGroupDt(group, dt);
       const p = postGroupTimes(group, true);
       dragKf = null;
@@ -3416,13 +3897,41 @@
     window.addEventListener("pointerup", (e) => {
       if (dragKf || dragSm) onTlPointerUp(e);
     });
+    function hitClipAt(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const t = xToTime(clientX - rect.left);
+      const groups = {};
+      keyframes.forEach((kf) => {
+        if (!kf.clip_id || kf.t == null) return;
+        if (!groups[kf.clip_id]) groups[kf.clip_id] = [];
+        groups[kf.clip_id].push(kf);
+      });
+      for (const cid of Object.keys(groups)) {
+        const grp = groups[cid];
+        const t0 = Math.min.apply(null, grp.map((k) => k.t));
+        const t1 = Math.max.apply(null, grp.map((k) => k.t));
+        if (t >= t0 - 0.02 && t <= t1 + 0.02) return cid;
+      }
+      return null;
+    }
     scrollEl.addEventListener("contextmenu", (e) => {
       const hit = hitKeyframe(e.clientX, e.clientY);
-      if (hit < 0) return;
+      const clipHit = hitClipAt(e.clientX, e.clientY);
+      const hitKf = hit >= 0 ? keyframes.find((k) => k.index === hit) : null;
+      const hitIsClip = !!(hitKf && clipHit && hitKf.clip_id === clipHit);
+      if (hit < 0 && !clipHit) return;
       e.preventDefault();
-      selectedKf = hit;
-      if (!selectedKfs.has(hit)) selectedKfs = new Set([hit]);
-      const kf = keyframes.find((k) => k.index === hit);
+      window.__hitClipId = clipHit;
+      const unwrapBtn = document.getElementById("unwrapBtn");
+      if (unwrapBtn) unwrapBtn.hidden = !clipHit;
+      if (clipHit && !hitIsClip) {
+        const kf = keyframes.find((k) => k.clip_id === clipHit);
+        if (kf) selectedKf = kf.index;
+      } else {
+        selectedKf = hit;
+      }
+      if (selectedKf != null && !selectedKfs.has(selectedKf)) selectedKfs = new Set([selectedKf]);
+      const kf = keyframes.find((k) => k.index === selectedKf);
       fetch("/api/select_waypoint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3550,7 +4059,7 @@
       const primBody = document.getElementById("primBody");
       const name = document.getElementById("propName");
       const panel = document.getElementById("propsPanel");
-      const isPrim = !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera"));
+      const isPrim = !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import"));
       const moveBtn = document.getElementById("moveRobotPose");
       const extraAdd = document.getElementById("simExtraAdd");
       const isSim = !!(obj && obj.kind === "sim");
@@ -3577,7 +4086,7 @@
       if (isPrim) {
         body.hidden = true;
         if (primBody) primBody.hidden = false;
-        if (extraAdd) extraAdd.classList.remove("show");
+        if (extraAdd) extraAdd.classList.add("show");
         const tcP = document.getElementById("trackComp");
         const tsP = document.getElementById("trackSep");
         if (tcP) tcP.hidden = true;
@@ -3630,20 +4139,25 @@
             wrap.classList.toggle("rad", space === "local");
             wrap.classList.toggle("deg", space !== "local");
           }
-          const camBox = document.getElementById("camProps");
-          if (camBox) camBox.hidden = obj.kind !== "camera";
           const scBlock = document.getElementById("primScaleBlock");
-          if (scBlock) scBlock.hidden = obj.kind === "camera";
-          if (obj.kind === "camera") {
+          if (scBlock) scBlock.hidden = false;
+          if (obj.camera && (obj.camera.type || obj.camera.enabled != null)) {
             const c = obj.camera || {};
             const typ = document.getElementById("camType");
-            if (typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
+            if (typ && document.activeElement !== typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
             const idxRow = document.getElementById("camIndexRow");
             if (idxRow) idxRow.hidden = typ.value !== "sony";
             const idxEl = document.getElementById("camIndex");
             if (idxEl && document.activeElement !== idxEl) idxEl.value = (c.cv_index != null ? c.cv_index : 1);
-            const recEl = document.getElementById("camRecord");
-            if (recEl && document.activeElement !== recEl) recEl.checked = cameraRecordAtPlayhead(obj.id);
+            const recBtn = document.getElementById("camRecBtn");
+            const manEl = document.getElementById("camManual");
+            const manual = !!(c.manual);
+            if (manEl && document.activeElement !== manEl) manEl.checked = manual;
+            if (recBtn) {
+              const recOn = manual ? !!c.recording : cameraRecordAtPlayhead(obj.id);
+              recBtn.classList.toggle("on", recOn);
+              recBtn.textContent = recOn ? "❚❚" : "▶";
+            }
             const vf = document.getElementById("camVfov");
             const hf = document.getElementById("camHfov");
             if (vf && document.activeElement !== vf) vf.value = c.vfov != null ? c.vfov : 60;
@@ -3673,6 +4187,8 @@
           pw.classList.toggle("deg", fkDeg);
           pw.classList.toggle("rad", !fkDeg);
         }
+        const camBoxP = document.getElementById("camProps");
+        if (camBoxP) camBoxP.hidden = !(obj.camera && (obj.camera.type || obj.camera.enabled != null));
         return;
       }
       if (primBody) primBody.hidden = true;
@@ -3718,8 +4234,33 @@
       move = move || {};
       const mismatch = !!move.mismatch;
       const holding = !!move.holding || moveHolding;
-      if (extraAdd) extraAdd.classList.toggle("show", isSim);
+      if (extraAdd) extraAdd.classList.toggle("show", isSim || isPrim);
+      const camBox = document.getElementById("camProps");
+      if (camBox) camBox.hidden = !(obj.camera);
+      const camEn = document.getElementById("camEnable");
+      const camWrap = document.getElementById("camWrap");
+      if (obj.camera) {
+        const c = obj.camera || {};
+        const on = c.enabled !== false;
+        if (camEn) camEn.classList.toggle("advanced", on);
+        if (camWrap) { camWrap.classList.toggle("simple", !on); camWrap.classList.toggle("advanced", on); }
+        const typ = document.getElementById("camType");
+        if (typ && document.activeElement !== typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
+        const idxRow = document.getElementById("camIndexRow");
+        if (idxRow) idxRow.hidden = !typ || typ.value !== "sony";
+        const scriptRow = document.getElementById("camScriptRow");
+        if (scriptRow) {
+          const ov = !!(typ && (typ.value === "opencv" || typ.value === "cv"));
+          scriptRow.hidden = !ov;
+          scriptRow.style.display = ov ? "" : "none";
+        }
+        const vf = document.getElementById("camVfov");
+        const hf = document.getElementById("camHfov");
+        if (vf && document.activeElement !== vf) vf.value = c.vfov != null ? c.vfov : 60;
+        if (hf && document.activeElement !== hf) hf.value = c.hfov != null ? c.hfov : 90;
+      }
       const track = obj.track || {};
+      if (isSim && window.__trackAdded && !track.added) track.added = true;
       const showTrack = (isSim && !!track.added) || (obj.kind === "waypoint" && !!(track.added || track.on));
       const tc = document.getElementById("trackComp");
       const ts = document.getElementById("trackSep");
@@ -3728,7 +4269,7 @@
       if (showTrack) {
         const tn = document.getElementById("trackName");
         if (tn && document.activeElement !== tn) tn.value = track.name || "";
-        const on = !!track.on;
+        const on = window.__trackUserSet ? !!window.__trackOn : !!track.on;
         const tw = document.getElementById("trackWrap");
         const tb = document.getElementById("trackToggle");
         if (tb) tb.classList.toggle("advanced", on);
@@ -3753,7 +4294,8 @@
       const armed = mismatch || holding;
       if (moveBtn) {
         moveBtn.classList.toggle("armed", armed);
-        moveBtn.disabled = !armed;
+        const realOn = !document.body.classList.contains("no-real");
+        moveBtn.disabled = !realOn || !armed;
       }
     }
     function sendPrim() {
@@ -3771,17 +4313,22 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          kind: "empty",
+          kind: (window.__lastObject || {}).kind || "empty",
+          id: (window.__lastObject || {}).id,
           name: document.getElementById("primName").value,
           pos: ["ox", "oy", "oz"].map((id) => parseFloat(document.getElementById(id).value || "0")),
           wxyz: wxyz,
           scale: ["sx", "sy", "sz"].map((id) => parseFloat(document.getElementById(id).value || "1")),
           space: (document.getElementById("objSpace") && document.getElementById("objSpace").classList.contains("advanced")) ? "world" : "local",
           camera: (function () {
+            const box = document.getElementById("camProps");
             const typ = document.getElementById("camType");
-            if (!typ) return undefined;
+            if (!typ || (box && box.hidden)) return undefined;
             return {
               type: typ.value,
+              enabled: !!(document.getElementById("camEnable") && document.getElementById("camEnable").classList.contains("advanced")),
+              manual: !!(document.getElementById("camManual") && document.getElementById("camManual").checked),
+              recording: !!(document.getElementById("camRecBtn") && document.getElementById("camRecBtn").classList.contains("on")),
               vfov: parseFloat((document.getElementById("camVfov") || {}).value || "60"),
               hfov: parseFloat((document.getElementById("camHfov") || {}).value || "90"),
               cv_index: parseInt((document.getElementById("camIndex") || {}).value || "1", 10),
@@ -3888,7 +4435,7 @@
         return fkDeg ? deg2rad(v) : v;
       });
     }
-    function postTrack(payload) {
+    function postTrack(payload, opts) {
       payload = Object.assign({ offset: trackOffsetRad() }, payload || {});
       if (window._propKind === "waypoint" && window._propIndex != null) payload.index = window._propIndex;
       return fetch("/api/track_object", {
@@ -3896,33 +4443,106 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }).then((r) => r.json()).then((d) => {
-        setTimeout(refresh, 80);
+        if (d && d.track && window.__lastObject) window.__lastObject.track = d.track;
+        if (!(opts && opts.quiet)) setTimeout(refresh, 80);
         return d;
       });
     }
     const extraAddBtn = document.getElementById("simExtraAdd");
     const compMenu = document.getElementById("compMenu");
     if (extraAddBtn && compMenu) {
+      document.addEventListener("pointerdown", (e) => {
+        if (compMenu.hidden) return;
+        if (compMenu.contains(e.target) || extraAddBtn.contains(e.target)) return;
+        compMenu.hidden = true;
+      });
       extraAddBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const obj = window.__lastObject || {};
+        const isSim = obj.kind === "sim";
+        const hasCam = !!(obj.camera);
+        const hasTrack = !!(obj.track && obj.track.added);
+        compMenu.querySelectorAll("[data-comp]").forEach((b) => {
+          const k = b.getAttribute("data-comp");
+          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint");
+          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack);
+          b.disabled = !!taken;
+          b.style.opacity = taken ? "0.4" : "";
+          b.style.pointerEvents = taken ? "none" : "";
+        });
         const r = extraAddBtn.getBoundingClientRect();
         compMenu.hidden = false;
         compMenu.style.left = Math.max(8, r.left) + "px";
-        const h = 40;
+        const vis = Array.from(compMenu.querySelectorAll("[data-comp]")).filter((b) => !b.hidden);
+        const h = Math.max(36, vis.length * 32);
         compMenu.style.top = Math.max(8, r.top - h - 6) + "px";
       });
-      compMenu.addEventListener("click", (e) => {
+      compMenu.addEventListener("pointerdown", (e) => {
         const btn = e.target.closest("[data-comp]");
+        if (!btn || btn.disabled) return;
+        e.preventDefault();
+        e.stopPropagation();
         compMenu.hidden = true;
-        if (btn && btn.getAttribute("data-comp") === "track") postTrack({ added: true });
+        if (btn.getAttribute("data-comp") === "track") {
+          const tc = document.getElementById("trackComp");
+          const ts = document.getElementById("trackSep");
+          if (tc) tc.hidden = false;
+          if (ts) ts.hidden = false;
+          if (!window.__lastObject) window.__lastObject = {};
+          window.__trackAdded = true;
+          window.__lastObject.track = Object.assign({}, window.__lastObject.track || {}, { added: true });
+          postTrack({ added: true }).catch(() => {});
+        }
+        if (btn.getAttribute("data-comp") === "camera") {
+          const obj = window.__lastObject || {};
+          fetch("/api/add_camera_component", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              kind: obj.kind,
+              id: obj.id || (obj.kind === "sim" ? "sim" : obj.id),
+            }),
+          }).then((r) => r.json()).then((d) => {
+            if (d && d.object) window.__lastObject = Object.assign({}, obj, d.object);
+            setTimeout(refresh, 80);
+          });
+        }
       });
+    }
+    const camTrash = document.getElementById("camTrash");
+    if (camTrash) {
+      camTrash.onclick = () => {
+        const obj = window.__lastObject || {};
+        fetch("/api/object_props", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: obj.kind, id: obj.id || (obj.kind === "sim" ? "sim" : obj.id), remove_camera: true }),
+        }).then(() => setTimeout(refresh, 80));
+      };
+    }
+    const camEnable = document.getElementById("camEnable");
+    if (camEnable) {
+      camEnable.onclick = () => {
+        const on = !camEnable.classList.contains("advanced");
+        camEnable.classList.toggle("advanced", on);
+        const wrap = document.getElementById("camWrap");
+        if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+        sendPrim();
+      };
     }
     const trackToggle = document.getElementById("trackToggle");
     if (trackToggle) {
-      trackToggle.onclick = () => {
+      trackToggle.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         const on = !trackToggle.classList.contains("advanced");
-        postTrack({ on: on, name: (document.getElementById("trackName") || {}).value, added: true });
+        window.__trackOn = on;
+        window.__trackUserSet = true;
+        trackToggle.classList.toggle("advanced", on);
+        const tw = document.getElementById("trackWrap");
+        if (tw) { tw.classList.toggle("simple", !on); tw.classList.toggle("advanced", on); }
+        postTrack({ on: on, name: (document.getElementById("trackName") || {}).value, added: true }, { quiet: true });
       };
     }
     const trackNameEl = document.getElementById("trackName");
@@ -3935,7 +4555,7 @@
       el.addEventListener("change", () => postTrack({ added: true, on: trackToggle && trackToggle.classList.contains("advanced") }));
     });
     const trackTrash = document.getElementById("trackTrash");
-    if (trackTrash) trackTrash.onclick = () => postTrack({ added: false, on: false });
+    if (trackTrash) trackTrash.onclick = () => { window.__trackAdded = false; postTrack({ added: false, on: false }); };
     const holdLinEl = document.getElementById("holdLinMps");
     if (holdLinEl) holdLinEl.addEventListener("change", saveCtrlSettings);
     const trackPickBtn = document.getElementById("trackPickBtn");
@@ -4134,7 +4754,7 @@
       const wps = document.getElementById("hierWps");
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
-      const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube")) ? [d.object.id] : []);
+      const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
       const objRows = [{ id: "sim_cursor", name: "Sim cursor" }].concat(d.scene_objects || []);
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
@@ -4143,6 +4763,9 @@
         return itemVis[k] !== false;
       }
       function eyeHtml(kind, id) {
+        if (kind === "pose" && String(id) === "real") {
+          return "<span class='hier-eye off locked' title='Hidden'>🚫</span>";
+        }
         const on = eyeOn(kind, id);
         return "<span class='hier-eye" + (on ? "" : " off") + "' data-eye='" + kind + "' data-id='" + id + "' title='" + (on ? "Hide" : "Show") + "'>" + (on ? "👁" : "🚫") + "</span>";
       }
@@ -4174,25 +4797,43 @@
       const oc = document.getElementById("objCount");
       if (oc) oc.textContent = "(" + (d.scene_objects || []).length + ")";
       const merged = d.merged_points || [];
-      const nWp = (d.keyframes || []).length;
-      const nSt = merged.filter((r) => r.kind === "pose").length;
+      const wpRows = merged.filter((r) => r.kind === "wp");
+      const poseRows = merged.filter((r) => r.kind === "pose");
       const wc = document.getElementById("wpCount");
-      if (wc) wc.textContent = "(" + nWp + (nSt ? ("+" + nSt) : "") + ")";
+      if (wc) wc.textContent = "(" + wpRows.length + ")";
       const pc = document.getElementById("poseCount");
-      if (pc) pc.textContent = "";
+      if (pc) pc.textContent = "(" + poseRows.length + ")";
       objs.innerHTML = tree;
       const selWps = d.selected_wp_idxs || (d.selected != null ? [d.selected] : []);
       const selPoses = d.selected_pose_ids || [];
-      wps.innerHTML = merged.map((r) => {
+      function pointRow(r) {
         const on = r.kind === "wp" ? (selWps.indexOf(r.index) >= 0) : (selPoses.indexOf(r.pid) >= 0);
         const cls = "hier-row" + (on ? " on" : "") + (r.kind === "pose" ? " stored" : "");
         const eye = r.kind === "wp" ? eyeHtml("wp", r.index) : eyeHtml("pose", r.pid);
+        const canGo = r.can_go !== false;
+        const go = (on && canGo) ? "<button type='button' class='hier-go' title='Go to pose'>→</button>" : "";
         const key = r.kind === "wp" ? ("data-wi='" + r.index + "'") : ("data-pid='" + r.pid + "'");
-        return "<div class='" + cls + "' draggable='true' data-pk='" + r.id + "' data-store='" + (r.store || "") + "' " + key + "><span class='hier-label'>" + (r.name || r.id) + "</span>" + eye + "</div>";
-      }).join("") || "<div class='hier-row'>No points</div>";
-      if (poses) poses.innerHTML = "";
-      const go = document.getElementById("wpGoBtn");
-      if (go) go.disabled = !(selWps.length || selPoses.length);
+        return "<div class='" + cls + "' draggable='true' data-pk='" + r.id + "' data-store='" + (r.store || "") + "' data-cango='" + (canGo ? "1" : "0") + "' " + key + "><span class='hier-label'>" + (r.name || r.id) + "</span>" + go + eye + "</div>";
+      }
+      wps.innerHTML = wpRows.map(pointRow).join("") || "<div class='hier-row muted'>No waypoints</div>";
+      if (poses) poses.innerHTML = poseRows.map(pointRow).join("") || "<div class='hier-row muted'>No saved points</div>";
+      const pathsEl = document.getElementById("hierPaths");
+      const pathRows = d.saved_paths || [];
+      const pthc = document.getElementById("pathCount");
+      if (pthc) pthc.textContent = "(" + pathRows.length + ")";
+      const selPath = d.selected_path_id || window.__selPathId || "";
+      if (pathsEl) {
+        pathsEl.innerHTML = pathRows.map((p) => {
+          const on = String(p.id) === String(selPath);
+          return "<div class='hier-row" + (on ? " on" : "") + "' draggable='true' data-pathid='" + p.id + "' data-store='" + (p.store || "local") + "'><span class='hier-label'>" + (p.name || p.id) + "</span></div>";
+        }).join("") || "<div class='hier-row muted'>No saved paths</div>";
+      }
+      const tracked = document.getElementById("hierTracked");
+      const tc = document.getElementById("trackCount");
+      if (tc) tc.textContent = "(0)";
+      if (tracked && !tracked.dataset.ready) {
+        tracked.innerHTML = "<div class='hier-row muted'>No tracked points</div>";
+      }
     }
     document.getElementById("hierPanel").addEventListener("click", (e) => {
       const listEye = e.target.closest("[data-list-eye]");
@@ -4300,7 +4941,7 @@
       });
     })();
     function selectedPointRef() {
-      const on = document.querySelector("#hierWps .hier-row.on");
+      const on = document.querySelector("#hierWps .hier-row.on, #hierPoses .hier-row.on");
       if (!on) return null;
       if (on.hasAttribute("data-wi")) return { kind: "wp", index: Number(on.getAttribute("data-wi")) };
       if (on.hasAttribute("data-pid")) return { kind: "pose", id: on.getAttribute("data-pid") };
@@ -4315,8 +4956,37 @@
         body: JSON.stringify(ref),
       }).then(refresh);
     }
-    const wpGoBtn = document.getElementById("wpGoBtn");
-    if (wpGoBtn) wpGoBtn.onclick = goSelectedPoint;
+    (function setupHierTabs() {
+      const tabs = document.getElementById("hierTabs");
+      if (!tabs) return;
+      window.__hierTab = window.__hierTab || "objects";
+      function showTab(id) {
+        window.__hierTab = id;
+        tabs.querySelectorAll(".hier-tab").forEach((b) => b.classList.toggle("on", b.getAttribute("data-htab") === id));
+        document.querySelectorAll("#hierPanel .hier-sec").forEach((sec) => {
+          sec.classList.toggle("on", sec.getAttribute("data-hsec") === id);
+        });
+      }
+      tabs.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-htab]");
+        if (!b) return;
+        showTab(b.getAttribute("data-htab"));
+      });
+      showTab(window.__hierTab);
+    })();
+    document.getElementById("hierPanel").addEventListener("click", (e) => {
+      const go = e.target.closest(".hier-go");
+      if (!go) return;
+      e.stopPropagation();
+      const row = go.closest(".hier-row");
+      if (row && row.hasAttribute("data-wi")) {
+        fetch("/api/point_go", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "wp", index: Number(row.getAttribute("data-wi")) }) }).then(refresh);
+      } else if (row && row.hasAttribute("data-pid")) {
+        fetch("/api/point_go", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "pose", id: row.getAttribute("data-pid") }) }).then(refresh);
+      }
+    }, true);
     document.querySelectorAll("[data-psort]").forEach((btn) => {
       btn.onclick = () => {
         fetch("/api/point_order", {
@@ -4399,47 +5069,62 @@
       }, { once: true });
     }
     document.getElementById("hierWps").addEventListener("dblclick", (e) => {
-      if (e.target.closest("[data-eye]")) return;
+      if (e.target.closest("[data-eye]") || e.target.closest(".hier-go")) return;
       const row = e.target.closest("[data-pk]");
       if (!row) return;
       e.preventDefault();
       if (row.hasAttribute("data-wi")) startRowRename(row, "wp", null, Number(row.getAttribute("data-wi")));
       else startRowRename(row, "pose", row.getAttribute("data-pid"), null);
     });
+    document.getElementById("hierPoses").addEventListener("dblclick", (e) => {
+      if (e.target.closest("[data-eye]") || e.target.closest(".hier-go")) return;
+      const row = e.target.closest("[data-pk]");
+      if (!row) return;
+      e.preventDefault();
+      startRowRename(row, "pose", row.getAttribute("data-pid"), null);
+    });
     const ptCtx = document.getElementById("ptCtx");
     function hidePtCtx() { if (ptCtx) ptCtx.hidden = true; }
     document.addEventListener("click", hidePtCtx);
-    document.getElementById("hierWps").addEventListener("contextmenu", (e) => {
-      const row = e.target.closest("[data-pk]");
-      if (!row || !ptCtx) return;
-      e.preventDefault();
+    function placePtCtx(ev) {
+      if (!ptCtx) return;
+      ptCtx.hidden = false;
+      const x = Math.min(window.innerWidth - 12, ev.clientX);
+      const y = Math.min(window.innerHeight - 12, ev.clientY);
+      ptCtx.style.left = x + "px";
+      ptCtx.style.top = y + "px";
+    }
+    function showRowPointMenu(e, row) {
       const isWp = row.hasAttribute("data-wi");
       const idx = isWp ? Number(row.getAttribute("data-wi")) : null;
       const pid = isWp ? null : row.getAttribute("data-pid");
       const store = row.getAttribute("data-store") || "";
-      const locked = !isWp && (pid === "real" || pid === "home");
+      const locked = !isWp && (pid === "real" || pid === "home" || store === "global");
       let storeBtn = "";
       if (!isWp && !locked) {
         storeBtn = store === "global"
           ? "<button data-act='local'>Store locally</button>"
           : "<button data-act='global'>Store globally</button>";
       }
+      const delBtn = locked ? "" : "<button data-act='delete'>Delete</button>";
+      const canGo = row.getAttribute("data-cango") !== "0";
+      const goBtn = canGo ? "<button data-act='go'>Go to pose</button>" : "";
       ptCtx.innerHTML =
         "<button data-act='rename'>Rename</button>" +
-        "<button data-act='go'>Go to pose</button>" +
-        "<button data-act='delete'>Delete</button>" +
+        goBtn +
+        delBtn +
         storeBtn;
-      ptCtx.hidden = false;
-      ptCtx.style.left = e.clientX + "px";
-      ptCtx.style.top = e.clientY + "px";
+      placePtCtx(e);
       ptCtx.onclick = (ev) => {
         const act = ev.target.getAttribute("data-act");
+        if (!act) return;
         hidePtCtx();
         if (act === "rename") startRowRename(row, isWp ? "wp" : "pose", pid, idx);
         else if (act === "go") {
           fetch("/api/point_go", { method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(isWp ? { kind: "wp", index: idx } : { kind: "pose", id: pid }) }).then(refresh);
         } else if (act === "delete") {
+          if (locked) return;
           if (isWp) {
             fetch("/api/select_waypoint", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ index: idx }) })
               .then(() => fetch("/api/delete_selected", { method: "POST" }))
@@ -4451,7 +5136,87 @@
             body: JSON.stringify({ id: pid, store: act }) }).then(refresh);
         }
       };
+    }
+    function showEmptyListMenu(kind, e) {
+      e.preventDefault();
+      if (kind === "obj") {
+        ptCtx.innerHTML =
+          "<button data-act='add-empty'>Add empty</button>" +
+          "<button data-act='add-sphere'>Add sphere</button>" +
+          "<button data-act='add-cube'>Add cube</button>" +
+          "<button data-act='add-camera'>Add camera</button>" +
+          "<button data-act='add-import'>Import object</button>";
+        placePtCtx(e);
+        ptCtx.onclick = (ev) => {
+          const act = ev.target.getAttribute("data-act") || "";
+          if (!act.startsWith("add-")) return;
+          hidePtCtx();
+          if (act === "add-import") { pickImportObject(); return; }
+          fetch("/api/add_object", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: act.slice(4) }) }).then(() => setTimeout(refresh, 80));
+        };
+        return;
+      }
+      if (kind === "wp") {
+        ptCtx.innerHTML =
+          "<div class='sub'><button type='button'>Add waypoint ▸</button>" +
+          "<div class='sub-menu'>" +
+          "<button data-act='wp-real'>Real cursor</button>" +
+          "<button data-act='wp-sim'>Sim cursor</button>" +
+          "</div></div>";
+      } else {
+        ptCtx.innerHTML =
+          "<div class='sub'><button type='button'>Add saved point ▸</button>" +
+          "<div class='sub-menu'>" +
+          "<button data-act='pose-real'>Real cursor</button>" +
+          "<button data-act='pose-sim'>Sim cursor</button>" +
+          "</div></div>";
+      }
+      placePtCtx(e);
+      ptCtx.onclick = (ev) => {
+        const act = ev.target.getAttribute("data-act");
+        if (!act) return;
+        hidePtCtx();
+        if (act === "wp-real") add("/api/add_waypoint_real");
+        else if (act === "wp-sim") add("/api/add_waypoint_sim");
+        else if (act === "pose-real") addStoredFrom("real");
+        else if (act === "pose-sim") addStoredFrom("sim");
+      };
+    }
+    function showPlusAddMenu(source, e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const label = source === "real" ? "real cursor" : "sim cursor";
+      ptCtx.innerHTML =
+        "<button data-act='plus-wp'>Add waypoint (" + label + ")</button>" +
+        "<button data-act='plus-pose'>Add saved point (" + label + ")</button>";
+      placePtCtx(e);
+      ptCtx.onclick = (ev) => {
+        const act = ev.target.getAttribute("data-act");
+        if (!act) return;
+        hidePtCtx();
+        if (act === "plus-wp") add(source === "real" ? "/api/add_waypoint_real" : "/api/add_waypoint_sim");
+        else if (act === "plus-pose") addStoredFrom(source);
+      };
+    }
+    document.getElementById("hierObjects").addEventListener("contextmenu", (e) => {
+      if (e.target.closest("[data-oid]")) return;
+      showEmptyListMenu("obj", e);
     });
+    document.getElementById("hierWps").addEventListener("contextmenu", (e) => {
+      const row = e.target.closest("[data-pk]");
+      if (row) { e.preventDefault(); showRowPointMenu(e, row); return; }
+      showEmptyListMenu("wp", e);
+    });
+    document.getElementById("hierPoses").addEventListener("contextmenu", (e) => {
+      const row = e.target.closest("[data-pk]");
+      if (row) { e.preventDefault(); showRowPointMenu(e, row); return; }
+      showEmptyListMenu("pose", e);
+    });
+    const addRealBtn = document.getElementById("addReal");
+    const addSimBtn = document.getElementById("addSim");
+    if (addRealBtn) addRealBtn.addEventListener("contextmenu", (e) => showPlusAddMenu("real", e));
+    if (addSimBtn) addSimBtn.addEventListener("contextmenu", (e) => showPlusAddMenu("sim", e));
     document.getElementById("hierWps").addEventListener("click", (e) => {
       const eye = e.target.closest("[data-eye]");
       if (eye) {
@@ -4511,6 +5276,15 @@
     async function refresh() {
       const r = await fetch("/api/status");
       const d = await r.json();
+      if (d.viser_port) {
+        const wrap = document.querySelector(".viewer-wrap");
+        const ifr = wrap ? wrap.querySelector(":scope > iframe") : null;
+        const url = "http://127.0.0.1:" + d.viser_port + "/";
+        if (ifr) {
+          const cur = ifr.getAttribute("src") || "";
+          if (!cur || cur.indexOf(":" + d.viser_port) < 0) ifr.src = url;
+        }
+      }
       if (Array.isArray(d.tracks) && tracksSyncing === 0) {
         const same = d.tracks.length === extraTracks.length &&
           d.tracks.every((tr, i) => extraTracks[i] &&
@@ -4519,10 +5293,16 @@
             JSON.stringify((tr && tr.keys) || []) === JSON.stringify(extraTracks[i].keys || []));
         if (!same) applyExtraTracks(d.tracks);
       }
-      if (!dragKf && !dragSm) {
-        keyframes = d.keyframes || [];
-        samples = d.samples || [];
-        spans = d.spans || [];
+      if (!dragKf && !dragSm && !window.__holdSamples) {
+        if (Number(d.waypoint_count) === 0) {
+          keyframes = [];
+          samples = [];
+          spans = [];
+        } else if (Array.isArray(d.keyframes) && d.keyframes.length) keyframes = d.keyframes;
+        if (Number(d.waypoint_count) !== 0) {
+          if (Array.isArray(d.samples)) samples = d.samples;
+          if (Array.isArray(d.spans)) spans = d.spans;
+        }
       }
       runnable = !!d.runnable;
       simRunnable = !!(d.sim_runnable || d.runnable);
@@ -4533,7 +5313,7 @@
       const pasteBtn = document.getElementById("pasteBtn");
       if (pasteBtn) pasteBtn.disabled = !clipInfo.can_paste;
       const mergeBtn = document.getElementById("mergeBtn");
-      if (mergeBtn) {
+      if (mergeBtn && kfMenu.hidden) {
         mergeBtn.hidden = !canMergeSel();
         mergeBtn.disabled = !canMergeSel();
       }
@@ -4575,13 +5355,14 @@
         (spdPend ? (" pend " + spdPend) : "") +
         (b.baking ? "  baking…" : "") +
         (d.viewer_ready ? "" : "  viewer not ready");
-      if (d.snap_to_grid != null && snapToGrid !== !!d.snap_to_grid) {
+      if (d.snap_to_grid != null && !window.__snapLocal && snapToGrid !== !!d.snap_to_grid) {
         snapToGrid = !!d.snap_to_grid;
         const sb = document.getElementById("tlSnapBtn");
         if (sb) sb.classList.toggle("on", snapToGrid);
       }
       bakingBusy = !!(d.bake && d.bake.baking);
       fillProps(d.object, d.move);
+      applyRobotLinkUi(d);
       if (bakingBusy) {
         const mp = document.getElementById("moveRobotPose");
         if (mp) mp.disabled = true;
@@ -4592,11 +5373,26 @@
       }
       window.__lastObject = d.object || {};
       if (Array.isArray(d.sim_poses)) applySimPoses(d.sim_poses);
+      else if (Array.isArray(d.pose_markers) && d.pose_markers.length) applySimPoses(d.pose_markers);
       fillHierarchy(d);
       const wrap = document.querySelector(".viewer-wrap");
       const pane = document.getElementById("camPane");
       const cam0 = d.cam_view || {};
-      const allCams = (d.scene_objects || []).filter((o) => o.kind === "camera");
+      const allCams = (d.scene_objects || []).filter((o) => o.camera && o.camera.enabled !== false);
+      const simCam = d.sim_camera || null;
+      if (simCam && simCam.enabled !== false && !allCams.some((c) => c.id === "sim")) {
+        allCams.unshift({
+          id: "sim",
+          kind: "sim",
+          name: "Sim cursor",
+          camera: simCam,
+          cam_type: simCam.type || "sim",
+        });
+      }
+      allCams.forEach((o) => {
+        const n = String(o.name || o.id || "object");
+        if (!/camera$/i.test(n)) o.name = n + " camera";
+      });
       const tabId = window.__camTab || "all";
       let cam = cam0;
       if (tabId && tabId !== "all") {
@@ -4615,7 +5411,7 @@
       (function drawCamTabs() {
         const bar = document.getElementById("camTabs");
         if (!bar) return;
-        const cams = (d.scene_objects || []).filter((o) => o.kind === "camera");
+        const cams = allCams.slice();
         const cur = window.__camTab || "all";
         const sig = cams.map((o) => o.id + ":" + (o.name || "")).join("|");
         if (bar.dataset.sig !== sig) {
@@ -4623,19 +5419,23 @@
           bar.innerHTML = "<button type='button' class='cam-tab' data-camtab='all'>All</button>" +
             cams.map((o) => "<button type='button' class='cam-tab' data-camtab='" + o.id + "'>" + (o.name || o.id) + "</button>").join("");
           bar.querySelectorAll(".cam-tab").forEach((b) => {
-            b.onclick = () => { window.__camTab = b.getAttribute("data-camtab"); };
+            b.onclick = () => {
+              window.__camTab = b.getAttribute("data-camtab");
+              fetch("/api/camera", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ preview_id: window.__camTab }),
+              }).catch(() => {});
+              refresh();
+            };
           });
         }
         bar.querySelectorAll(".cam-tab").forEach((b) => {
           b.classList.toggle("on", b.getAttribute("data-camtab") === cur);
         });
-        const stack = document.getElementById("camStack");
-        const vp = document.getElementById("camViewport");
-        if (stack) { stack.classList.remove("show"); stack.innerHTML = ""; }
-        if (vp) vp.hidden = false;
       })();
       window.__lastCamId = cam.id || "";
-      const hasCam = !!(cam.active || (d.scene_objects || []).some((o) => o.kind === "camera"));
+      const hasCam = allCams.length > 0;
       if (wrap) {
         wrap.classList.toggle("has-cam", hasCam);
         wrap.classList.toggle("sim-cam", false);
@@ -4664,16 +5464,37 @@
         pane.hidden = !hasCam;
         const tab = window.__camTab || "all";
         const liveCams = allCams.filter((o) => {
-          const t = o.cam_type || "sim";
+          const cam = o.camera || {};
+          if (cam.enabled === false) return false;
+          const t = o.cam_type || cam.type || "sim";
           return t === "sony" || t === "cv" || t === "opencv";
         });
-        const simCams = allCams.filter((o) => !o.cam_type || o.cam_type === "sim");
-        const allMode = tab === "all" && (liveCams.length + simCams.length) > 1;
+        const simCams = allCams.filter((o) => {
+          const cam = o.camera || {};
+          if (cam.enabled === false) return false;
+          const t = o.cam_type || cam.type || "sim";
+          return t === "sim";
+        });
+        const allMode = tab === "all" && allCams.length > 1;
+        const stack = document.getElementById("camStack");
+        const vp = document.getElementById("camViewport");
+        if (stack) stack.classList.remove("show");
+        if (vp) vp.hidden = false;
+        const simRow = document.getElementById("camSimRow");
+        if (simRow) {
+          const extraSim = allMode ? simCams.slice(1) : [];
+          const sig = extraSim.map((o) => o.id).join("|");
+          if (simRow.dataset.sig !== sig) {
+            simRow.dataset.sig = sig;
+            simRow.innerHTML = extraSim.map((o) =>
+              "<iframe class='cam-sim-extra' title='" + (o.name || o.id) + "' src='{{ viser_url }}'></iframe>"
+            ).join("");
+          }
+        }
         const showLive = (tab === "all") ? liveCams.length > 0 : liveCams.some((o) => o.id === tab);
         const showSim = (tab === "all") ? simCams.length > 0 : simCams.some((o) => o.id === tab);
         const liveIds = (tab === "all") ? liveCams.map((o) => o.id) : (showLive ? [tab] : []);
         const liveId = liveIds[0] || "";
-        const vp = document.getElementById("camViewport");
         if (vp) {
           vp.classList.toggle("all-mode", allMode);
           vp.classList.toggle("live-only", showLive && !showSim);
@@ -4707,6 +5528,20 @@
           window.__camHasFrame[o.id] = !!o.has_frame;
           window.__camErrors[o.id] = o.cam_error || "";
         });
+        const liveHas = liveIds.some((id) => window.__camHasFrame[id]);
+        const wantSim = showSim && !(showLive && !liveHas);
+        if (ifr) {
+          ifr.classList.toggle("cam-off", !wantSim);
+          ifr.style.visibility = wantSim ? "visible" : "hidden";
+        }
+        if (off) {
+          const empty = showLive && !liveHas && !wantSim;
+          off.hidden = !empty;
+          if (empty) {
+            const err = (liveIds.map((id) => window.__camErrors[id]).filter(Boolean)[0]) || "Camera not connected";
+            off.textContent = err;
+          }
+        }
         window.__camLiveId = liveId || "";
         const row = document.getElementById("camLiveRow");
         if (row) {
@@ -4998,8 +5833,10 @@
           if (d && Array.isArray(d.lines) && d.lines.length) {
             const parts = [];
             d.lines.forEach((row) => {
-              after = Math.max(after, Number(row[0]) || after);
-              parts.push(row[1]);
+              const text = Array.isArray(row) ? row[1] : (row.line || row.msg || "");
+              const idx = Array.isArray(row) ? Number(row[0]) : Number(row.i);
+              if (idx) after = Math.max(after, idx);
+              if (text) parts.push(text);
             });
             logEl.textContent += (logEl.textContent ? "\n" : "") + parts.join("\n");
             logEl.scrollTop = logEl.scrollHeight;
@@ -5090,33 +5927,69 @@
         if (e.target === modal) closeConsole();
       });
     })();
+    function applySession(d) {
+      if (!d) return;
+      const title = d.title || (d.session && d.session.title);
+      if (title) setDocTitle(title);
+      if (d.path && statusEl) statusEl.textContent = "File: " + d.path;
+    }
+    async function doNewFile(force) {
+      const r = await fetch("/api/file/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: !!force }),
+      });
+      const d = await r.json();
+      if (d.needs_confirm) {
+        const m = document.getElementById("fileNewModal");
+        if (m) m.hidden = false;
+        return;
+      }
+      applyExtraTracks([]);
+      keyframes = [];
+      samples = [];
+      spans = [];
+      selectedKf = null;
+      selectedKfs = new Set();
+      window.__selClipId = null;
+      renderTimeline();
+      setDocTitle(DEFAULT_DOC_TITLE);
+      setTimeout(refresh, 200);
+    }
+    const fileNewOk = document.getElementById("fileNewOk");
+    const fileNewCancel = document.getElementById("fileNewCancel");
+    if (fileNewOk) fileNewOk.onclick = () => {
+      const m = document.getElementById("fileNewModal");
+      if (m) m.hidden = true;
+      doNewFile(true);
+    };
+    if (fileNewCancel) fileNewCancel.onclick = () => {
+      const m = document.getElementById("fileNewModal");
+      if (m) m.hidden = true;
+    };
     document.getElementById("menuFile").addEventListener("click", async (e) => {
       const act = e.target.getAttribute("data-act");
       if (!act) return;
       document.getElementById("menuFile").classList.remove("open");
       if (act === "new") {
-        applyExtraTracks([]);
-        setDocTitle(DEFAULT_DOC_TITLE);
-        await fetch("/api/file/new", { method: "POST" });
-        applyExtraTracks([]);
-        setTimeout(refresh, 200);
+        doNewFile(false);
       } else if (act === "open") {
         document.getElementById("fileOpen").click();
-      } else if (act === "save") {
+      } else if (act === "save" || act === "save-as") {
         const title = fileStem(docTitleText());
         try { await syncTracks(); } catch (err) {}
-        const r = await fetch("/api/file/save", {
+        const url = act === "save-as" ? "/api/file/save_as" : "/api/file/save";
+        const r = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: title, tracks: extraTracks }),
+          body: JSON.stringify({ title: title, tracks: extraTracks, save_as: act === "save-as" }),
         });
         const d = await r.json();
+        if (d.cancelled) return;
         if (!d.ok) statusEl.textContent = "Save failed: " + (d.error || r.status);
         else {
-          if (d.doc) d.doc.title = title;
-          const fname = title + ".arcspath";
-          downloadJson(fname, d.doc);
-          statusEl.textContent = "Saved " + (d.count || 0) + " points → " + fname;
+          applySession(d);
+          statusEl.textContent = "Saved " + (d.count || 0) + " points → " + (d.path || (title + ".arcspath"));
         }
       } else if (act === "export") {
         const title = fileStem(docTitleText());
@@ -5135,6 +6008,60 @@
         }
       }
     });
+    let _linkKnown = false;
+    let _linkOn = false;
+    let _linkSawOn = false;
+    let _linkBoot = Date.now();
+    let _bootDiscShown = false;
+    const LINK_GRACE_MS = 10000;
+    function applyRobotLinkUi(d) {
+      const realOn = !!(d && d.real && d.real.connected);
+      const disc = document.getElementById("discModal");
+      const reconn = document.getElementById("reconnModal");
+      const grace = (Date.now() - _linkBoot) < LINK_GRACE_MS;
+      if (grace) {
+        if (realOn) _linkSawOn = true;
+        if (disc) disc.hidden = true;
+        if (reconn) reconn.hidden = true;
+      } else if (realOn) {
+        if (disc) disc.hidden = true;
+        if (_linkSawOn && _linkKnown && !_linkOn) {
+          if (reconn) reconn.hidden = false;
+        }
+        _linkSawOn = true;
+      } else {
+        if (_linkSawOn && _linkOn) {
+          if (disc) disc.hidden = false;
+          if (reconn) reconn.hidden = true;
+        } else if (!_linkSawOn && !_bootDiscShown) {
+          _bootDiscShown = true;
+          if (disc) disc.hidden = false;
+          if (reconn) reconn.hidden = true;
+        }
+      }
+      _linkKnown = true;
+      _linkOn = realOn;
+      const ikOk = d && d.real && d.real.ik_ok != null ? !!d.real.ik_ok : realOn;
+      [
+        "addReal", "poseAddReal", "poseFromReal",
+        "uploadReal", "runReal", "pauseReal", "stopReal", "realStop",
+        "hideRobotBtn",
+      ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = !realOn;
+        el.classList.toggle("off-real", !realOn);
+      });
+      const moveBtn = document.getElementById("moveRobotPose");
+      if (moveBtn) {
+        moveBtn.classList.toggle("off-real", !realOn);
+        if (!realOn) moveBtn.disabled = true;
+      }
+      const bake = document.getElementById("bake");
+      if (bake && !realOn && !ikOk) bake.disabled = true;
+      document.body.classList.toggle("no-real", !realOn);
+      document.body.classList.toggle("no-ik", !ikOk);
+    }
     function fillLimitInputs(s) {
       const vel = (s && s.joint_vel_deg) || [];
       const acc = (s && s.joint_acc_deg) || [];
@@ -5150,6 +6077,8 @@
       if (pr && s && s.path_window_radius != null) pr.value = s.path_window_radius;
       const hl = document.getElementById("holdLinMps");
       if (hl && s && s.hold_lin_mps != null) hl.value = s.hold_lin_mps;
+      const ikp = document.getElementById("ikPref");
+      if (ikp && s && s.ik_pref) ikp.value = s.ik_pref === "always_aubo" ? "always_aubo" : "backup";
       const bd = document.getElementById("burnerDur");
       if (bd && s && s.burner_duration != null) bd.value = s.burner_duration;
       const tg = document.getElementById("tlGrid");
@@ -5174,6 +6103,19 @@
       }
       if (s && s.dev_mode != null) {
         applyDevMode(!!s.dev_mode);
+      }
+      const rm = document.getElementById("robotModel");
+      if (rm) {
+        const models = (s && s.robot_models) || [];
+        const cur = (s && s.robot_model) || "aubo_i5";
+        if (models.length) {
+          rm.innerHTML = models.map((m) => {
+            const id = m.id || m;
+            const label = m.name || id;
+            return "<option value=\"" + id + "\">" + label + "</option>";
+          }).join("");
+        }
+        rm.value = cur;
       }
       if (s && s.auto_sample != null) {
         autoSampleOn = !!s.auto_sample;
@@ -5201,9 +6143,11 @@
         path_window_on: !!pathWinOn,
         auto_sample: !!autoSampleOn,
         hold_lin_mps: Number(document.getElementById("holdLinMps").value || 0.05),
+        ik_pref: (document.getElementById("ikPref") && document.getElementById("ikPref").value) || "backup",
         grid_spacing: Math.max(0.001, Number(document.getElementById("tlGrid") && document.getElementById("tlGrid").value || gridSpacing || 0.01)),
         snap_to_grid: !!snapToGrid,
         dev_mode: !!devMode,
+        robot_model: (document.getElementById("robotModel") && document.getElementById("robotModel").value) || "aubo_i5",
       };
     }
     function applyDevMode(on) {
@@ -5239,7 +6183,7 @@
         tab.onclick = () => {
           ctrlSettings.querySelectorAll(".ctrl-tab").forEach((t) => t.classList.remove("on"));
           tab.classList.add("on");
-          ["speed", "wps", "pwin", "tl", "dev"].forEach((id) => {
+          ["speed", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
             const pane = document.getElementById("pane-" + id);
             if (pane) pane.hidden = tab.getAttribute("data-tab") !== id;
           });
@@ -5253,10 +6197,36 @@
       }
     }
     fetch("/api/settings").then((r) => r.json()).then((d) => fillLimitInputs(d.settings || {})).catch(() => {});
+    function pickImportObject() {
+      const inp = document.getElementById("importObjFile");
+      if (!inp) return;
+      inp.value = "";
+      inp.click();
+    }
+    document.getElementById("importObjFile").addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const r = await fetch("/api/import_mesh", { method: "POST", body: fd });
+        const d = await r.json();
+        if (statusEl) {
+          statusEl.textContent = d.ok
+            ? ("Imported " + (d.name || file.name) + (d.error ? (" — " + d.error) : ""))
+            : ("Import failed: " + (d.error || ""));
+        }
+      } catch (err) {
+        if (statusEl) statusEl.textContent = "Import failed";
+      }
+      setTimeout(refresh, 80);
+    });
     document.getElementById("menuAdd").addEventListener("click", (e) => {
       const act = e.target.getAttribute("data-act") || "";
       document.getElementById("menuAdd").classList.remove("open");
       const kind = act.replace("add-", "");
+      if (kind === "import" || kind === "mesh") { pickImportObject(); return; }
       if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera") return;
       fetch("/api/add_object", {
         method: "POST",
@@ -5276,6 +6246,7 @@
         const act = e.target.getAttribute("data-act") || "";
         const kind = act.replace("add-", "");
         menu.hidden = true;
+        if (kind === "import" || kind === "mesh") { pickImportObject(); return; }
         if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera") return;
         fetch("/api/add_object", {
           method: "POST",
@@ -5295,8 +6266,19 @@
       if (act === "undo") await fetch("/api/undo", { method: "POST" });
       if (act === "redo") await fetch("/api/redo", { method: "POST" });
       if (act === "settings") openCtrlSettings();
+      if (act === "robot-type") openRobotTypeModal();
       setTimeout(refresh, 150);
     });
+    async function loadProjectDoc(doc, name) {
+      setDocTitle(doc.title || fileStem(name || "path"));
+      await fetch("/api/file/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc: doc }),
+      });
+      statusEl.textContent = "Opened " + (name || "file");
+      setTimeout(refresh, 250);
+    }
     document.getElementById("fileOpen").addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
       e.target.value = "";
@@ -5304,20 +6286,214 @@
       try {
         const text = await file.text();
         const doc = JSON.parse(text);
-        setDocTitle(doc.title || fileStem(file.name));
-        await fetch("/api/file/open", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ doc: doc }),
-        });
-        statusEl.textContent = "Opened " + file.name;
-        setTimeout(refresh, 250);
+        const want = String(doc.robot_type || doc.robot_model || "aubo_i5");
+        let cur = "aubo_i5";
+        try {
+          const s = await fetch("/api/settings").then((r) => r.json());
+          cur = (s.settings && s.settings.robot_model) || cur;
+        } catch (err) {}
+        if (want && want !== cur) {
+          window.__pendingFileDoc = { doc: doc, name: file.name, want: want };
+          const msg = document.getElementById("fileRobotMsg");
+          if (msg) msg.textContent = "File robot type is " + want.replace(/_/g, " ") + ". Switch from " + String(cur).replace(/_/g, " ") + "?";
+          const m = document.getElementById("fileRobotModal");
+          if (m) m.hidden = false;
+          return;
+        }
+        await loadProjectDoc(doc, file.name);
       } catch (err) {
         statusEl.textContent = "Open failed: " + err;
       }
     });
+    const fileRobotOk = document.getElementById("fileRobotOk");
+    if (fileRobotOk) fileRobotOk.onclick = async () => {
+      const m = document.getElementById("fileRobotModal");
+      if (m) m.hidden = true;
+      const pend = window.__pendingFileDoc;
+      window.__pendingFileDoc = null;
+      if (!pend) return;
+      await applyRobotType(pend.want, true);
+      await loadProjectDoc(pend.doc, pend.name);
+    };
+    const fileRobotCancel = document.getElementById("fileRobotCancel");
+    if (fileRobotCancel) fileRobotCancel.onclick = async () => {
+      const m = document.getElementById("fileRobotModal");
+      if (m) m.hidden = true;
+      const pend = window.__pendingFileDoc;
+      window.__pendingFileDoc = null;
+      if (pend) await loadProjectDoc(pend.doc, pend.name);
+    };
     document.getElementById("addReal").onclick = () => add("/api/add_waypoint_real");
     document.getElementById("addSim").onclick = () => add("/api/add_waypoint_sim");
+    const poseAddReal = document.getElementById("poseAddReal");
+    const poseAddSim = document.getElementById("poseAddSim");
+    if (poseAddReal) poseAddReal.onclick = () => addStoredFrom("real");
+    if (poseAddSim) poseAddSim.onclick = () => addStoredFrom("sim");
+    const pathAdd = document.getElementById("pathAdd");
+    if (pathAdd) pathAdd.onclick = async () => {
+      if (!keyframes.length) {
+        statusEl.textContent = "Save path needs at least 1 waypoint";
+        return;
+      }
+      const r = await fetch("/api/saved_paths", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ act: "capture" }),
+      });
+      const d = await r.json();
+      statusEl.textContent = d.ok ? ("Saved " + ((d.path && d.path.name) || "path")) : ("Save path failed: " + (d.error || r.status));
+      setTimeout(refresh, 80);
+    };
+    const hierPaths = document.getElementById("hierPaths");
+    if (hierPaths) {
+      hierPaths.addEventListener("click", (e) => {
+        if (e.target.closest("[data-renaming='1']")) return;
+        const row = e.target.closest("[data-pathid]");
+        if (!row) return;
+        window.__selPathId = row.getAttribute("data-pathid");
+        fetch("/api/saved_paths", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ act: "select", id: window.__selPathId }),
+        }).then(refresh);
+      });
+      hierPaths.addEventListener("dblclick", (e) => {
+        const row = e.target.closest("[data-pathid]");
+        if (!row) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const label = row.querySelector(".hier-label");
+        if (!label) return;
+        const pid = row.getAttribute("data-pathid");
+        const prev = label.textContent;
+        label.contentEditable = "true";
+        label.dataset.renaming = "1";
+        label.focus();
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        const finish = () => {
+          if (label.dataset.renaming !== "1") return;
+          label.contentEditable = "false";
+          label.dataset.renaming = "";
+          const name = String(label.textContent || "").trim();
+          if (!name || name === prev) { label.textContent = prev; return; }
+          fetch("/api/saved_paths", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ act: "rename", id: pid, name: name }),
+          }).then(refresh);
+        };
+        label.addEventListener("blur", finish, { once: true });
+        label.addEventListener("keydown", (ev) => {
+          ev.stopPropagation();
+          if (ev.key === "Enter") { ev.preventDefault(); label.blur(); }
+          if (ev.key === "Escape") { label.textContent = prev; label.blur(); }
+        });
+      });
+      hierPaths.addEventListener("dragstart", (e) => {
+        const row = e.target.closest("[data-pathid]");
+        if (!row) return;
+        e.dataTransfer.setData("text/saved-path", row.getAttribute("data-pathid"));
+        e.dataTransfer.effectAllowed = "copy";
+        const ghost = row.cloneNode(true);
+        ghost.style.position = "absolute";
+        ghost.style.left = "-1000px";
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 0, ghost.offsetHeight / 2);
+        setTimeout(() => ghost.remove(), 0);
+      });
+      hierPaths.addEventListener("contextmenu", (e) => {
+        const row = e.target.closest("[data-pathid]");
+        if (!row) return;
+        e.preventDefault();
+        const pid = row.getAttribute("data-pathid");
+        const store = row.getAttribute("data-store") || "local";
+        ptCtx.innerHTML =
+          "<button data-act='rename-path'>Rename</button>" +
+          "<button data-act='local-path'>Local" + (store === "local" ? " ✓" : "") + "</button>" +
+          "<button data-act='global-path'>Global" + (store === "global" ? " ✓" : "") + "</button>" +
+          (store === "global" ? "" : "<button data-act='delete-path'>Delete</button>");
+        ptCtx.hidden = false;
+        ptCtx.style.left = e.clientX + "px";
+        ptCtx.style.top = e.clientY + "px";
+        ptCtx.onclick = (ev) => {
+          const act = ev.target.getAttribute("data-act");
+          ptCtx.hidden = true;
+          if (act === "rename-path") row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+          else if (act === "local-path" || act === "global-path") {
+            fetch("/api/saved_paths", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ act: "store", id: pid, store: act === "global-path" ? "global" : "local" }) }).then(refresh);
+          } else if (act === "delete-path") {
+            fetch("/api/saved_paths", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ act: "delete", id: pid }) }).then(refresh);
+          }
+        };
+      });
+    }
+    const tlScrollDrop = document.getElementById("tlScroll");
+    if (tlScrollDrop) {
+      tlScrollDrop.addEventListener("dragover", (e) => {
+        if ([].indexOf.call(e.dataTransfer.types, "text/saved-path") >= 0) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      });
+      tlScrollDrop.addEventListener("drop", (e) => {
+        const pid = e.dataTransfer.getData("text/saved-path");
+        if (!pid) return;
+        e.preventDefault();
+        const rect = tlScrollDrop.getBoundingClientRect();
+        const x = e.clientX - rect.left + tlScrollDrop.scrollLeft;
+        const t = snapToTick(xToTime(x));
+        const place = (confirm) => fetch("/api/saved_paths", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ act: "place", id: pid, t: t, confirm: !!confirm }),
+        }).then((r) => r.json()).then((d) => {
+          const rec = d && d.path;
+          if (rec && rec.overlap && !confirm) {
+            const ok = window.confirm("This block overlaps " + rec.count + " existing knot(s). Remove the overlapping knots and add the block?");
+            if (ok) place(true);
+            return;
+          }
+          const tl = d && d.timeline;
+          if (tl && Array.isArray(tl.keyframes) && tl.keyframes.length) {
+            keyframes = tl.keyframes;
+            samples = tl.samples || samples;
+            spans = tl.spans || spans;
+            try { renderTimeline(); } catch (err) { console.error(err); }
+          }
+          refresh();
+        });
+        place(false);
+      });
+    }
+    const pathSplit = document.getElementById("hierSplitPath");
+    if (pathSplit) {
+      pathSplit.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const sec = pathSplit.parentElement;
+        const poses = document.getElementById("hierPoses");
+        const paths = document.getElementById("hierPaths");
+        const startY = e.clientY;
+        const h0 = poses.getBoundingClientRect().height;
+        const onMove = (ev) => {
+          const dy = ev.clientY - startY;
+          const h = Math.max(36, h0 + dy);
+          poses.style.flex = "0 0 " + h + "px";
+          paths.style.flex = "1 1 auto";
+        };
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+      });
+    }
     /* Add waypoint lives on the hierarchy + buttons (E / R). */
     const playInf = document.getElementById("playInf");
     const playRepeat = document.getElementById("playRepeat");
@@ -5329,15 +6505,6 @@
         if (!on) playRepeat.value = "0";
       };
     }
-    const pathMenu = document.getElementById("menuPath");
-    if (pathMenu) pathMenu.addEventListener("click", (e) => {
-      const act = e.target.getAttribute("data-act");
-      if (act === "dev-mode") {
-        const btn = document.getElementById("devModeToggle");
-        if (btn) btn.click();
-        pathMenu.classList.remove("open");
-      }
-    });
     function cameraRecordAtPlayhead(oid) {
       if (!oid) return false;
       const tid = "cam_" + oid;
@@ -5350,14 +6517,21 @@
       }
       return rec;
     }
-    const camRecChk = document.getElementById("camRecord");
-    if (camRecChk) camRecChk.addEventListener("change", () => {
+    function cameraHostId(obj) {
+      if (!obj) return null;
+      if (obj.kind === "sim" || obj.id === "sim") return "sim";
+      return obj.id || null;
+    }
+    function setCamRecUi(on) {
+      const recBtn = document.getElementById("camRecBtn");
+      if (!recBtn) return;
+      recBtn.classList.toggle("on", !!on);
+      recBtn.textContent = on ? "❚❚" : "▶";
+    }
+    function dropCamRecKey(oid, want) {
+      const tid = "cam_" + oid;
       const obj = window.__lastObject || {};
-      if (obj.kind !== "camera" || !obj.id) return;
-      const want = !!camRecChk.checked;
-      if (want === cameraRecordAtPlayhead(obj.id)) return;
-      const tid = "cam_" + obj.id;
-      const name = obj.name || tid;
+      const name = ((obj.name || oid) + "").replace(/\s+camera$/i, "") + " camera";
       let tr = extraTracks.find((t) => t.id === tid);
       if (!tr) {
         tr = { id: tid, name: name, keys: [] };
@@ -5370,6 +6544,37 @@
       window.extraTracks = extraTracks;
       try { renderTimeline(); } catch (err) {}
       syncTracks();
+    }
+    const camRecBtn = document.getElementById("camRecBtn");
+    if (camRecBtn) camRecBtn.addEventListener("click", () => {
+      const obj = window.__lastObject || {};
+      const oid = cameraHostId(obj);
+      if (!oid) return;
+      const manual = !!(document.getElementById("camManual") && document.getElementById("camManual").checked);
+      const next = !camRecBtn.classList.contains("on");
+      setCamRecUi(next);
+      if (manual) {
+        fetch("/api/object_props", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: obj.kind, id: oid, camera: { manual: true, recording: next, enabled: true } }),
+        });
+        return;
+      }
+      dropCamRecKey(oid, next);
+    });
+    const camManualEl = document.getElementById("camManual");
+    if (camManualEl) camManualEl.addEventListener("change", () => {
+      const obj = window.__lastObject || {};
+      const oid = cameraHostId(obj);
+      if (!oid) return;
+      const on = !!camManualEl.checked;
+      setCamRecUi(false);
+      fetch("/api/object_props", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: obj.kind, id: oid, camera: { manual: on, recording: false } }),
+      });
     });
 
     (function setupPathWin() {
@@ -5470,6 +6675,7 @@
     if (tlSnapBtn) {
       tlSnapBtn.onclick = () => {
         snapToGrid = !snapToGrid;
+        window.__snapLocal = true;
         tlSnapBtn.classList.toggle("on", snapToGrid);
         saveCtrlSettings();
       };
@@ -5678,7 +6884,91 @@
       else statusEl.textContent = "Sim → " + poseLabel(simPoses.find((p) => p.id === selectedPoseId) || { name: selectedPoseId });
       setTimeout(refresh, 150);
     };
+    let _pendingRobotType = null;
+    async function applyRobotType(id, confirm) {
+      if (!id) return;
+      const r = await fetch("/api/robot_model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: id, confirm: !!confirm }),
+      });
+      const d = await r.json();
+      if (d && d.needs_confirm) {
+        _pendingRobotType = id;
+        const msg = document.getElementById("robotTypeWarnMsg");
+        if (msg) msg.textContent = "Switching robot type will delete " + (d.waypoints || 0) + " timeline waypoint(s). Saved points are kept.";
+        const w = document.getElementById("robotTypeWarn");
+        if (w) w.hidden = false;
+        return;
+      }
+      const typeModal = document.getElementById("robotTypeModal");
+      if (typeModal) typeModal.hidden = true;
+      statusEl.textContent = d.ok
+        ? ("Robot type " + id + (d.reloaded ? " loaded" : " saved"))
+        : ("Robot type failed: " + (d.error || r.status));
+      setTimeout(refresh, 250);
+    }
+    const warnOk = document.getElementById("robotTypeWarnOk");
+    if (warnOk) warnOk.onclick = () => {
+      const w = document.getElementById("robotTypeWarn");
+      if (w) w.hidden = true;
+      const id = _pendingRobotType;
+      _pendingRobotType = null;
+      applyRobotType(id, true);
+    };
+    const warnCancel = document.getElementById("robotTypeWarnCancel");
+    if (warnCancel) warnCancel.onclick = () => {
+      _pendingRobotType = null;
+      const w = document.getElementById("robotTypeWarn");
+      if (w) w.hidden = true;
+    };
+    function openRobotTypeModal() {
+      const modal = document.getElementById("robotTypeModal");
+      if (!modal) return;
+      fetch("/api/settings").then((r) => r.json()).then((d) => {
+        const s = (d && d.settings) || {};
+        const cur = s.robot_model || "aubo_i5";
+        const rows = s.robot_models || [];
+        const box = document.getElementById("robotTypeList");
+        if (box) {
+          box.innerHTML = rows.map((m) => {
+            const id = m.id || m;
+            const name = m.name || String(id).replace(/_/g, " ");
+            const on = id === cur;
+            return "<div class='hier-row" + (on ? " on" : "") + "' data-mid='" + id + "' style='cursor:pointer;justify-content:space-between'><span>" + name + "</span><span>" + (on ? "✓" : "") + "</span></div>";
+          }).join("");
+          box.querySelectorAll("[data-mid]").forEach((row) => {
+            row.ondblclick = () => applyRobotType(row.getAttribute("data-mid"), false);
+          });
+        }
+        modal.hidden = false;
+      }).catch(() => { modal.hidden = false; });
+    }
+    const robotTypeClose = document.getElementById("robotTypeClose");
+    if (robotTypeClose) robotTypeClose.onclick = () => {
+      const m = document.getElementById("robotTypeModal");
+      if (m) m.hidden = true;
+    };
     document.getElementById("poseCancel").onclick = closePoseModal;
+    const discOk = document.getElementById("discOk");
+    if (discOk) discOk.onclick = () => {
+      const m = document.getElementById("discModal");
+      if (m) m.hidden = true;
+    };
+    const reconnCancel = document.getElementById("reconnCancel");
+    if (reconnCancel) reconnCancel.onclick = () => {
+      const m = document.getElementById("reconnModal");
+      if (m) m.hidden = true;
+    };
+    const reconnOk = document.getElementById("reconnOk");
+    if (reconnOk) reconnOk.onclick = async () => {
+      const m = document.getElementById("reconnModal");
+      if (m) m.hidden = true;
+      try {
+        await fetch("/api/snap_sim_to_real", { method: "POST" });
+      } catch (e) {}
+      setTimeout(refresh, 150);
+    };
     const poseFromReal = document.getElementById("poseFromReal");
     const poseFromSim = document.getElementById("poseFromSim");
     if (poseFromReal) poseFromReal.onclick = () => addStoredFrom("real");
@@ -5906,6 +7196,38 @@
       cv.title = bits.join("  |  ");
     });
     refresh();
+    (async function checkAutosave() {
+      await new Promise((res) => setTimeout(res, 400));
+      try {
+        const d = await fetch("/api/file/session").then((r) => r.json());
+        const off = d && d.autosave;
+        if (off && off.offer) {
+          const msg = document.getElementById("fileAutoMsg");
+          if (msg) {
+            msg.textContent = off.never_saved
+              ? "This project was never saved. Load the autosave?"
+              : ("Autosave is newer than the last manual save" + (off.source_path ? (" (" + off.source_path + ")") : "") + ". Load it?");
+          }
+          const m = document.getElementById("fileAutoModal");
+          if (m) m.hidden = false;
+        }
+      } catch (err) {}
+    })();
+    const fileAutoOk = document.getElementById("fileAutoOk");
+    const fileAutoCancel = document.getElementById("fileAutoCancel");
+    if (fileAutoOk) fileAutoOk.onclick = async () => {
+      const m = document.getElementById("fileAutoModal");
+      if (m) m.hidden = true;
+      const d = await fetch("/api/file/load_autosave", { method: "POST" }).then((r) => r.json());
+      if (d && d.ok) {
+        applySession(d);
+        setTimeout(refresh, 200);
+      }
+    };
+    if (fileAutoCancel) fileAutoCancel.onclick = () => {
+      const m = document.getElementById("fileAutoModal");
+      if (m) m.hidden = true;
+    };
     setInterval(() => {
       if (simState.active || realState.active) return;
       refresh();
@@ -5919,6 +7241,8 @@
         const d = await r.json();
         if (d.sim) simState = mergeState(simState, d.sim);
         if (d.real) realState = mergeState(realState, d.real);
+        if (d.sim && d.sim.active === false) simState.active = false;
+        if (d.real && d.real.active === false) realState.active = false;
         syncPlayButtons();
         const clockPlaying = !!(
           (simState.active && !simState.paused) ||

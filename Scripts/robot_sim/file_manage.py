@@ -12,6 +12,61 @@ import robot_runtime as rr
 
 EXPORT_NAME = "export.json"
 SAVE_NAME = "path.arcspath"
+TEMP_NAME = "temp.json"
+
+SESSION = {
+    "path": None,
+    "title": "Path editor",
+    "last_save_ts": 0.0,
+    "last_autosave_ts": 0.0,
+    "last_hash": None,
+    "recovered": False,
+    "source": None,
+}
+
+
+def session_info():
+    return dict(SESSION)
+
+
+def autosave_path():
+    return Path(__file__).resolve().parent / TEMP_NAME
+
+
+def _stable_doc(data):
+    skip = {"saved_at", "last_autosave_ts", "last_save_ts"}
+    if not isinstance(data, dict):
+        return data
+    return {k: v for k, v in data.items() if k not in skip}
+
+
+def _doc_hash(data):
+    try:
+        raw = json.dumps(_stable_doc(data), sort_keys=True, default=str)
+    except Exception:
+        raw = str(data)
+    return str(hash(raw))
+
+
+def _doc_has_work(data):
+    if not isinstance(data, dict):
+        return False
+    if data.get("sim_camera"):
+        return True
+    for key in ("waypoints", "objects", "sim_poses", "tracks", "points"):
+        val = data.get(key)
+        if isinstance(val, list) and len(val) > 0:
+            return True
+    return False
+
+
+def scene_is_empty():
+    n_wp = len(getattr(wp, "waypoints", None) or [])
+    n_obj = len(getattr(wp, "scene_objects", None) or [])
+    n_pose = len([p for p in (getattr(wp, "sim_poses", None) or []) if not p.get("builtin")])
+    cam = getattr(wp, "sim_camera", None)
+    tracks = [t for t in (getattr(wp, "extra_tracks", None) or []) if t]
+    return n_wp == 0 and n_obj == 0 and n_pose == 0 and not cam and not tracks
 
 
 def _dump_track(tr):
@@ -71,6 +126,16 @@ def _dump_sim_poses():
             rec["q"] = [round(float(v), 6) for v in q]
         if q_deg:
             rec["q_deg"] = [round(float(v), 6) for v in q_deg]
+        if p.get("pos") is not None:
+            try:
+                rec["pos"] = [round(float(v), 6) for v in np.asarray(p.get("pos"), dtype=float).reshape(3)]
+            except Exception:
+                pass
+        if p.get("wxyz") is not None:
+            try:
+                rec["wxyz"] = [round(float(v), 6) for v in np.asarray(p.get("wxyz"), dtype=float).reshape(4)]
+            except Exception:
+                pass
         out.append(rec)
     return out
 
@@ -105,6 +170,16 @@ def _load_sim_poses(raw):
             rec["q"] = [0.0] * 6
         if q_deg:
             rec["q_deg"] = q_deg
+        if p.get("pos") is not None:
+            try:
+                rec["pos"] = [float(v) for v in np.asarray(p.get("pos"), dtype=float).reshape(3)]
+            except Exception:
+                pass
+        if p.get("wxyz") is not None:
+            try:
+                rec["wxyz"] = [float(v) for v in np.asarray(p.get("wxyz"), dtype=float).reshape(4)]
+            except Exception:
+                pass
         loaded.append(rec)
         if pid.startswith("pose_"):
             try:
@@ -142,7 +217,8 @@ def _dump_scene_objects():
             "space": obj.get("space") or "world",
             "local_pos": [float(v) for v in np.asarray(obj.get("local_pos", obj.get("pos", [0, 0, 0]))).reshape(-1)[:3]],
             "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(-1)[:4]],
-            "camera": dict(obj.get("camera") or {}) if obj.get("kind") == "camera" else None,
+            "camera": dict(obj.get("camera") or {}) if obj.get("camera") else None,
+            "mesh_path": obj.get("mesh_path") or None,
         })
     return out
 
@@ -262,10 +338,17 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
             item["ik"] = bake._ik_from_pos_wxyz(rec["pos"], rec["wxyz"])
         points.append(item)
         t_prev_out = tt
+    robot_type = "aubo_i5"
+    try:
+        import robot_runtime as _rr
+        robot_type = str(getattr(_rr, "_MODEL_ID", None) or "aubo_i5")
+    except Exception:
+        robot_type = "aubo_i5"
     doc = {
         "total_pts": len(points),
         "estimated_seconds_per_lap": round(float(max(0.0, t1 - t0)), 4),
         "points": points,
+        "robot_type": robot_type,
     }
     if include_waypoint_flag:
         doc["format"] = "arcspath"
@@ -283,7 +366,19 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
             src_tracks = getattr(wp, "extra_tracks", None) or []
         doc["tracks"] = [_dump_track(tr) for tr in (src_tracks or []) if isinstance(tr, dict)]
         doc["sim_poses"] = _dump_sim_poses()
+        doc["saved_paths"] = list(getattr(wp, "saved_paths", None) or [])
         doc["objects"] = _dump_scene_objects()
+        cam = getattr(wp, "sim_camera", None)
+        doc["sim_camera"] = dict(cam) if cam else None
+        doc["last_save_ts"] = float(SESSION.get("last_save_ts") or 0.0)
+        doc["last_autosave_ts"] = float(SESSION.get("last_autosave_ts") or 0.0)
+        if SESSION.get("path"):
+            doc["source_path"] = str(SESSION.get("path"))
+        try:
+            import robot_runtime as _rr
+            doc["robot_type"] = str(getattr(_rr, "_MODEL_ID", None) or "aubo_i5")
+        except Exception:
+            doc["robot_type"] = "aubo_i5"
         doc["waypoints"] = []
         nwp = len(wp.waypoints)
         t_prev_wp = None
@@ -316,6 +411,15 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
                 "added_from": w.get("added_from"),
                 "track_object": None if not w.get("track_object") else dict(w.get("track_object")),
                 "is_waypoint": True,
+                "clip_id": w.get("clip_id"),
+                "clip_path": w.get("clip_path"),
+                "clip_name": w.get("clip_name"),
+                "clip_locked": bool(w.get("clip_locked")),
+                "clip_head": bool(w.get("clip_head")),
+                "transition": w.get("transition"),
+                "lin_speed": w.get("lin_speed"),
+                "trans_c1": w.get("trans_c1"),
+                "trans_c2": w.get("trans_c2"),
             })
         if hasattr(bake, "export_bake_state"):
             doc["bake"] = bake.export_bake_state()
@@ -359,14 +463,29 @@ def write_export_json(path=None, title=None):
     return {"ok": True, "path": str(dest), "count": data["total_pts"], "doc": data, "title": stem}
 
 
-def write_save_file(path=None, title=None, tracks=None):
+def write_save_file(path=None, title=None, tracks=None, save_as=False, pick=False):
+    dest = Path(path) if path else (None if save_as or pick else (Path(SESSION["path"]) if SESSION.get("path") else None))
+    if dest is None:
+        picked = pick_save_path(title=title)
+        if not picked:
+            return {"ok": False, "cancelled": True, "error": "cancelled"}
+        dest = Path(picked)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     data = build_motion_doc(include_waypoint_flag=True, tracks=tracks)
-    stem = _safe_stem(title or data.get("title"), "path")
+    stem = _safe_stem(dest.stem or title or data.get("title"), "path")
     data["title"] = stem
-    dest = Path(path) if path else Path(__file__).resolve().parent / (stem + ".arcspath")
+    now = time.time()
+    data["last_save_ts"] = now
+    data["source_path"] = str(dest)
     dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    SESSION["path"] = str(dest)
+    SESSION["title"] = stem
+    SESSION["last_save_ts"] = now
+    SESSION["last_hash"] = _doc_hash(data)
+    SESSION["recovered"] = False
+    SESSION["source"] = "manual"
     print("saved", dest, "pts", data["total_pts"])
-    return {"ok": True, "path": str(dest), "count": data["total_pts"], "doc": data, "title": stem}
+    return {"ok": True, "path": str(dest), "count": data["total_pts"], "doc": data, "title": stem, "last_save_ts": now}
 
 
 def resolve_point_fields(raw, index=0, t_prev=0.0, q_prev=None, pos_prev=None):
@@ -472,6 +591,17 @@ def resolve_point_fields(raw, index=0, t_prev=0.0, q_prev=None, pos_prev=None):
         "q_dirty": bool(p.get("q_dirty")),
         "added_from": p.get("added_from"),
         "track_object": None if not p.get("track_object") else dict(p.get("track_object")),
+        "clip_id": p.get("clip_id"),
+        "clip_path": p.get("clip_path"),
+        "clip_name": p.get("clip_name"),
+        "clip_locked": bool(p.get("clip_locked")) if p.get("clip_id") else bool(p.get("clip_locked") or False),
+        "clip_head": bool(p.get("clip_head")),
+        "transition": p.get("transition"),
+        "lin_speed": p.get("lin_speed"),
+        "trans_c1": p.get("trans_c1"),
+        "trans_c2": p.get("trans_c2"),
+        "out_ctrl_rel": p.get("out_ctrl_rel"),
+        "in_ctrl_rel": p.get("in_ctrl_rel"),
     }
 
 
@@ -510,6 +640,16 @@ def parse_project_doc(data):
         data = json.loads(data)
     if not isinstance(data, dict):
         raise ValueError("not an object")
+    inner = None
+    for key in ("doc", "document", "project"):
+        block = data.get(key)
+        if isinstance(block, dict) and (
+            "points" in block or "waypoints" in block or "format" in block
+        ):
+            inner = block
+            break
+    if inner is not None:
+        data = inner
     return data
 
 
@@ -520,8 +660,16 @@ def apply_loaded_doc(data):
     raw_pts = data.get("points") or []
     pts = normalize_point_list(raw_pts, lap_seconds=data.get("estimated_seconds_per_lap"))
     editor_wps = data.get("waypoints")
+    print(
+        "load doc format=%s points=%s editor_wps=%s"
+        % (fmt or "?", len(pts), 0 if not editor_wps else len(editor_wps))
+    )
     if editor_wps:
         wp.load_editor_waypoints(normalize_point_list(editor_wps))
+        if hasattr(wp, "recover_wrapped_clips"):
+            wp.recover_wrapped_clips()
+        if not (getattr(wp, "waypoints", None) or []) and pts:
+            wp.load_from_motion_points(pts, [])
     else:
         tagged = any(p.get("is_waypoint") for p in pts)
         if tagged:
@@ -550,7 +698,33 @@ def apply_loaded_doc(data):
                 loaded_tracks.append({"name": str(tr)})
     wp.extra_tracks = loaded_tracks
     _load_sim_poses(data.get("sim_poses"))
+    if isinstance(data.get("saved_paths"), list):
+        wp.saved_paths = [dict(p) for p in data.get("saved_paths") if isinstance(p, dict)]
+        seq = 0
+        for p in wp.saved_paths:
+            pid = str(p.get("id") or "")
+            if pid.startswith("path_"):
+                try:
+                    seq = max(seq, int(pid.split("_")[-1]))
+                except Exception:
+                    pass
+        wp._saved_path_seq = max(int(getattr(wp, "_saved_path_seq", 0) or 0), seq)
+    try:
+        import webui
+        if hasattr(wp, "load_global_saved_paths"):
+            wp.load_global_saved_paths((webui.load_settings() or {}).get("stored_paths") or [])
+    except Exception:
+        pass
     _load_scene_objects(data.get("objects"))
+    if data.get("sim_camera"):
+        wp.sim_camera = dict(data.get("sim_camera") or {})
+        if hasattr(wp, "refresh_sim_camera_viz"):
+            try:
+                wp.refresh_sim_camera_viz()
+            except Exception:
+                pass
+    else:
+        wp.sim_camera = None
     if hasattr(wp, "sync_camera_tracks"):
         wp.sync_camera_tracks()
     if bake.import_raw_json:
@@ -578,6 +752,8 @@ def apply_loaded_doc(data):
         bake.invalidate_from(0, drop_all=True)
     if hasattr(wp, "draw_path"):
         wp.draw_path()
+    if hasattr(bake, "bump_timeline_cache"):
+        bake.bump_timeline_cache()
     if hasattr(wp, "deselect_all"):
         wp.deselect_all()
     if hasattr(wp, "hide_unselected_handles"):
@@ -589,3 +765,177 @@ def apply_loaded_doc(data):
         except Exception as e:
             print("restore cursor failed:", e)
     return {"ok": True, "waypoints": len(wp.waypoints), "points": len(pts)}
+
+
+def pick_save_path(title=None, default=None):
+    start = default or SESSION.get("path") or str(Path(__file__).resolve().parent / ((title or "path") + ".arcspath"))
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.asksaveasfilename(
+            title="Save project",
+            defaultextension=".arcspath",
+            initialfile=Path(start).name,
+            initialdir=str(Path(start).parent),
+            filetypes=[("Arcs path", "*.arcspath"), ("JSON", "*.json"), ("All", "*.*")],
+        )
+        root.destroy()
+        return path or None
+    except Exception as e:
+        print("save picker failed", e)
+        return None
+
+
+def pick_open_path():
+    start = SESSION.get("path") or str(Path(__file__).resolve().parent)
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askopenfilename(
+            title="Open project",
+            initialdir=str(Path(start).parent if Path(start).suffix else start),
+            filetypes=[("Arcs path", "*.arcspath"), ("JSON", "*.json"), ("All", "*.*")],
+        )
+        root.destroy()
+        return path or None
+    except Exception as e:
+        print("open picker failed", e)
+        return None
+
+
+def note_opened(path, data=None):
+    p = Path(path) if path else None
+    SESSION["path"] = str(p) if p else None
+    SESSION["title"] = _safe_stem((data or {}).get("title") if data else None, p.stem if p else "path")
+    SESSION["last_save_ts"] = float((data or {}).get("last_save_ts") or (p.stat().st_mtime if p and p.exists() else 0.0))
+    SESSION["last_autosave_ts"] = float((data or {}).get("last_autosave_ts") or 0.0)
+    SESSION["last_hash"] = _doc_hash(data) if data else None
+    SESSION["recovered"] = False
+    SESSION["source"] = "open"
+    return session_info()
+
+
+def write_autosave():
+    data = build_motion_doc(include_waypoint_flag=True)
+    h = _doc_hash(data)
+    if h == SESSION.get("last_hash"):
+        return {"ok": True, "skipped": True, "last_autosave_ts": SESSION.get("last_autosave_ts")}
+    man_ts = SESSION.get("last_save_ts")
+    try:
+        man_ts = 0.0 if man_ts is None else float(man_ts)
+    except Exception:
+        man_ts = 0.0
+    prev_auto = float(SESSION.get("last_autosave_ts") or 0.0)
+    if prev_auto > man_ts and prev_auto > 0:
+        auto_ts = prev_auto
+    else:
+        auto_ts = time.time()
+    data["title"] = SESSION.get("title") or data.get("title")
+    data["last_save_ts"] = man_ts if man_ts > 0 else 0.0
+    data["last_autosave_ts"] = auto_ts
+    if SESSION.get("path"):
+        data["source_path"] = SESSION["path"]
+    dest = autosave_path()
+    dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    SESSION["last_autosave_ts"] = auto_ts
+    SESSION["last_hash"] = h
+    print("autosave", dest, "save_ts", data["last_save_ts"], "auto_ts", auto_ts)
+    return {"ok": True, "path": str(dest), "last_autosave_ts": auto_ts, "skipped": False}
+
+
+def autosave_offer():
+    dest = autosave_path()
+    if not dest.exists():
+        return {"offer": False}
+    try:
+        data = json.loads(dest.read_text(encoding="utf-8"))
+    except Exception:
+        return {"offer": False}
+    if not _doc_has_work(data):
+        return {"offer": False}
+    auto_raw = data.get("last_autosave_ts")
+    try:
+        auto_ts = float(auto_raw) if auto_raw is not None else float(dest.stat().st_mtime)
+    except Exception:
+        auto_ts = float(dest.stat().st_mtime)
+    man_raw = data.get("last_save_ts")
+    try:
+        man_ts = 0.0 if man_raw is None else float(man_raw)
+    except Exception:
+        man_ts = 0.0
+    never_saved = man_ts <= 0.0
+    if (not never_saved) and auto_ts <= man_ts + 0.5:
+        return {"offer": False}
+    return {
+        "offer": True,
+        "never_saved": never_saved,
+        "auto_path": str(dest),
+        "source_path": data.get("source_path") or SESSION.get("path"),
+        "title": data.get("title") or "autosave",
+        "last_autosave_ts": auto_ts,
+        "last_save_ts": man_ts,
+    }
+
+
+def _read_json_file(path):
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        raise FileNotFoundError("not a file: %s" % p)
+    raw = p.read_bytes()
+    if not raw.strip():
+        raise ValueError("empty file (%d bytes): %s" % (len(raw), p))
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "utf-16"):
+        try:
+            text = raw.decode(enc)
+            break
+        except Exception:
+            continue
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    text = text.strip()
+    if not text:
+        raise ValueError("empty file (%d bytes): %s" % (len(raw), p))
+    return json.loads(text)
+
+
+def load_from_path(path, recovered=False):
+    p = Path(path)
+    try:
+        data = _read_json_file(p)
+    except Exception as e:
+        print("load_from_path failed", p, e)
+        return {"ok": False, "error": str(e), "path": str(p), "waypoints": 0, "points": 0}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "file is not a project object", "path": str(p), "waypoints": 0, "points": 0}
+    out = apply_loaded_doc(data)
+    note_opened(data.get("source_path") if recovered else p, data)
+    SESSION["recovered"] = bool(recovered)
+    if recovered and data.get("source_path"):
+        SESSION["path"] = str(data.get("source_path"))
+    return {**out, "title": SESSION.get("title"), "path": SESSION.get("path")}
+
+
+def new_project():
+    if hasattr(wp, "clear_waypoints"):
+        wp.clear_waypoints()
+    if hasattr(wp, "clear_scene_objects"):
+        wp.clear_scene_objects()
+    wp.sim_camera = None
+    wp.extra_tracks = []
+    if hasattr(bake, "invalidate_from"):
+        bake.invalidate_from(0, drop_all=True)
+    SESSION["path"] = None
+    SESSION["title"] = "Path editor"
+    SESSION["last_save_ts"] = 0.0
+    SESSION["last_autosave_ts"] = 0.0
+    SESSION["last_hash"] = None
+    SESSION["recovered"] = False
+    SESSION["source"] = "new"
+    return {"ok": True}

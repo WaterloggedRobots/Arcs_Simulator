@@ -6,7 +6,7 @@ Samples are NOT editor waypoints.
 
 Future motion fields (unused now, reserved):
   sample["t"], sample["speed"], sample["accel"]
-  path["defaults"]["speed"], path["defaults"]["accel"]
+  path["defaults"a]["speed"], path["defaults"]["accel"]
 """
 import json
 import math
@@ -333,6 +333,10 @@ def _segment_curve_pts(i):
     b = wp.waypoints[i + 1]
     p1 = _as3(a.get("pos"))
     p2 = _as3(b.get("pos"))
+    ca = str(a.get("clip_id") or "")
+    cb = str(b.get("clip_id") or "")
+    if ca != cb:
+        return np.stack([p1, p2], axis=0)
     c1 = a.get("out_ctrl_pos")
     c2 = b.get("in_ctrl_pos")
     if c1 is None or c2 is None:
@@ -393,6 +397,32 @@ def _seg_force_fk(i):
     return bool(i < len(wp.waypoints) and wp.waypoints[i].get("force_fk"))
 
 
+def _home_q():
+    try:
+        return np.deg2rad(np.array(rr.HOME_Q_DEG, dtype=float)).reshape(-1)[:6]
+    except Exception:
+        return bake_seed_q()
+
+
+def _usable_wp_q(w):
+    if not w or w.get("q") is None or w.get("q_dirty"):
+        return None
+    return np.asarray(w.get("q"), dtype=float).reshape(-1)[:6]
+
+
+def _prev_knot_q(i, seed=None):
+    if i > 0 and i - 1 < len(segments):
+        sms = segments[i - 1].get("samples") or []
+        for sm in reversed(sms):
+            if sm.get("q") is not None:
+                return np.asarray(sm["q"], dtype=float).reshape(-1)[:6]
+    if i > 0 and i - 1 < len(wp.waypoints):
+        q = _usable_wp_q(wp.waypoints[i - 1])
+        if q is not None:
+            return q
+    return None if seed is None else np.asarray(seed, dtype=float).reshape(-1)[:6]
+
+
 def _build_segment(i):
     a = wp.waypoints[i]
     b = wp.waypoints[i + 1]
@@ -413,7 +443,7 @@ def _build_segment(i):
         return {
             "i0": i,
             "i1": i + 1,
-            "status": "ok" if ready else "pending",
+            "status": "pending",
             "spacing": float(spacing),
             "sig": (_wp_sig(i), _wp_sig(i + 1)),
             "samples": samples,
@@ -576,6 +606,72 @@ def _draw_sample_dots():
                 pass
 
 
+def _solve_force_fk_segment(i, seg, seed=None):
+    """IK only the two diamonds. Skip interior sample generation.
+
+    Start seed: previous knot/sample q.
+    End seed: start q, then home, then sim pose at bake time.
+    Already-tested endpoints (q present, not dirty) are not re-solved.
+    """
+    seg["force_fk"] = True
+    if i + 1 >= len(wp.waypoints):
+        seg["status"] = "fail"
+        return None
+    a = wp.waypoints[i]
+    b = wp.waypoints[i + 1]
+    sms = seg.get("samples") or []
+    if len(sms) != 2:
+        sms = [
+            _empty_sample(_as3(a.get("pos")), _as4(a.get("wxyz")), 0.0, 0.0),
+            _empty_sample(_as3(b.get("pos")), _as4(b.get("wxyz")), 1.0, 0.0),
+        ]
+        seg["samples"] = sms
+    else:
+        sms[0]["pos"] = _as3(a.get("pos"))
+        sms[0]["wxyz"] = _as4(a.get("wxyz"))
+        sms[-1]["pos"] = _as3(b.get("pos"))
+        sms[-1]["wxyz"] = _as4(b.get("wxyz"))
+    qa = None if a.get("q_dirty") else (sms[0].get("q") if sms[0].get("q") is not None else _usable_wp_q(a))
+    if qa is None:
+        qa = _ik_sample(sms[0], _prev_knot_q(i, seed), allow_jump=True)
+    if qa is None:
+        seg["status"] = "fail"
+        seg["fail_index"] = 0
+        return None
+    qa = np.asarray(qa, dtype=float).reshape(-1)[:6]
+    sms[0]["q"] = qa
+    a["q"] = qa
+    a["q_dirty"] = False
+    qb = None if b.get("q_dirty") else (sms[-1].get("q") if sms[-1].get("q") is not None else _usable_wp_q(b))
+    if qb is None:
+        sim_q = None
+        if seed is not None:
+            sim_q = np.asarray(seed, dtype=float).reshape(-1)[:6]
+        elif rr.robot_sim is not None:
+            try:
+                sim_q = np.asarray(rr.robot_sim.angle_vector(), dtype=float).reshape(-1)[:6]
+            except Exception:
+                sim_q = None
+        for s in (qa, _home_q(), sim_q):
+            if s is None:
+                continue
+            q = _ik_sample(sms[-1], s, allow_jump=True)
+            if q is not None:
+                qb = q
+                break
+    if qb is None:
+        seg["status"] = "fail"
+        seg["fail_index"] = 1
+        return None
+    qb = np.asarray(qb, dtype=float).reshape(-1)[:6]
+    sms[-1]["q"] = qb
+    b["q"] = qb
+    b["q_dirty"] = False
+    seg["status"] = "ok"
+    seg["fail_index"] = None
+    return qb
+
+
 def segment_color(i):
     if _seg_force_fk(i):
         if i < len(segments) and segments[i].get("status") == "fail":
@@ -643,6 +739,37 @@ def get_selected_sample():
     if k < 0 or k >= len(samples):
         return None
     return seg_i, k, samples[k]
+
+
+def invalidate_timing_span(seg_i):
+    """Drop speed scores for one span. Keep IK and other spans."""
+    global _speed_valid, baked_hops, baked_points, _tl_cache
+    _speed_valid = False
+    _tl_cache = None
+    if seg_i < 0 or seg_i >= len(segments):
+        return
+    seg = segments[seg_i]
+    if seg.get("status") == "ok":
+        seg["timing"] = "uncalc"
+        seg["micro"] = []
+    for sm in seg.get("samples") or []:
+        if sm.get("q") is not None:
+            sm["timing"] = "uncalc"
+            sm["speed"] = None
+            sm["accel"] = None
+            sm["limit"] = None
+    t0 = t1 = None
+    try:
+        t0 = float(wp.waypoints[seg_i].get("t") or 0.0)
+        t1 = float(wp.waypoints[seg_i + 1].get("t") or t0)
+    except Exception:
+        t0 = t1 = None
+    if t0 is not None and t1 is not None:
+        lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
+        baked_hops = [
+            h for h in baked_hops
+            if not (float(h.get("t0") or 0.0) >= lo - 1e-6 and float(h.get("t1") or 0.0) <= hi + 1e-6)
+        ]
 
 
 def invalidate_timing_from(seg_i):
@@ -770,6 +897,12 @@ def apply_custom_transition(idx, c1, c2):
             samples[k].pop("t_lock", None)
     custom_curves[int(idx)] = [list(c1), list(c2)]
     segments[idx]["transition"] = "custom"
+    try:
+        wp.waypoints[idx]["transition"] = "custom"
+        wp.waypoints[idx]["trans_c1"] = list(c1)
+        wp.waypoints[idx]["trans_c2"] = list(c2)
+    except Exception:
+        pass
     invalidate_timing_from(idx)
     return True
 
@@ -797,12 +930,26 @@ def apply_transition(idx, mode, c1=None, c2=None):
         if sm is not samples[0] and sm is not samples[-1]:
             sm["t"] = None
     segments[idx]["transition"] = mode
+    try:
+        wp.waypoints[idx]["transition"] = mode
+    except Exception:
+        pass
     t0 = float(wp.waypoints[idx].get("t") or samples[0].get("t") or 0.0)
     t1 = float(wp.waypoints[idx + 1].get("t") or samples[-1].get("t") or t0)
     _apply_seg_time_profile(segments[idx], t0, t1)
     _tl_cache = None
     invalidate_timing_from(idx)
+    bump_timeline_cache()
     return True
+
+
+def set_transition(idx, mode, c1=None, c2=None):
+    """UI name. Places sample times once. Later diamond drags do not reapply this."""
+    try:
+        idx = int(idx)
+    except Exception:
+        return False
+    return apply_transition(idx, mode, c1=c1, c2=c2)
 
 
 def invalidate_timing():
@@ -1154,64 +1301,12 @@ def _run_bake_body(spacing_m=None):
             break
         ok = True
         if _seg_force_fk(i) or seg.get("force_fk"):
-            seg["force_fk"] = True
-            a = wp.waypoints[i]
-            b = wp.waypoints[i + 1]
-            sms = seg.get("samples") or []
-            if len(sms) < 2:
-                sms = [
-                    _empty_sample(_as3(a.get("pos")), _as4(a.get("wxyz")), 0.0, 0.0),
-                    _empty_sample(_as3(b.get("pos")), _as4(b.get("wxyz")), 1.0, 0.0),
-                ]
-                seg["samples"] = sms
-            qa = seed
-            if qa is None and not a.get("q_dirty"):
-                qa = a.get("q")
-            qb = None if b.get("q_dirty") else b.get("q")
-            if qa is None:
-                q = _ik_sample(sms[0], seed, allow_jump=True)
-                if q is None and a.get("q") is not None:
-                    q = _ik_sample(sms[0], a.get("q"), allow_jump=True)
-                qa = q
-            if qa is None:
-                ok = False
-                seg["fail_index"] = 0
-            else:
-                sms[0]["q"] = np.asarray(qa, dtype=float).reshape(-1)[:6]
-                a["q"] = sms[0]["q"]
-                a["q_dirty"] = False
-            if ok:
-                if qb is None or (qa is not None and _q_same(qb, qa) and float(np.linalg.norm(_as3(b.get("pos")) - _as3(a.get("pos")))) > 0.008):
-                    seeds = [sms[0]["q"], seed, b.get("q"), bake_seed_q()]
-                    q = None
-                    for s in seeds:
-                        if s is None:
-                            continue
-                        q = _ik_sample(sms[-1], s, allow_jump=True)
-                        if q is not None and not _q_same(q, sms[0]["q"]):
-                            break
-                        if q is not None and _q_same(q, sms[0]["q"]):
-                            q = None
-                    qb = q if q is not None else qb
-                if qb is None:
-                    ok = False
-                    seg["fail_index"] = max(0, len(sms) - 1)
-                else:
-                    sms[-1]["q"] = np.asarray(qb, dtype=float).reshape(-1)[:6]
-                    b["q"] = sms[-1]["q"]
-                    b["q_dirty"] = False
-            if ok:
-                seed = sms[-1]["q"]
-                seg["status"] = "ok"
+            q_end = _solve_force_fk_segment(i, seg, seed)
+            if q_end is not None:
+                seed = q_end
                 baked += 1
                 prev_force_fk = True
-                try:
-                    assign_sample_times()
-                    evaluate_timing(force=True)
-                except Exception:
-                    pass
                 continue
-            seg["status"] = "fail"
             failed_at = i
             print("bake fail fk seg", i)
             break
@@ -1234,11 +1329,6 @@ def _run_bake_body(spacing_m=None):
                 seed = seg["samples"][-1]["q"]
                 seg["status"] = "ok"
                 baked += 1
-                try:
-                    assign_sample_times()
-                    evaluate_timing(force=True)
-                except Exception:
-                    pass
                 continue
         sms = seg.get("samples") or []
         qa_wp = wp.waypoints[i].get("q") if i < len(wp.waypoints) else None
@@ -1305,12 +1395,7 @@ def _run_bake_body(spacing_m=None):
         if ok:
             seg["status"] = "ok"
             baked += 1
-            try:
-                assign_sample_times()
-                evaluate_timing(force=True)
-            except Exception as e:
-                print("speed check failed:", e)
-            # Yellow span: keep baking. Only IK fail aborts.
+            # Speed is scored once after every segment has IK.
         else:
             seg["status"] = "fail"
             failed_at = i
@@ -1486,15 +1571,6 @@ def _run_optomise_body(spacing_m=None):
             break
         else:
             print("optomise seg", i, "n", n_used, "of", n_max, "min", n_min)
-            try:
-                assign_sample_times()
-                evaluate_timing(force=True)
-            except Exception:
-                pass
-            if segments[i].get("timing") == "too_fast":
-                failed_at = i
-                print("optomise fail speed seg", i)
-                break
     result = _finish_bake(baked, failed_at)
     result["optomise"] = used
     return result
@@ -1820,11 +1896,12 @@ def _apply_seg_time_profile(seg, t0, t1):
     t1 = float(t1)
     span = max(0.0, t1 - t0)
     n = max(1, len(samples) - 1)
-    # Unspecified transition → uniform time. Named easing only if the user set one.
     raw_mode = seg.get("transition")
     mode = str(raw_mode or "linear")
     samples[0]["t"] = t0
     samples[-1]["t"] = t1
+    for sm in samples:
+        sm.pop("t_lock", None)
     if seg.get("dwell") or n < 2:
         return
     if mode == "custom":
@@ -1839,17 +1916,9 @@ def _apply_seg_time_profile(seg, t0, t1):
             s = _s_for_progress(c1, c2, float(u))
             tau = _bez(0.0, c1[0], c2[0], 1.0, s)
             sm["t"] = t0 + max(0.0, min(1.0, tau)) * span
-    elif mode == "linear" or raw_mode in (None, "", "uniform"):
-        s0 = float(samples[0].get("s") or 0.0)
-        s1 = float(samples[-1].get("s") or s0)
-        slen = max(1e-9, s1 - s0)
+    elif mode in ("linear", "uniform") or raw_mode in (None, "", "uniform"):
         for k in range(1, len(samples) - 1):
-            s = samples[k].get("s")
-            if s is None:
-                frac = float(k) / float(n)
-            else:
-                frac = (float(s) - s0) / slen
-            samples[k]["t"] = t0 + span * max(0.0, min(1.0, frac))
+            samples[k]["t"] = t0 + span * (float(k) / float(n))
     else:
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
@@ -1858,26 +1927,6 @@ def _apply_seg_time_profile(seg, t0, t1):
             if u is None:
                 u = float(k) / float(n)
             sm["t"] = t0 + span * _ease_time_frac(mode, float(u))
-    if mode == "linear" or raw_mode in (None, "", "uniform"):
-        s0 = float(samples[0].get("s") or 0.0)
-        s1 = float(samples[-1].get("s") or s0)
-        slen = max(1e-9, s1 - s0)
-        for k in range(1, len(samples) - 1):
-            s = samples[k].get("s")
-            if s is None:
-                frac = float(k) / float(n)
-            else:
-                frac = (float(s) - s0) / slen
-            samples[k]["t"] = max(0.0, t0 + span * max(0.0, min(1.0, frac)))
-        return
-    for k in range(1, len(samples) - 1):
-        lo = float(samples[k - 1]["t"]) + 0.01
-        hi = float(samples[k + 1].get("t") if samples[k + 1].get("t") is not None else t1) - 0.01
-        if hi < lo:
-            samples[k]["t"] = 0.5 * (float(samples[k - 1]["t"]) + t1)
-        else:
-            samples[k]["t"] = min(max(float(samples[k]["t"]), lo), hi)
-        samples[k]["t"] = max(0.0, round(float(samples[k]["t"]) / 0.01) * 0.01)
 
 
 def assign_sample_times():
@@ -1904,33 +1953,10 @@ def assign_sample_times():
         else:
             samples[0]["t"] = t0
             samples[-1]["t"] = t1
-        _match_end_hop_times(seg, t0, t1)
-        for k in range(1, len(samples) - 1):
-            prev_t = float(samples[k - 1]["t"])
-            nxt = samples[k + 1].get("t")
-            nxt_t = float(nxt) if nxt is not None else t1
-            cur = samples[k].get("t")
-            if cur is None:
-                continue
-            if samples[k].get("t_lock") is not None:
-                continue
-            ds = _sample_step_m(samples[k - 1], samples[k])
-            span = max(1e-9, t1 - t0)
-            v = _seg_length_m(samples, seg) / span
-            min_dt = (ds / v) if (ds > 1e-4 and v > 1e-9) else 0.0
-            lo = prev_t + min_dt
-            hi = nxt_t
-            if hi >= lo:
-                samples[k]["t"] = min(max(float(cur), lo), hi)
 
 
 def pin_key_times():
-    """Move only span endpoints to the current diamond times.
-
-    Interior sample knots keep their absolute t while they remain strictly
-    inside the span and in order. Used when a diamond is dragged; do not
-    stretch, rematch end hops, or re-apply linear spacing.
-    """
+    """Move diamond endpoints only. Interior samples stay put unless a diamond crosses them."""
     wps = wp.waypoints
     for i, seg in enumerate(segments):
         if i + 1 >= len(wps):
@@ -1944,13 +1970,6 @@ def pin_key_times():
             continue
         samples[0]["t"] = t0
         samples[-1]["t"] = t1
-        for k in range(1, len(samples) - 1):
-            cur = samples[k].get("t")
-            if cur is None:
-                continue
-            t = float(cur)
-            if t <= t0 or t >= t1:
-                samples[k]["t"] = min(max(t, t0), t1)
         micros = seg.get("micro") or []
         if micros:
             if micros[0].get("t0") is not None:
@@ -2324,7 +2343,7 @@ def evaluate_timing(force=False):
     """
     if not force and not _speed_valid:
         return False
-    assign_sample_times()
+    pin_key_times()
     wmax, amax = _joint_wmax()
     any_fast = False
     blocked = False
@@ -2394,10 +2413,11 @@ def evaluate_timing(force=False):
         span["need"] = need_vel
         span["over_vel"] = bool(over_vel)
         span["over_acc"] = False
-        span["over_time"] = False
+        span["over_time"] = bool(t_span + 1e-6 < need_vel)
         if lin < 0.002 and max(deltas) < 0.02:
             span["over_vel"] = False
-        span["over"] = bool(span["over_vel"])
+            span["over_time"] = False
+        span["over"] = bool(span["over_vel"] or span["over_time"])
         if span.get("over"):
             seg["timing"] = "too_fast"
             any_fast = True
@@ -2409,6 +2429,13 @@ def evaluate_timing(force=False):
                 hop["over_vel"] = span.get("over_vel")
                 hop["over_acc"] = span.get("over_acc")
                 hop["over_time"] = span.get("over_time")
+        elif _seg_force_fk(i) or seg.get("force_fk"):
+            span["status"] = "fk"
+            for hop in seg["micro"]:
+                hop["status"] = "fk"
+            for sm in samples:
+                sm["timing"] = "fk"
+            seg["timing"] = "fk"
         else:
             seg["timing"] = "ok"
     return any_fast
@@ -2503,9 +2530,11 @@ def _seg_ui_state(seg):
         return "unbaked"
     if seg.get("timing") == "too_fast":
         return "too_fast"
+    if seg.get("force_fk") or _seg_force_fk(seg.get("i0") if seg.get("i0") is not None else -1):
+        if seg.get("status") == "ok" and seg.get("timing") in ("ok", "fk"):
+            return "force_fk"
+        return "unbaked"
     if seg.get("timing") == "ok":
-        if seg.get("force_fk") or _seg_force_fk(seg.get("i0") if seg.get("i0") is not None else -1):
-            return "fk"
         return "ok"
     if has_q or seg.get("status") == "ok":
         return "uncalc"
@@ -2587,14 +2616,18 @@ def _node_color_map():
         if key_st.get(i) != "fail":
             if st == "too_fast":
                 key_st[i] = "too_fast"
-            elif st == "ok" and key_st.get(i) not in ("too_fast",):
+            elif st in ("fk", "force_fk"):
+                key_st[i] = "fk"
+            elif st == "ok" and key_st.get(i) not in ("too_fast", "fk"):
                 key_st[i] = "ok"
             elif st == "uncalc":
                 key_st[i] = "uncalc"
         if key_st.get(i + 1) != "fail":
             if st == "too_fast":
                 key_st[i + 1] = "too_fast"
-            elif st == "ok" and key_st.get(i + 1) != "too_fast":
+            elif st in ("fk", "force_fk"):
+                key_st[i + 1] = "fk"
+            elif st == "ok" and key_st.get(i + 1) not in ("too_fast", "fk"):
                 key_st[i + 1] = "ok"
             elif st == "uncalc":
                 key_st[i + 1] = "uncalc"
@@ -2668,14 +2701,27 @@ def bump_timeline_cache():
 
 def timeline_payload():
     global _tl_cache
-    if any(
-        s.get("status") == "ok" and s.get("timing") in (None, "uncalc") and not (s.get("micro") or [])
-        for s in segments
-    ):
-        try:
-            evaluate_timing(force=True)
-        except Exception as e:
-            print("timeline evaluate_timing failed:", e)
+    try:
+        return _timeline_payload_body()
+    except Exception as e:
+        print("timeline_payload failed", e)
+        kfs = []
+        for i, w in enumerate(wp.waypoints or []):
+            kfs.append({
+                "index": i,
+                "track": "arm",
+                "kind": "key",
+                "t": None if w.get("t") is None else float(w.get("t") or 0.0),
+                "status": "unbaked",
+                "clip_id": w.get("clip_id"),
+                "clip_name": w.get("clip_name"),
+                "clip_locked": bool(w.get("clip_locked")),
+            })
+        return {"keyframes": kfs, "samples": [], "spans": [], "runnable": False, "sim_runnable": False}
+
+
+def _timeline_payload_body():
+    global _tl_cache
     cache_key = (
         _bake_generation,
         len(wp.waypoints),
@@ -2685,6 +2731,10 @@ def timeline_payload():
         tuple(s.get("timing") for s in segments),
         tuple(len(s.get("samples") or []) for s in segments),
         tuple(round(float(w.get("t") or 0.0), 3) for w in wp.waypoints),
+        tuple(
+            tuple(round(float(sm.get("t") or 0.0), 3) for sm in (s.get("samples") or [])[:24])
+            for s in segments
+        ),
     )
     if _tl_cache and _tl_cache.get("key") == cache_key:
         data = _tl_cache["data"]
@@ -2711,7 +2761,19 @@ def timeline_payload():
             "status": st,
             "mode": w.get("mode", "arc"),
             "force_fk": bool(w.get("force_fk")),
+            "clip_id": w.get("clip_id"),
+            "clip_name": w.get("clip_name"),
+            "clip_locked": bool(w.get("clip_locked")),
         })
+        if w.get("clip_id"):
+            left = segments[i - 1] if i > 0 and i - 1 < len(segments) else None
+            right = segments[i] if i < len(segments) else None
+            baked = False
+            for seg in (left, right):
+                if seg and seg.get("status") == "ok" and seg.get("timing") in ("ok", "fk", "too_fast"):
+                    baked = True
+            if not baked:
+                kfs[-1]["status"] = "unbaked"
     samples = []
     spans = []
     for seg in segments:
@@ -3048,14 +3110,16 @@ def is_ik_playable():
 
 
 def is_runnable():
-    """Real Run needs IK + every KF span inside joint vel limits. Sim ignores this."""
+    """Real Run needs a finished bake: IK plus every span scored, including Force FK."""
+    if not segments:
+        return False
     if not is_ik_playable():
         return False
     if any(s.get("timing") == "too_fast" for s in segments):
         return False
-    if any(s.get("status") == "ok" and s.get("timing") == "uncalc" for s in segments):
+    if any(s.get("status") != "ok" or s.get("timing") not in ("ok", "fk") for s in segments):
         return False
-    return all(s.get("status") == "ok" and s.get("timing") == "ok" for s in segments)
+    return True
 
 
 def status_dict():
@@ -3077,7 +3141,7 @@ def status_dict():
         n_h = max(0, len(hops))
         if st != "ok":
             speed_pending += n_h
-        elif timing == "ok":
+        elif timing in ("ok", "fk"):
             speed_ok += n_h
         elif timing == "too_fast":
             speed_fail += n_h
@@ -3217,6 +3281,14 @@ def _ctrl_list(w, which):
 def copy_selection(sel_kf, sel_sm=None):
     global clipboard
     chain = _kf_chain(sel_kf)
+    extra = []
+    for i in list(chain):
+        cid = str(wp.waypoints[i].get("clip_id") or "")
+        if not cid:
+            continue
+        extra.extend([j for j, w in enumerate(wp.waypoints) if str(w.get("clip_id") or "") == cid])
+    if extra:
+        chain = sorted(set(list(chain) + extra))
     if not chain:
         clipboard = None
         return {"ok": False, "error": "no keyframes"}
@@ -3232,6 +3304,10 @@ def copy_selection(sel_kf, sel_sm=None):
             "mode": w.get("mode", "arc"),
             "in_ctrl": _ctrl_list(w, "in"),
             "out_ctrl": _ctrl_list(w, "out"),
+            "clip_id": w.get("clip_id"),
+            "clip_name": w.get("clip_name"),
+            "clip_path": w.get("clip_path"),
+            "clip_locked": bool(w.get("clip_locked")),
         })
     clipboard = {"t0": t0, "span": max(0.0, t1 - t0), "keys": keys}
     return {"ok": True, "span": clipboard["span"], "keys": len(keys), "segments": max(0, len(keys) - 1)}
@@ -3300,10 +3376,24 @@ def paste_clipboard(t0):
             break
     if start is None:
         return {"ok": True, "t": t0, "n": len(keys)}
+    clip_src = next((k.get("clip_id") for k in keys if k.get("clip_id")), None)
+    clip_id = None
+    if clip_src:
+        if not hasattr(wp, "place_saved_path"):
+            clip_id = "clip_paste"
+        else:
+            seq = int(getattr(wp.place_saved_path, "_clip_seq", 0) or 0) + 1
+            wp.place_saved_path._clip_seq = seq
+            clip_id = "clip_%d" % seq
     for j, k in enumerate(keys):
         idx = start + j
         if idx >= len(wp.waypoints):
             break
+        if clip_id:
+            wp.waypoints[idx]["clip_id"] = clip_id
+            wp.waypoints[idx]["clip_name"] = k.get("clip_name")
+            wp.waypoints[idx]["clip_path"] = k.get("clip_path")
+            wp.waypoints[idx]["clip_locked"] = True
         if k.get("in_ctrl") is not None:
             wp.set_ctrl_pos(idx, "in", k["in_ctrl"])
         if k.get("out_ctrl") is not None:

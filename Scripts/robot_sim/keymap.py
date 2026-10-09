@@ -38,11 +38,7 @@ def setup_hotkeys(
     def _(_):
         delete_selected()
 
-    clear_cmd = server.gui.add_command("Clear All Waypoints", hotkey="C")
-
-    @clear_cmd.on_trigger
-    def _(_):
-        clear_waypoints()
+    # "Clear All Waypoints" hotkey (C) disabled — use File → New.
 
     undo_cmd = server.gui.add_command("Undo", hotkey="Z", modifier="cmd/ctrl")
 

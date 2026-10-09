@@ -9,7 +9,7 @@ import numpy as np
 def SetScene(viewer):
     server = viewer._server
 
-    bg = np.full((8, 8, 3), 80, dtype=np.uint8)
+    bg = np.full((8, 8, 3), (33, 34, 36), dtype=np.uint8)
     server.scene.set_background_image(bg)
     server.scene.set_up_direction("+z")
 

@@ -1,38 +1,125 @@
 
 import math
 import time
+import threading
 import numpy as np
 import pyaubo_sdk
 
-robot_ip = "192.168.2.124"#"192.168.0.101"
+robot_ip = "192.168.2.124"#"192.168.1.102"##"192.168.0.101"
 robot_port = 30004
 
 class RobotArcs:
-    def __init__(self, ip=robot_ip, port=robot_port, user="aubo", pwd="123456"):
-        self.client = pyaubo_sdk.RpcClient()
-        self.client.setRequestTimeout(1500)
-        self.client.connect(ip, port)
-        if not self.client.hasConnected():
-            raise RuntimeError("RPC connect failed")
-        self.client.login(user, pwd)
+    def __init__(self, ip=robot_ip, port=robot_port, user="aubo", pwd="123456", block=False):
+        self.ip = ip
+        self.port = port
+        self.user = user
+        self.pwd = pwd
+        self.client = None
+        self.name = None
+        self.interface = None
+        self.mc = None
+        self._dead = True
+        self._connecting = False
+        self.initPos = [-1.4687596998706127, 0.6089765683721227, 1.9923472065558696, -0.1984839510809548, 1.57996713558883, 0.1695107834780384]
+        self.loadPosJ = [0, -15*math.pi/180, 100*math.pi/180, 25*math.pi/180, 90*math.pi/180, 0]
+        if block:
+            while not self.connect():
+                print("arcscontrol: RPC connect failed, retrying...")
+                time.sleep(2)
+        else:
+            # Do not touch the controller on the viewer thread. Offline UI
+            # must come up even when 192.168.x.x is unreachable; the
+            # runtime updater calls reconnect() later.
+            print("arcscontrol: deferred RPC connect", self.ip)
 
-        # pick first robot & get interface
+    def _drop_client(self):
+        """Abandon a dead RpcClient. Do not logout/disconnect — that AVs after RPC drop."""
+        self.client = None
+        self.mc = None
+        self.interface = None
+        self.name = None
+        self._dead = True
+
+    def hasConnected(self):
+        if self._dead or self.client is None or self.mc is None:
+            return False
+        try:
+            return bool(self.client.hasConnected())
+        except Exception:
+            self._drop_client()
+            return False
+
+    def _connect_once(self):
+        self._drop_client()
+        self.client = pyaubo_sdk.RpcClient()
+        try:
+            self.client.setRequestTimeout(1500)
+        except Exception:
+            pass
+        self.client.connect(self.ip, self.port)
+        if not self.client.hasConnected():
+            print("arcscontrol: RPC connect failed")
+            self._drop_client()
+            return False
+        self.client.login(self.user, self.pwd)
         names = self.client.getRobotNames()
         if not names:
-            raise RuntimeError("No robots on controller")
+            print("arcscontrol: no robots on controller")
+            self._drop_client()
+            return False
         self.name = names[0]
         self.interface = self.client.getRobotInterface(self.name)
-
-        # one-time setup
-        self.mc  = self.interface.getMotionControl()
+        self.mc = self.interface.getMotionControl()
         cfg = self.interface.getRobotConfig()
         self.mc.setSpeedFraction(0.75)
-        #mc.setAccelFraction(0.75)
-        cfg.setTcpOffset([0,0,0,0,0,0])
+        cfg.setTcpOffset([0, 0, 0, 0, 0, 0])
+        self._dead = False
+        print("arcscontrol: RPC connected", self.ip)
+        return True
 
-        # capture starting poses
-        self.initPos = [-1.4687596998706127, 0.6089765683721227, 1.9923472065558696, -0.1984839510809548, 1.57996713558883, 0.1695107834780384]  # [x,y,z,rx,ry,rz]
-        self.loadPosJ = [0, -15*math.pi/180, 100*math.pi/180, 25*math.pi/180, 90*math.pi/180, 0]
+    def connect(self, force=False, timeout_s=8.0):
+        """One shot connect+login. Returns True if ready for motion."""
+        if self.client is not None and not self._dead:
+            try:
+                if self.client.hasConnected() and self.mc is not None:
+                    return True
+            except Exception:
+                if not force:
+                    self._drop_client()
+        if self._connecting:
+            return bool(self.hasConnected())
+        box = {"ok": False, "err": None}
+        self._connecting = True
+
+        def _run():
+            try:
+                box["ok"] = bool(self._connect_once())
+            except Exception as e:
+                box["err"] = e
+                try:
+                    self._drop_client()
+                except Exception:
+                    pass
+            self._connecting = False
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(max(1.0, float(timeout_s)))
+        if t.is_alive():
+            print("arcscontrol: RPC connect still running", self.ip, "wait", timeout_s)
+            return False
+        self._connecting = False
+        if box["err"] is not None:
+            print("arcscontrol:", box["err"])
+            return False
+        return bool(box["ok"])
+
+    def reconnect(self):
+        if self.hasConnected():
+            return True
+        if self._connecting:
+            return False
+        return self.connect(force=True, timeout_s=2.0)
 
     def wait_arrival(self, start_timeout_s=2.0):
         t0 = time.time()
@@ -65,13 +152,31 @@ class RobotArcs:
         return None
 
     def GetTcpPose(self):  # base->TCP
-        return self.interface.getRobotState().getTcpPose()
+        if not self.hasConnected():
+            return None
+        try:
+            return self.interface.getRobotState().getTcpPose()
+        except Exception:
+            self._drop_client()
+            return None
 
     def GetToolPose(self):  # base->Tool
-        return self.interface.getRobotState().getToolPose()
+        if not self.hasConnected():
+            return None
+        try:
+            return self.interface.getRobotState().getToolPose()
+        except Exception:
+            self._drop_client()
+            return None
 
     def GetJoints(self):    #joints as rad
-        return self.interface.getRobotState().getJointPositions()
+        if not self.hasConnected():
+            return None
+        try:
+            return self.interface.getRobotState().getJointPositions()
+        except Exception:
+            self._drop_client()
+            return None
 
     def StopMove(self):
         """Hard stop: stopMove is only a pause. Also stopJoint + clearPath."""
@@ -122,8 +227,18 @@ class RobotArcs:
         self.mc.startMove()
 
     def Close(self):
-        self.client.logout()
-        self.client.disconnect()
+        c = self.client
+        self._drop_client()
+        if c is None:
+            return
+        try:
+            c.logout()
+        except Exception:
+            pass
+        try:
+            c.disconnect()
+        except Exception:
+            pass
 
     def GetFK(self, q):
         pose, err = self.interface.getRobotAlgorithm(q) # rad, J1..J6
@@ -133,12 +248,19 @@ class RobotArcs:
             return -1
 
     def GetIK(self, targetPose, seed=None):
+        if not self.hasConnected():
+            return None
         pose = [float(v) for v in targetPose]
         if seed is None:
             seed = self.GetJoints()
+        if seed is None:
+            return None
         q_near = [float(v) for v in np.asarray(seed, dtype=float).reshape(-1)[:6]]
-
-        q, code = self.interface.getRobotAlgorithm().inverseKinematics(q_near, pose)
+        try:
+            q, code = self.interface.getRobotAlgorithm().inverseKinematics(q_near, pose)
+        except Exception:
+            self._drop_client()
+            return None
         print("IK code", code, "q", q)
         if int(code) != 0:
             return None
@@ -416,23 +538,19 @@ def main():
         robot.MoveJAwait(robot.initPos)
         """ """
 
-    except KeyboardInterrupt as e:
-        robot_rpc_client.disconnect()
+    except KeyboardInterrupt:
+        try:
+            robot.Close()
+        except Exception:
+            pass
 
-#Start up
-robot_rpc_client = pyaubo_sdk.RpcClient()
-robot_rpc_client.setRequestTimeout(1000)  # 接口调用: 设置 RPC 超时
-robot_rpc_client.connect(robot_ip, robot_port)  # 接口调用: 连接 RPC 服务
-
-if robot_rpc_client.hasConnected():
-    print("RPC客户端连接成功!")
-    robot = RobotArcs(robot_ip, robot_port)
-else:
-    print("RPC客户端连接失败!")
-
-if __name__ == '__main__':
-
+if __name__ == "__main__":
+    robot = RobotArcs(robot_ip, robot_port, block=True)
+    print("RPC客户端连接成功!" if robot.hasConnected() else "RPC客户端连接失败!")
+    try:
         main()
-
-        robot_rpc_client.logout()  # 退出登录
-        robot_rpc_client.disconnect()  # 断开连接
+    finally:
+        try:
+            robot.Close()
+        except Exception:
+            pass

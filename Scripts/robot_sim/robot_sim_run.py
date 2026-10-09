@@ -141,6 +141,8 @@ def InitViewer():
     server = sceneBG.SetScene(viewer)
     wp.init(server)
     rr.init_cursors(server)
+    if hasattr(rr, "robot_connected") and not rr.robot_connected():
+        rr.set_hide_real_robot(True)
 
 
 def start_viewer():
@@ -264,7 +266,8 @@ def start_viewer():
                 except Exception as e:
                     print("gizmo space failed:", e)
             while real_requests:
-                kind = real_requests.pop(0)
+                item = real_requests.pop(0)
+                kind = item[0] if isinstance(item, (tuple, list)) else item
                 try:
                     if kind == "goto":
                         rr.start_goto_path_start()
@@ -314,7 +317,13 @@ def start_viewer():
                             if hasattr(wp, "ensure_builtin_sim_poses"):
                                 wp.ensure_builtin_sim_poses()
                     elif kind == "load":
-                        fman.apply_loaded_doc(payload)
+                        payload = payload or {}
+                        if isinstance(payload, dict) and payload.get("doc"):
+                            fman.apply_loaded_doc(payload.get("doc"))
+                        elif isinstance(payload, dict) and payload.get("path") and not payload.get("waypoints") and not payload.get("points"):
+                            fman.load_from_path(payload.get("path"))
+                        else:
+                            fman.apply_loaded_doc(payload)
                     elif kind == "undo":
                         wp.undo()
                     elif kind == "redo":
@@ -355,6 +364,8 @@ def start_viewer():
             )
             if not playing and not real_playing and hasattr(wp, "snap_global_gizmos_idle"):
                 wp.snap_global_gizmos_idle()
+            if not playing and not real_playing and hasattr(wp, "flush_idle_path_rebuild"):
+                wp.flush_idle_path_rebuild()
             if hasattr(rr, "tick_simulation"):
                 rr.tick_simulation()
             if hasattr(rr, "tick_real_path"):

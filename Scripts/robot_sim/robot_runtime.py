@@ -30,9 +30,13 @@ CURSOR_RPY_OFFSET = {
 viewer = None
 robot_actual = None
 robot_sim = None
+robot_ik = None
 robot = None
 
 IK_POS_TOL = 0.03
+IK_ANG_TOL = 0.45
+IK_RECONNECT_POS = 0.05
+IK_REJECT_POS = 0.12
 CURSOR_R = 0.03
 ARROW_LEN = 0.07
 _GIZMO_SCALE_ON = 0.15
@@ -44,26 +48,122 @@ _GRID_OPACITY_DIM = 0.5
 _arrow_real = None
 _arrow_real_side = None
 _sim_gizmo = None
+_gizmo_serial = 0
 _sim_ik_pending = False
+_ik_lock = threading.Lock()
 _track = {"on": False, "name": "", "pick": False, "valid": False, "added": False, "offset": [0.0, 0.0, 0.0], "pin_pos": None}
 _hold_sim = 0
+_start_snap_done = False
+_rpc_probe_ready = False
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
-_CANDIDATES = [
-    _ROOT / "aubo-i5-full-master" / "aubo_description" / "urdf" / "aubo_i5.urdf",
-    _HERE / "aubo-i5-full-master" / "aubo_description" / "urdf" / "aubo_i5.urdf",
+_URDF_DIRS = [
+    _HERE / "aubo-i5-full-master" / "aubo_description" / "urdf",
+    _ROOT / "aubo-i5-full-master" / "aubo_description" / "urdf",
 ]
-URDF_PATH = next((p for p in _CANDIDATES if p.is_file()), None)
-if URDF_PATH is None:
-    raise FileNotFoundError(
-        "aubo_i5.urdf not found. Looked in:\n" + "\n".join(str(p) for p in _CANDIDATES)
-    )
-_SIM = URDF_PATH.with_name("aubo_i5_sim.urdf")
-URDF_SIM_PATH = str(_SIM if _SIM.is_file() else URDF_PATH)
-URDF_PATH = str(URDF_PATH)
-if not _SIM.is_file():
-    print("aubo_i5_sim.urdf missing next to real URDF; sim uses aubo_i5.urdf")
+_URDF_DIR = next((p for p in _URDF_DIRS if p.is_dir()), _URDF_DIRS[0])
+
+
+def list_robot_models():
+    rows = []
+    seen = set()
+    if _URDF_DIR.is_dir():
+        for p in sorted(_URDF_DIR.glob("aubo_i*.urdf")):
+            if "gripper" in p.name.lower() or " " in p.name:
+                continue
+            stem = p.stem
+            if stem.endswith("_sim") or stem.endswith("_robot"):
+                continue
+            if stem in seen:
+                continue
+            seen.add(stem)
+            rows.append({"id": stem, "name": stem.replace("_", " "), "path": str(p)})
+    return rows
+
+
+def resolve_urdf(model_id=None):
+    model_id = str(model_id or "aubo_i5").strip() or "aubo_i5"
+    if model_id.lower().endswith(".urdf"):
+        model_id = Path(model_id).stem
+    path = _URDF_DIR / ("%s.urdf" % model_id)
+    if not path.is_file():
+        path = _URDF_DIR / "aubo_i5.urdf"
+        model_id = "aubo_i5"
+    sim = path.with_name(path.stem + "_sim.urdf")
+    return model_id, path, (sim if sim.is_file() else path)
+
+
+_MODEL_ID, _URDF_P, _URDF_SIM_P = resolve_urdf("aubo_i5")
+URDF_PATH = str(_URDF_P)
+URDF_SIM_PATH = str(_URDF_SIM_P)
+if _URDF_SIM_P == _URDF_P:
+    print("%s_sim.urdf missing next to real URDF; sim uses %s" % (_MODEL_ID, _URDF_P.name))
+
+
+def set_robot_model(model_id):
+    global URDF_PATH, URDF_SIM_PATH, _MODEL_ID
+    mid, path, sim = resolve_urdf(model_id)
+    URDF_PATH = str(path)
+    URDF_SIM_PATH = str(sim)
+    changed = mid != _MODEL_ID
+    _MODEL_ID = mid
+    print("robot model", mid, URDF_PATH)
+    return {"id": mid, "path": URDF_PATH, "sim_path": URDF_SIM_PATH, "changed": changed}
+
+
+def current_robot_model():
+    return _MODEL_ID
+
+
+def _drop_viser_robot(model):
+    if model is None:
+        return
+    if viewer is not None:
+        for name in ("remove", "delete"):
+            fn = getattr(viewer, name, None)
+            if callable(fn):
+                try:
+                    fn(model)
+                    return
+                except Exception:
+                    pass
+        scene = getattr(viewer, "scene", None) or getattr(getattr(viewer, "_server", None), "scene", None)
+        if scene is not None and hasattr(scene, "remove_by_name"):
+            try:
+                scene.remove_by_name(getattr(model, "name", "") or "")
+            except Exception:
+                pass
+    try:
+        for link in getattr(model, "link_list", []) or []:
+            mesh = getattr(link, "visual_mesh", None)
+            h = getattr(mesh, "visual", None)
+            if h is not None and hasattr(h, "remove"):
+                try:
+                    h.remove()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def reload_robot_models():
+    """Load the URDF currently selected by set_robot_model into Viser."""
+    global robot_actual, robot_sim, robot_ik, _last_good_q
+    if viewer is None:
+        print("reload robots: no viewer yet")
+        return False
+    old_a, old_s, old_k = robot_actual, robot_sim, robot_ik
+    _drop_viser_robot(old_a)
+    _drop_viser_robot(old_s)
+    import_robots(URDF_PATH, URDF_SIM_PATH)
+    if robot_connected():
+        set_hide_real_robot(False)
+    else:
+        set_hide_real_robot(True)
+    reset_sim_to_home()
+    print("reloaded robots", _MODEL_ID, URDF_PATH)
+    return True
 
 SIM_OPACITY = 255*0.6  # 0.40 — Viser ignores URDF rgba A; set on mesh handles
 SIM_RGB = (90, 150, 230)  # sim tint (blue)
@@ -100,6 +200,17 @@ HOLD_MOVE_FRACTION = 0.6
 HOLD_MOVE_SPEED = math.radians(223.0) * HOLD_MOVE_FRACTION  # rad/s, 60% of J1–J3 max
 HOLD_MOVE_ACCEL = math.radians(496.0) * HOLD_MOVE_FRACTION
 HOLD_LIN_MPS = 0.05
+HOLD_REACH_M = 0.85
+
+
+def set_hold_lin_mps(mps):
+    global HOLD_LIN_MPS
+    try:
+        HOLD_LIN_MPS = max(0.001, float(mps))
+    except Exception:
+        return HOLD_LIN_MPS
+    print("hold lin speed", HOLD_LIN_MPS, "m/s")
+    return HOLD_LIN_MPS
 _hold_move = False
 _hold_target_ik = None
 _hold_target_q = None
@@ -167,12 +278,30 @@ def viser_to_aubo_pose(pos, wxyz, as_quat=True):
     return aubo_pose_from_viewer(pos, wxyz)
 
 
+def robot_connected():
+    if not _rpc_probe_ready:
+        return False
+    try:
+        if robot is None or not robot.hasConnected():
+            return False
+        q = robot.GetJoints()
+        return q is not None and len(list(q)) >= 6
+    except Exception:
+        return False
+
+
 def init(viser_viewer, urdf_path=URDF_PATH):
     global viewer, robot
     viewer = viser_viewer
-    robot = arcscontrol.RobotArcs()
+    robot = arcscontrol.RobotArcs(block=False)
     import_robots(urdf_path)
-    _sync_sim_to_real()
+    if robot_connected():
+        set_hide_real_robot(False)
+        reset_sim_to_real()
+    else:
+        print("no robot at startup — viewer only, sim at home")
+        set_hide_real_robot(True)
+        reset_sim_to_home()
     start_threads()
     bind_default_camera()
 
@@ -261,7 +390,7 @@ _preview_cid = None
 _world_cids = set()
 
 
-def apply_scene_camera_preview(pos, wxyz, vfov=60.0, hfov=90.0):
+def apply_scene_camera_preview(pos, wxyz, vfov=60.0, hfov=90.0, client_id=None):
     """Drive only extra Viser clients. The first/solo client is the world view."""
     global _preview_cid, _world_cids
     srv = getattr(viewer, "_server", None) if viewer is not None else None
@@ -284,7 +413,9 @@ def apply_scene_camera_preview(pos, wxyz, vfov=60.0, hfov=90.0):
     preview_ids = [cid for cid in ids if cid not in _world_cids]
     if not preview_ids:
         return False
-    if _preview_cid not in preview_ids:
+    if client_id in preview_ids:
+        _preview_cid = client_id
+    elif _preview_cid not in preview_ids:
         _preview_cid = preview_ids[-1]
     client = clients[_preview_cid]
     p = np.asarray(pos, dtype=float).reshape(3)
@@ -324,6 +455,38 @@ def apply_scene_camera_preview(pos, wxyz, vfov=60.0, hfov=90.0):
     except Exception as e:
         print("scene camera preview failed", e)
         return False
+
+
+def apply_scene_camera_previews(targets):
+    """Assign each extra Viser client a target (pos, wxyz, vfov, hfov)."""
+    global _world_cids
+    srv = getattr(viewer, "_server", None) if viewer is not None else None
+    if srv is None or not targets:
+        return False
+    try:
+        clients = dict(srv.get_clients())
+    except Exception:
+        return False
+    ids = set(clients)
+    if len(ids) <= 1:
+        return False
+    if not _world_cids.intersection(ids):
+        try:
+            _world_cids = {min(ids, key=lambda k: int(k))}
+        except Exception:
+            _world_cids = {next(iter(ids))}
+    preview_ids = sorted(
+        [cid for cid in ids if cid not in _world_cids],
+        key=lambda k: int(k) if str(k).isdigit() else 0,
+    )
+    ok = False
+    for i, cid in enumerate(preview_ids):
+        if i >= len(targets):
+            break
+        rec = targets[i]
+        if apply_scene_camera_preview(rec[0], rec[1], rec[2], rec[3], client_id=cid):
+            ok = True
+    return ok
 
 
 def bind_default_camera():
@@ -419,6 +582,34 @@ def reset_sim_to_real():
 
 
 HOME_Q_DEG = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]
+# always_aubo: Aubo GetIK only; offline sim IK features disabled.
+# backup: local skrobot IK only while disconnected.
+IK_PREF = "backup"
+
+
+def set_ik_pref(mode):
+    global IK_PREF
+    m = str(mode or "backup").strip().lower()
+    if m in ("always_aubo", "aubo", "always"):
+        IK_PREF = "always_aubo"
+    else:
+        IK_PREF = "backup"
+    print("ik pref", IK_PREF)
+    return IK_PREF
+
+
+def ik_pref():
+    return IK_PREF
+
+
+def ik_allowed():
+    if robot_connected():
+        return True
+    return IK_PREF == "backup"
+
+
+def use_local_ik():
+    return (not robot_connected()) and IK_PREF == "backup"
 
 
 def reset_sim_to_home():
@@ -437,7 +628,12 @@ def reset_sim_to_home():
     _last_good_q = q.copy()
     _sim_rot0 = None
     _sim_ik_pending = False
-    _hold_sim = 12
+    _hold_sim = 0
+    try:
+        if robot_ik is not None:
+            _set_q(robot_ik, q)
+    except Exception:
+        pass
     _snap_sim_cursor_to_ee()
     print("reset sim = home", q)
     return True
@@ -490,30 +686,33 @@ def reset_sim_to_q(q, units="rad"):
 
 
 def _snap_sim_cursor_to_ee():
+    """0.11.0 reset snap: move the orange handle onto current sim EE+offset."""
     if robot_sim is None:
         return
     pos, wxyz = _cursor_pose_from_ee(robot_sim, "sim")
-    _set_sim_heading(wxyz)
+    _force_sim_heading(wxyz)
     try:
         _track["pin_pos"] = np.asarray(pos, dtype=float).reshape(3).copy()
     except Exception:
         pass
-    if _cursor_sim is not None:
+    xyz = tuple(float(v) for v in np.asarray(pos, dtype=float).reshape(3))
+    had_gizmo = _sim_gizmo is not None
+    try:
+        wp._suspend_gizmo_cb = True
+        if _cursor_sim is not None:
+            try:
+                _cursor_sim.position = xyz
+            except Exception:
+                pass
+        _draw_sim_dir(pos)
+    finally:
         try:
-            _cursor_sim.position = tuple(float(v) for v in pos)
+            wp._suspend_gizmo_cb = False
         except Exception:
             pass
-    if _sim_gizmo is not None:
-        try:
-            _sim_gizmo.position = tuple(float(v) for v in pos)
-            if getattr(wp, "gizmo_space", "local") == "local":
-                _sim_gizmo.wxyz = tuple(float(v) for v in _sim_wxyz)
-            else:
-                _sim_gizmo.wxyz = (1.0, 0.0, 0.0, 0.0)
-        except Exception:
-            if wp.server is not None:
-                _make_sim_gizmo(wp.server, pos, _sim_wxyz)
-    _draw_sim_dir(pos)
+    srv = _sim_scene_server()
+    if had_gizmo and srv is not None:
+        _make_sim_gizmo(srv, pos, wxyz, resume=False)
     try:
         if hasattr(wp, "_propagate_children"):
             wp._propagate_children("sim_cursor")
@@ -615,12 +814,18 @@ _hide_real_robot = False
 def set_hide_real_robot(hide):
     global _hide_real_robot
     _hide_real_robot = bool(hide)
-    if viewer is None or robot_actual is None:
-        return not _hide_real_robot
-    handles = getattr(viewer, "_linkid_to_handle", None) or {}
     vis = not _hide_real_robot
-    for link in getattr(robot_actual, "link_list", None) or []:
-        h = handles.get(str(id(link)))
+    if viewer is not None and robot_actual is not None:
+        handles = getattr(viewer, "_linkid_to_handle", None) or {}
+        for link in getattr(robot_actual, "link_list", None) or []:
+            h = handles.get(str(id(link)))
+            if h is None:
+                continue
+            try:
+                h.visible = vis
+            except Exception:
+                pass
+    for h in (_cursor_real, _arrow_real, _arrow_real_side):
         if h is None:
             continue
         try:
@@ -631,7 +836,7 @@ def set_hide_real_robot(hide):
 
 
 def hide_real_robot_status():
-    return {"hidden": bool(_hide_real_robot)}
+    return {"hidden": bool(_hide_real_robot), "connected": robot_connected()}
 
 
 def apply_sim_viewer_opacity(model, opacity=None, rgb=None):
@@ -921,7 +1126,7 @@ def _track_target_pos(name):
 
 def set_track_object(on=None, name=None, pick=None, added=None, offset=None):
     if on is not None:
-        _track["on"] = bool(on)
+        _track["on"] = on is True or str(on).lower() in ("1", "true", "on")
     if name is not None:
         _track["name"] = str(name)
     if pick is not None:
@@ -944,6 +1149,11 @@ def set_track_object(on=None, name=None, pick=None, added=None, offset=None):
             pass
     tgt = _track_target_pos(_track["name"])
     _track["valid"] = tgt is not None
+    if _track.get("on"):
+        try:
+            tick_track_object()
+        except Exception:
+            pass
     return track_status()
 
 
@@ -1025,8 +1235,7 @@ def tick_track_object():
             _cursor_sim.position = pin
         if _sim_gizmo is not None:
             _sim_gizmo.position = pin
-            if getattr(wp, "gizmo_space", "local") == "local":
-                _sim_gizmo.wxyz = tuple(float(v) for v in _sim_wxyz)
+            _sim_gizmo.wxyz = tuple(float(v) for v in _sim_wxyz)
         _ik_sim_cursor()
         if _cursor_sim is not None:
             _cursor_sim.position = pin
@@ -1042,6 +1251,22 @@ def tick_track_object():
     _draw_sim_dir(frozen)
 
 
+def _force_sim_heading(q):
+    global _sim_wxyz
+    q = np.asarray(q, dtype=float).reshape(4)
+    n = float(np.linalg.norm(q)) or 1.0
+    _sim_wxyz = q / n
+
+
+def _sim_scene_server():
+    srv = getattr(wp, "server", None)
+    if srv is not None:
+        return srv
+    if viewer is None:
+        return None
+    return getattr(viewer, "_server", None) or getattr(viewer, "server", None)
+
+
 def _set_sim_heading(q):
     global _sim_wxyz
     q = np.asarray(q, dtype=float).reshape(4)
@@ -1054,17 +1279,23 @@ def _set_sim_heading(q):
         _sim_wxyz = q
 
 
-def _make_sim_gizmo(server, pos, wxyz):
-    global _sim_gizmo, _sim_selected, _sim_wxyz
+def _resume_sim_ik():
+    """Same path as a gizmo update: solve EE to the current cursor, or hold."""
+    return _ik_sim_cursor()
+
+
+def _make_sim_gizmo(server, pos, wxyz, resume=True):
+    global _sim_gizmo, _sim_selected, _sim_wxyz, _gizmo_serial
     heading = np.asarray(wxyz, dtype=float).reshape(4)
     hide_sim_gizmo()
     xyz = tuple(float(v) for v in np.asarray(pos, dtype=float).reshape(3))
-    _set_sim_heading(heading)
+    _force_sim_heading(heading)
     import waypoints as _wp
     space = getattr(_wp, "gizmo_space", "local")
     giz_wxyz = tuple(float(v) for v in _sim_wxyz) if space == "local" else (1.0, 0.0, 0.0, 0.0)
+    _gizmo_serial += 1
     kwargs = dict(
-        name=f"/cursor_sim/gizmo_{space}",
+        name="/cursor_sim/gizmo_%s_%d" % (space, _gizmo_serial),
         position=xyz,
         scale=_GIZMO_SCALE_ON,
         wxyz=giz_wxyz,
@@ -1082,6 +1313,8 @@ def _make_sim_gizmo(server, pos, wxyz):
         global _sim_ik_pending, _sim_rot0
         if getattr(wp, "_suspend_gizmo_cb", False):
             return
+        if not ik_allowed():
+            return
         _sim_ik_pending = True
         if _sim_gizmo is not None:
             if not (_track.get("on") and _track.get("valid")):
@@ -1098,6 +1331,16 @@ def _make_sim_gizmo(server, pos, wxyz):
                 wp._mark_gizmo_moved()
         _ik_sim_cursor()
         try:
+            if hasattr(wp, "refresh_sim_camera_viz"):
+                wp.refresh_sim_camera_viz()
+        except Exception:
+            pass
+        try:
+            if hasattr(wp, "_tick_sim_previews"):
+                wp._tick_sim_previews()
+        except Exception:
+            pass
+        try:
             if hasattr(wp, "_propagate_children"):
                 wp._propagate_children("sim_cursor")
         except Exception:
@@ -1106,6 +1349,8 @@ def _make_sim_gizmo(server, pos, wxyz):
     if hasattr(_sim_gizmo, "on_update"):
         _sim_gizmo.on_update(_on_sim_gizmo)
     _sim_selected = True
+    if resume:
+        _resume_sim_ik()
 
 
 def init_cursors(server):
@@ -1241,7 +1486,7 @@ def update_cursors():
     if server is None:
         return
 
-    if robot_actual is not None and _cursor_real is not None:
+    if robot_actual is not None and _cursor_real is not None and not _hide_real_robot:
         pos_r, wxyz_r = get_real_cursor_pose()
         back_r = _dir_from_wxyz(wxyz_r)
         _cursor_real.position = (float(pos_r[0]), float(pos_r[1]), float(pos_r[2]))
@@ -1387,8 +1632,15 @@ def _ik_to_xyzrpy(pose, seed=None):
 
 
 def _ik_to_pose(pos, wxyz, seed=None):
-    pose = aubo_pose_from_viewer(pos, wxyz)
-    return _ik_to_xyzrpy(pose, seed=seed)
+    if robot_connected():
+        pose = aubo_pose_from_viewer(pos, wxyz)
+        return _ik_to_xyzrpy(pose, seed=seed)
+    if use_local_ik():
+        q_now = seed
+        if q_now is None and robot_sim is not None:
+            q_now = _flat(robot_sim.angle_vector(), 6)
+        return solve_backup_ik(pos, wxyz, q_now)
+    return None
 
 
 def ik_best(pos, wxyz, seeds=None, use_robot=False):
@@ -1443,6 +1695,28 @@ def ik_best(pos, wxyz, seeds=None, use_robot=False):
     return cands[0]
 
 
+def _q_vec(model):
+    try:
+        q = np.asarray(model.angle_vector(), dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if q.size < 6 or not np.all(np.isfinite(q)):
+        return None
+    return q
+
+
+def _set_q(model, q):
+    cur = _q_vec(model)
+    if cur is None:
+        model.angle_vector(np.asarray(q, dtype=float).reshape(-1)[:6])
+        return
+    out = cur.copy()
+    qq = np.asarray(q, dtype=float).reshape(-1)
+    n = min(out.size, qq.size)
+    out[:n] = qq[:n]
+    model.angle_vector(out)
+
+
 def _ik_sim_cursor():
     global _sim_ik_pending, _last_good_q
     _sim_ik_pending = False
@@ -1470,30 +1744,205 @@ def _ik_sim_cursor():
     _last_good_q = q
 
 
-def sim_ik(pos, wxyz, seed=None):
-    model = robot_sim
+def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
+    """Offline 6-DOF IK. Current q first, then home. No position-only fallback."""
+    model = robot_ik
     if model is None:
         return None
-    if seed is not None:
-        model.angle_vector(np.array(_flat(seed, 6), dtype=float))
-    ee = _ee_link(model)
-    target = ee.copy_worldcoords()
-    rot = R.from_quat(wxyz_to_xyzw(wxyz)).as_matrix()
-    pos = np.asarray(pos, dtype=float).reshape(3)
-    if hasattr(target, "newcoords"):
-        target.newcoords(rot, pos)
+    if seed_q is not None:
+        seed = np.array(_flat(seed_q, 6), dtype=float)
+    elif robot_sim is not None:
+        seed = np.array(_flat(robot_sim.angle_vector(), 6), dtype=float)
     else:
-        target.translation = pos
-        target.rotation = rot
-    q = model.inverse_kinematics(target, move_target=ee)
-    if q is False or q is None:
         return None
-    q = _flat(q, 6)
-    return np.array(q, dtype=float) if q and len(q) == 6 else None
+    if seed.size < 6 or not np.all(np.isfinite(seed)):
+        return None
+    p_des = np.asarray(target_pos, dtype=float).reshape(3)
+    if not np.all(np.isfinite(p_des)):
+        return None
+    home = np.deg2rad(np.array(HOME_Q_DEG, dtype=float))
+    pose = aubo_pose_from_viewer(p_des, target_wxyz)
+    rot = R.from_quat(wxyz_to_xyzw(target_wxyz)).as_matrix()
+
+    def _pose_err(p, w):
+        dp = float(np.linalg.norm(np.asarray(p, dtype=float).reshape(3) - p_des))
+        try:
+            qerr = R.from_matrix(rot).inv() * R.from_quat(wxyz_to_xyzw(w))
+            da = float(np.linalg.norm(qerr.as_rotvec()))
+        except Exception:
+            da = 0.0
+        return dp, da
+
+    def _try(seed_use, tag):
+        _set_q(model, seed_use)
+        p0, w0 = _ee_frame(model)
+        dpos, dang = _pose_err(p0, w0)
+        if dpos <= 0.002 and dang <= 0.05:
+            print("backup IK already there", tag, "pos", round(dpos, 4), "ang", round(dang, 4))
+            return np.array(seed_use, dtype=float)
+        print("backup IK target", [round(float(v), 4) for v in pose], "seed", tag, [round(float(v), 4) for v in seed_use])
+        qq = _jacobian_ik6(model, p_des, rot, seed_use, iters=28)
+        if qq is None:
+            print("backup IK fail", tag, "target", [round(float(v), 4) for v in pose])
+            return None
+        _set_q(model, qq)
+        p_fk, w_fk = _ee_frame(model)
+        err, aerr = _pose_err(p_fk, w_fk)
+        print(
+            "backup IK q", [round(float(v), 4) for v in qq],
+            "fk", [round(float(v), 4) for v in np.asarray(p_fk).reshape(3)],
+            "err", round(err, 4), "ang", round(aerr, 4),
+        )
+        if err > max(float(IK_POS_TOL), 0.04):
+            print("backup IK far", tag, "err", round(err, 4))
+            return None
+        return qq
+
+    with _ik_lock:
+        try:
+            q = _try(seed, "live")
+            if q is not None:
+                return q
+            q = _try(home, "home")
+            if q is not None:
+                print("backup IK used home seed")
+            return q
+        except Exception as e:
+            print("backup IK exception", e)
+            return None
+
+
+def sim_ik(pos, wxyz, seed=None, strict=True, iters=40, ori=False):
+    return solve_backup_ik(pos, wxyz, seed)
+
+
+def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28):
+    """6-DOF damped Jacobian on hidden robot_ik (position + orientation)."""
+    if model is None or seed_q is None:
+        return None
+    p_des = np.asarray(p_des, dtype=float).reshape(3)
+    R_des = np.asarray(R_des, dtype=float).reshape(3, 3)
+    q = np.array(seed_q, dtype=float).reshape(-1)[:6].copy()
+    eps = 1.2e-3
+
+    def _err_at(qv):
+        _set_q(model, qv)
+        p, w = _ee_frame(model)
+        e_p = np.asarray(p, dtype=float).reshape(3) - p_des
+        try:
+            e_r = (R.from_matrix(R_des).inv() * R.from_quat(wxyz_to_xyzw(w))).as_rotvec()
+        except Exception:
+            e_r = np.zeros(3)
+        return np.concatenate([e_p, e_r]), float(np.linalg.norm(e_p)), float(np.linalg.norm(e_r))
+
+    try:
+        e, dp, da = _err_at(q)
+    except Exception:
+        return None
+    best_q = q.copy()
+    best = dp + 0.15 * da
+    for _ in range(max(8, int(iters))):
+        if dp <= 0.002 and da <= 0.05:
+            break
+        J = np.zeros((6, 6), dtype=float)
+        ok = True
+        for j in range(6):
+            qp = q.copy()
+            qp[j] += eps
+            try:
+                ej, _, _ = _err_at(qp)
+            except Exception:
+                ok = False
+                break
+            J[:, j] = (ej - e) / eps
+        if not ok:
+            break
+        lam = 0.12 + 1.5 * min(dp + 0.2 * da, 0.5)
+        try:
+            dq = -np.linalg.solve(J.T.dot(J) + lam * np.eye(6), J.T.dot(e))
+        except Exception:
+            break
+        qn = q + np.clip(dq, -0.18, 0.18)
+        try:
+            en, dpn, dan = _err_at(qn)
+        except Exception:
+            break
+        cost = dpn + 0.15 * dan
+        if cost < best - 1e-6:
+            q, e, dp, da = qn, en, dpn, dan
+            best = cost
+            best_q = q.copy()
+        else:
+            break
+    if best > 0.12:
+        return None
+    return best_q
+
+
+def _jacobian_ik(model, p_des, seed_q, iters=16):
+    """Position-only damped step on hidden robot_ik. Accept only shrinking EE error."""
+    if model is None or seed_q is None:
+        return None
+    p_des = np.asarray(p_des, dtype=float).reshape(3)
+    q = np.array(seed_q, dtype=float).reshape(-1)[:6].copy()
+    try:
+        _set_q(model, q)
+        p0, _ = _ee_frame(model)
+    except Exception:
+        return None
+    if p0 is None:
+        return None
+    best_q = q.copy()
+    best_d = float(np.linalg.norm(np.asarray(p0, dtype=float).reshape(3) - p_des))
+    eps = 1.5e-3
+    for _ in range(max(6, int(iters))):
+        _set_q(model, q)
+        p, _ = _ee_frame(model)
+        if p is None:
+            break
+        e = np.asarray(p, dtype=float).reshape(3) - p_des
+        d = float(np.linalg.norm(e))
+        if d < best_d:
+            best_d = d
+            best_q = q.copy()
+        if d <= 0.003:
+            break
+        J = np.zeros((3, 6), dtype=float)
+        ok = True
+        for j in range(6):
+            qp = q.copy()
+            qp[j] += eps
+            _set_q(model, qp)
+            pp, _ = _ee_frame(model)
+            if pp is None:
+                ok = False
+                break
+            J[:, j] = (np.asarray(pp, dtype=float).reshape(3) - p) / eps
+        if not ok:
+            break
+        lam = 0.15 + 2.0 * min(d, 0.4)
+        try:
+            dq = -np.linalg.solve(J.T.dot(J) + lam * np.eye(6), J.T.dot(e))
+        except Exception:
+            break
+        qn = q + np.clip(dq, -0.20, 0.20)
+        _set_q(model, qn)
+        pn, _ = _ee_frame(model)
+        if pn is None:
+            break
+        dn = float(np.linalg.norm(np.asarray(pn, dtype=float).reshape(3) - p_des))
+        if dn < d - 1e-5:
+            q = qn
+        else:
+            q = best_q.copy()
+            break
+    if best_d > float(IK_POS_TOL):
+        return None
+    return best_q
 
 
 def import_robots(urdf_path=URDF_PATH, urdf_sim_path=URDF_SIM_PATH):
-    global robot_actual, robot_sim
+    global robot_actual, robot_sim, robot_ik
     robot_actual = RobotModel()
     print("real urdf", urdf_path)
     robot_actual.load_urdf_file(urdf_path)
@@ -1502,16 +1951,23 @@ def import_robots(urdf_path=URDF_PATH, urdf_sim_path=URDF_SIM_PATH):
     print("sim urdf", urdf_sim_path)
     robot_sim.load_urdf_file(urdf_sim_path)
     apply_aubo_i5_joint_limits(robot_sim)
+    robot_ik = RobotModel()
+    robot_ik.load_urdf_file(urdf_sim_path)
+    apply_aubo_i5_joint_limits(robot_ik)
     set_opacity_only(robot_sim, SIM_OPACITY, rgb=SIM_RGB)
     viewer.add(robot_actual)
     viewer.add(robot_sim)
+    try:
+        print("ik model joints", len(np.asarray(robot_ik.angle_vector()).reshape(-1)))
+    except Exception:
+        pass
     apply_sim_viewer_opacity(robot_sim, SIM_OPACITY, rgb=SIM_RGB)
     print("EE link", getattr(_ee_link(robot_sim), "name", None))
 
 
 def start_hold_move(ik=None, q=None, mode="ik"):
     global _hold_move, _hold_target_ik, _hold_target_q, _hold_arrived, _hold_mode
-    if robot is None:
+    if robot is None or not robot_connected():
         print("hold move: no robot")
         return False
     want_fk = str(mode or "fk").lower() != "ik"
@@ -1532,16 +1988,18 @@ def start_hold_move(ik=None, q=None, mode="ik"):
     if _hold_mode == "fk" and _hold_target_q is None:
         return False
     try:
+        lin = max(0.001, float(HOLD_LIN_MPS))
+        # Full hold profile is ~0.375 m/s TCP at SetSpeed(1) + default jvel.
+        scale = max(0.02, min(1.0, lin / 0.375))
         try:
-            robot.SetSpeed(1.0)
+            robot.SetSpeed(scale)
         except Exception:
             pass
         try:
             robot.StartMove()
         except Exception:
             pass
-        lin = float(HOLD_LIN_MPS)
-        jvel = float(HOLD_MOVE_SPEED) * max(0.15, min(2.0, lin / 0.05))
+        jvel = float(HOLD_MOVE_SPEED)
         jacc = float(HOLD_MOVE_ACCEL)
         if _hold_mode == "fk":
             if hasattr(robot, "MoveJAsync"):
@@ -1556,7 +2014,7 @@ def start_hold_move(ik=None, q=None, mode="ik"):
         else:
             return False
         _hold_move = True
-        print("hold move start", _hold_mode, "speed", jvel, "acc", jacc, "q", _hold_target_q)
+        print("hold move start", _hold_mode, "lin", lin, "m/s", "jvel", jvel, "jacc", jacc, "q", _hold_target_q)
         return True
     except Exception as e:
         print("hold move failed:", e)
@@ -1624,10 +2082,79 @@ def hold_move_status():
 
 
 def real_robot_updater():
+    global _start_snap_done, _rpc_probe_ready
+    time.sleep(3.0)
+    _rpc_probe_ready = True
+    last_ok = robot_connected()
+    if last_ok and not _start_snap_done:
+        try:
+            reset_sim_to_real()
+            _start_snap_done = True
+            print("startup snap sim = real")
+        except Exception as e:
+            print("startup snap failed", e)
+    miss = 0
     while not stop_flag.is_set():
         try:
+            if not robot_connected():
+                if last_ok:
+                    print("robot dropped — hiding real arm")
+                    set_hide_real_robot(True)
+                    last_ok = False
+                    try:
+                        wp.refresh_pose_markers()
+                    except Exception:
+                        pass
+                miss += 1
+                if miss >= 8:
+                    miss = 0
+                    if robot is not None and robot.reconnect():
+                        print("robot reconnected")
+                        set_hide_real_robot(False)
+                        if not _start_snap_done:
+                            try:
+                                reset_sim_to_real()
+                                _start_snap_done = True
+                                print("startup snap sim = real")
+                            except Exception as e:
+                                print("startup snap failed", e)
+                        try:
+                            import path_bake as bake
+                            bake.clear_bake()
+                            print("bake cleared after reconnect")
+                        except Exception as e:
+                            print("bake clear failed", e)
+                        try:
+                            wp.refresh_pose_markers()
+                        except Exception:
+                            pass
+                        last_ok = True
+                time.sleep(0.25)
+                continue
+            miss = 0
+            if not last_ok:
+                set_hide_real_robot(False)
+                if not _start_snap_done:
+                    try:
+                        reset_sim_to_real()
+                        _start_snap_done = True
+                        print("startup snap sim = real")
+                    except Exception as e:
+                        print("startup snap failed", e)
+                try:
+                    import path_bake as bake
+                    bake.clear_bake()
+                    print("bake cleared after reconnect")
+                except Exception as e:
+                    print("bake clear failed", e)
+                try:
+                    wp.refresh_pose_markers()
+                except Exception:
+                    pass
+                last_ok = True
             current_q = _flat(robot.GetJoints(), 6)
-            robot_actual.angle_vector(np.array(current_q, dtype=float))
+            if robot_actual is not None and current_q is not None:
+                robot_actual.angle_vector(np.array(current_q, dtype=float))
             try:
                 ee, _ = _ee_frame(robot_actual)
                 _note_motion("real", current_q, ee)
@@ -1636,6 +2163,7 @@ def real_robot_updater():
             poll_hold_move()
         except Exception as e:
             print("Real pose update error:", e)
+            last_ok = False
         time.sleep(0.05)
 
 
@@ -1931,9 +2459,14 @@ def tick_simulation(dt=None):
                 _pb["wall"] = now
                 _apply_q_at_t(0.0)
         else:
-            _pb["paused"] = True
-            _pb["finish_at"] = time.time() + 1.0
-            _pb["wall"] = None
+            try:
+                import waypoints as _wp
+                if hasattr(_wp, "stop_all_camera_records"):
+                    _wp.stop_all_camera_records()
+            except Exception:
+                pass
+            exit_simulation_mode()
+            print("sim path finished")
 
 
 def sim_status():
@@ -2190,6 +2723,11 @@ def upload_real_path(loops=0, delay=0.0):
     return True
 
 
+def plan_joint_path(loops=0, delay=0.0):
+    """UI/API name: plan + upload type-2 buffer only."""
+    return upload_real_path(loops=loops, delay=delay)
+
+
 def _start_path_buffer():
     if robot is None:
         return None
@@ -2416,14 +2954,24 @@ def tick_real_path():
                 _start_path_buffer()
         else:
             hold = pe + preroll
+            rec_hold = 0.0
             try:
                 import waypoints as _wp
                 if hasattr(_wp, "last_camera_rec_t"):
-                    hold = max(hold, float(_wp.last_camera_rec_t() or 0.0))
+                    rec_hold = float(_wp.last_camera_rec_t() or 0.0)
+                    if rec_hold > 1e-6:
+                        hold = max(hold, rec_hold)
             except Exception:
                 pass
             _rp["t_end"] = hold
-            if raw_t >= hold - 1e-6:
+            exec_done = False
+            if _rp.get("motion_started") and robot is not None:
+                try:
+                    exec_done = int(robot.mc.getExecId()) == -1
+                except Exception:
+                    exec_done = False
+            if raw_t >= hold - 1e-6 or (exec_done and rec_hold <= 1e-6) or (pe > 1e-6 and path_t >= pe - 1e-6 and rec_hold <= 1e-6):
+                print("real path finished", "t", round(raw_t, 3), "pe", round(pe, 3), "exec_done", exec_done)
                 stop_real_path()
 
 
@@ -2495,6 +3043,9 @@ def real_path_status():
         "locked": edits_locked(),
         "start_q": _first_path_q(),
         "speed": HOLD_MOVE_SPEED,
+        "connected": robot_connected(),
+        "ik_pref": IK_PREF,
+        "ik_ok": ik_allowed(),
     }
 
 
@@ -2664,6 +3215,7 @@ def get_selected_props():
         q = _flat(robot_sim.angle_vector(), 6) if robot_sim is not None else [0.0] * 6
         out.update({
             "kind": "sim",
+            "id": "sim",
             "name": "Sim cursor",
             "editable": True,
             "ik": [float(v) for v in ik],
@@ -2671,6 +3223,7 @@ def get_selected_props():
             "lin_mps": float(_motion["sim"]["lin_mps"]),
             "qdot": [float(v) for v in _motion["sim"]["qdot"]],
             "track": track_status(),
+            "camera": dict(getattr(wp, "sim_camera", None) or {}) if getattr(wp, "sim_camera", None) else None,
         })
         return out
     if hasattr(wp, "selected_object_props"):

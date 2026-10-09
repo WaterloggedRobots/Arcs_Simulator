@@ -702,11 +702,9 @@ def grab_jpeg(index=None, prefer_ptp=None):
     else:
         use_ptp = _prefer_ptp if prefer_ptp is None else bool(prefer_ptp)
     if use_ptp:
-        steps = [grab_via_usb, lambda: grab_via_opencv(index=index), grab_via_control]
-    elif index is not None:
-        steps = [lambda: grab_via_opencv(index=int(index)), grab_via_usb, grab_via_control]
+        steps = [grab_via_usb, grab_via_control]
     else:
-        steps = [grab_via_opencv, grab_via_usb, grab_via_control]
+        steps = [grab_via_usb, grab_via_control]
     for fn in steps:
         try:
             blob = fn()
