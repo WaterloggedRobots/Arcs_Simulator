@@ -3842,6 +3842,21 @@ def _read_stl_arrays(path):
     return verts, faces
 
 
+def _fit_import_mesh(verts):
+    """Center an imported mesh and bring mm-scale CAD down to the robot scene."""
+    v = np.asarray(verts, dtype=np.float32)
+    if v.size == 0:
+        return v
+    lo = v.min(axis=0)
+    hi = v.max(axis=0)
+    center = 0.5 * (lo + hi)
+    v = v - center
+    span = float(np.max(hi - lo))
+    if span > 2.0:
+        v = v * (0.25 / span)
+    return v.astype(np.float32)
+
+
 def _load_mesh_arrays(path):
     if not path:
         return None, None, "no mesh path"
@@ -3860,7 +3875,7 @@ def _load_mesh_arrays(path):
             v = np.asarray(loaded.vertices, dtype=np.float32)
             f = np.asarray(loaded.faces, dtype=np.uint32)
             if len(v) and len(f):
-                return v, f, None
+                return _fit_import_mesh(v), f, None
         err = "trimesh produced no faces"
     except Exception as e:
         err = str(e)
@@ -3868,7 +3883,7 @@ def _load_mesh_arrays(path):
         try:
             v, f = _read_stl_arrays(p)
             if v is not None and f is not None and len(v) and len(f):
-                return v, f, None
+                return _fit_import_mesh(v), f, None
         except Exception as e:
             err = str(e)
     return None, None, err or ("cannot load %s" % suffix)

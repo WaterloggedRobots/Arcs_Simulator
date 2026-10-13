@@ -1167,7 +1167,13 @@ def api_track_object():
     data = request.get_json(silent=True) or {}
     st = {}
     if hasattr(rr, "set_track_object"):
-        st = rr.set_track_object(data) or {}
+        st = rr.set_track_object(
+            on=data.get("on"),
+            name=data.get("name"),
+            pick=data.get("pick"),
+            added=data.get("added"),
+            offset=data.get("offset"),
+        ) or {}
     return jsonify({"ok": True, "track": st})
 
 

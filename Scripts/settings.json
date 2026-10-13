@@ -36,7 +36,7 @@
   "auto_sample": false,
   "burner_duration": 2,
   "grid_spacing": 0.01,
-  "snap_to_grid": false,
+  "snap_to_grid": true,
   "stored_points": [],
   "stored_paths": [
     {

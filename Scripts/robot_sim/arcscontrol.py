@@ -5,7 +5,7 @@ import threading
 import numpy as np
 import pyaubo_sdk
 
-robot_ip = "192.168.2.124"#"192.168.1.102"##"192.168.0.101"
+robot_ip ="192.168.2.124"#"192.168.0.101""192.168.1.102"
 robot_port = 30004
 
 class RobotArcs:
