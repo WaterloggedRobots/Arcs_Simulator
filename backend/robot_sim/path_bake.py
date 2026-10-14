@@ -1590,6 +1590,27 @@ def _match_end_hop_times(seg, t0, t1):
     sms[-2]["t"] = max(t_last, lo) if lo < t1 else t_last
 
 
+def _arc_fracs(samples):
+    """Distance-along-path fraction (0..1) for each sample, or None.
+
+    Ease / custom profiles map progress to time; progress must be distance,
+    not the Bezier parameter u, or a span can be fast mid-curve.
+    """
+    try:
+        pts = [np.asarray(sm.get("pos"), dtype=float).reshape(-1)[:3] for sm in samples]
+    except Exception:
+        return None
+    if len(pts) < 2 or any(p.shape != (3,) for p in pts):
+        return None
+    cum = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        cum.append(cum[-1] + float(np.linalg.norm(b - a)))
+    total = cum[-1]
+    if total < 1e-6:
+        return None
+    return [c / total for c in cum]
+
+
 def _apply_seg_time_profile(seg, t0, t1):
     samples = seg.get("samples") or []
     if len(samples) < 2:
@@ -1606,13 +1627,14 @@ def _apply_seg_time_profile(seg, t0, t1):
         sm.pop("t_lock", None)
     if seg.get("dwell") or n < 2:
         return
+    arc = _arc_fracs(samples)
     if mode == "custom":
         rec = timeline.get_custom_curve(int(seg.get("i0") or 0))
         c1, c2 = rec["c1"], rec["c2"]
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
                 continue
-            u = sm.get("u")
+            u = arc[k] if arc else sm.get("u")
             if u is None:
                 u = float(k) / float(n)
             s = timeline._s_for_progress(c1, c2, float(u))
@@ -1625,7 +1647,7 @@ def _apply_seg_time_profile(seg, t0, t1):
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
                 continue
-            u = sm.get("u")
+            u = arc[k] if arc else sm.get("u")
             if u is None:
                 u = float(k) / float(n)
             sm["t"] = t0 + span * timeline._ease_time_frac(mode, float(u))
@@ -1684,6 +1706,9 @@ def joint_angle_deltas(q0, q1):
 
 
 ACC_WINDOW_S = 0.12
+# Per-hop speed check margins (fraction of the joint limit).
+HOP_VEL_SLOP = 1.10
+HOP_ACC_SLOP = 1.50
 
 
 def _unwrap_q_series(qs):
@@ -1890,26 +1915,20 @@ def _timing_points():
 
 
 def evaluate_timing(force=False):
-    """Score every hop for display. Limit pass/fail is keyframe-to-keyframe only.
+    """Score every hop and fail a span when any hop in it is over the limits.
 
-    A yellow span does not block later spans. Sim / run still allowed.
+    A hop fails on its own joint rate (dq/dt above limit * HOP_VEL_SLOP)
+    or on the windowed joint acceleration (above limit * HOP_ACC_SLOP).
+    A too-fast span does not block scoring of later spans.
     """
     if not force and not _speed_valid:
         return False
     timeline.pin_key_times()
     wmax, amax = _joint_wmax()
     any_fast = False
-    blocked = False
     prev_speeds = None
     series = _timing_points()
     for i, seg in enumerate(segments):
-        if blocked:
-            if seg.get("status") == "ok":
-                seg["timing"] = "uncalc"
-                for sm in (seg.get("samples") or []):
-                    if sm.get("timing") != "too_fast":
-                        sm["timing"] = "uncalc"
-            continue
         if seg.get("status") != "ok":
             if seg.get("status") == "fail":
                 seg["timing"] = "fail"
@@ -1932,15 +1951,29 @@ def evaluate_timing(force=False):
                 kin_speeds=kin_w,
             )
             prev_speeds = rec.get("speeds")
-            # Per-sample numbers only — do not fail the hop.
-            rec["over"] = False
-            rec["status"] = "ok"
-            rec["over_vel"] = False
-            rec["over_acc"] = False
+            # Hop pass/fail: raw dq/dt per joint (what the arm actually has to
+            # do between these two samples) and the windowed acceleration fit.
+            # Margins keep the 0.01 s time snap and fit noise from false-flagging.
+            hop_dt = max(1e-6, float(b.get("t") or 0.0) - float(a.get("t") or 0.0))
+            raw_w = [d / hop_dt for d in rec.get("deltas") or []]
+            fault_vel = [j for j, v in enumerate(raw_w) if v > wmax[j] * HOP_VEL_SLOP]
+            fault_acc = [] if rec.get("dwell") else [
+                j for j, v in enumerate(kin_a or []) if v > amax[j] * HOP_ACC_SLOP
+            ]
+            rec["hop_w"] = raw_w
+            rec["over_vel"] = bool(fault_vel)
+            rec["over_acc"] = bool(fault_acc)
             rec["over_time"] = False
+            rec["fault_vel"] = fault_vel
+            rec["fault_acc"] = fault_acc
+            rec["over"] = bool(fault_vel or fault_acc)
+            rec["status"] = "too_fast" if rec["over"] else "ok"
             seg["micro"].append(rec)
-            a["timing"] = "ok"
-            b["timing"] = "ok"
+            if a is samples[0]:
+                a["timing"] = "ok"
+            if rec["over"]:
+                a["timing"] = "too_fast"
+            b["timing"] = rec["status"]
             b["speed"] = rec["speed"]
             b["accel"] = rec["acc"]
             b["limit"] = rec["limit"]
@@ -1970,18 +2003,23 @@ def evaluate_timing(force=False):
         if lin < 0.002 and max(deltas) < 0.02:
             span["over_vel"] = False
             span["over_time"] = False
-        span["over"] = bool(span["over_vel"] or span["over_time"])
+        hop_vel = any(h.get("over_vel") for h in seg["micro"])
+        hop_acc = any(h.get("over_acc") for h in seg["micro"])
+        span["over_vel"] = bool(span["over_vel"] or hop_vel)
+        span["over_acc"] = bool(hop_acc)
+        span["over"] = bool(span["over_vel"] or span["over_acc"] or span["over_time"])
         if span.get("over"):
             seg["timing"] = "too_fast"
             any_fast = True
             for sm in samples:
                 sm["timing"] = "too_fast"
-            for hop in seg["micro"]:
-                hop["over"] = True
-                hop["status"] = "too_fast"
-                hop["over_vel"] = span.get("over_vel")
-                hop["over_acc"] = span.get("over_acc")
-                hop["over_time"] = span.get("over_time")
+            if not (hop_vel or hop_acc):
+                # Only the keyframe-to-keyframe mean failed: mark the whole span.
+                for hop in seg["micro"]:
+                    hop["over"] = True
+                    hop["status"] = "too_fast"
+                    hop["over_vel"] = span.get("over_vel")
+                    hop["over_time"] = span.get("over_time")
         elif _seg_force_fk(i) or seg.get("force_fk"):
             span["status"] = "fk"
             for hop in seg["micro"]:
@@ -1999,12 +2037,10 @@ def write_overspeed_report(path=None):
     wmax, amax = _joint_wmax()
     names = _JOINT_NAMES
     rows = []
+    # Same records evaluate_timing scored, so the report agrees with the
+    # span colors (an all-ok bake writes 0 rows).
     for si, seg in enumerate(segments):
-        samples = [sm for sm in (seg.get("samples") or []) if sm.get("q") is not None]
-        prev = None
-        for k, (a, b) in enumerate(zip(samples, samples[1:])):
-            rec = _hop_metrics(a, b, wmax, amax, prev_speeds=prev)
-            prev = rec.get("speeds")
+        for k, rec in enumerate(seg.get("micro") or []):
             if not rec.get("over"):
                 continue
             fv = rec.get("fault_vel") or []
@@ -2023,7 +2059,7 @@ def write_overspeed_report(path=None):
                 "over_acc": rec.get("over_acc"),
                 "over_time": rec.get("over_time"),
                 "fault_vel_joints": ",".join(names[j] for j in fv),
-                "fault_vel_rad_s": ",".join("%.4f" % rec["speeds"][j] for j in fv),
+                "fault_vel_rad_s": ",".join("%.4f" % (rec.get("hop_w") or rec["speeds"])[j] for j in fv),
                 "max_vel_rad_s": ",".join("%.4f" % (wmax[j] if j < len(wmax) else wmax[-1]) for j in fv),
                 "fault_acc_joints": ",".join(names[j] for j in fa),
                 "fault_acc_rad_s2": ",".join("%.4f" % rec["accs"][j] for j in fa),
@@ -2058,6 +2094,11 @@ def write_overspeed_report(path=None):
         xlsx_path = None
     print("overspeed report", csv_path, "rows", len(rows))
     return {"ok": True, "csv": str(csv_path), "xlsx": str(xlsx_path) if xlsx_path else None, "rows": len(rows)}
+
+
+def export_overspeed():
+    """/api/speed_export: rewrite the report from the current scored bake."""
+    return write_overspeed_report()
 
 
 def _first_overspeed_t():

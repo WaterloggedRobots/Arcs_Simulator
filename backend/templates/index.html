@@ -4661,9 +4661,16 @@
     function clearSpeedGraph() { spdSim = []; spdReal = []; spdMax = 0.25; }
     function pushSpeedSample(t, simV, realV) {
       const s = Number(simV || 0), r = Number(realV || 0);
-      spdSim.push({ t: Number(t || 0), v: s });
-      spdReal.push({ t: Number(t || 0), v: r });
-      spdMax = Math.max(spdMax, s, r, 0.05);
+      const tn = Number(t || 0);
+      spdSim.push({ t: tn, v: s });
+      spdReal.push({ t: tn, v: r });
+      /* Scale to the recent window, not the all-time peak, so the axis comes
+         back down after one fast reading. */
+      const SPD_WIN_S = 3;
+      let m = 0.05;
+      for (let i = spdSim.length - 1; i >= 0 && tn - spdSim[i].t <= SPD_WIN_S; i--) m = Math.max(m, spdSim[i].v);
+      for (let i = spdReal.length - 1; i >= 0 && tn - spdReal[i].t <= SPD_WIN_S; i--) m = Math.max(m, spdReal[i].v);
+      spdMax = m;
     }
     function renderSpeedGraph() {
       const cv = document.getElementById("spdCanvas");
@@ -4898,7 +4905,7 @@
         return;
       }
       const row = e.target.closest("[data-oid]");
-      if (!row) return;
+      if (!row) { deselectGui(); refresh(); return; }
       fetch("/api/select_object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5239,7 +5246,7 @@
         return;
       }
       const row = e.target.closest("[data-wi]");
-      if (!row) return;
+      if (!row) { deselectGui(); refresh(); return; }
       const i = Number(row.getAttribute("data-wi"));
       fetch("/api/select_waypoint", {
         method: "POST",
@@ -6100,6 +6107,7 @@
           wrap.classList.toggle("simple", !pathWinOn);
           wrap.classList.toggle("advanced", pathWinOn);
         }
+        if (pathWinOn) syncPathWindow();
       }
       if (s && s.dev_mode != null) {
         applyDevMode(!!s.dev_mode);
@@ -7239,10 +7247,20 @@
       try {
         const r = await fetch("/api/clock");
         const d = await r.json();
+        const simWas = !!simState.active;
         if (d.sim) simState = mergeState(simState, d.sim);
         if (d.real) realState = mergeState(realState, d.real);
         if (d.sim && d.sim.active === false) simState.active = false;
         if (d.real && d.real.active === false) realState.active = false;
+        if (simWas && !simState.active && !realState.active) {
+          /* Sim finished on its own: the server put the ghost and its
+             playhead back where play started, so match Stop here. */
+          if (isFinite(savedPlayhead)) playhead = savedPlayhead;
+          syncPlayButtons();
+          renderTimeline();
+          refresh();
+          return;
+        }
         syncPlayButtons();
         const clockPlaying = !!(
           (simState.active && !simState.paused) ||

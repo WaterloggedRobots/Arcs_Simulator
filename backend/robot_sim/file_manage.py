@@ -731,11 +731,9 @@ def apply_loaded_doc(data):
     if bake.import_raw_json:
         for w in getattr(wp, "waypoints", []) or []:
             w["force_fk"] = False
-        try:
-            import webui
-            webui.save_settings({"snap_to_grid": False})
-        except Exception as e:
-            print("json import snap off failed", e)
+        # Raw JSON times are off-grid: turn snap off for this session only.
+        # Do not write it to settings.json, which is the user's preference.
+        wp.snap_to_grid = False
     if hasattr(wp, "draw_path"):
         wp.draw_path()
     baked = data.get("bake")

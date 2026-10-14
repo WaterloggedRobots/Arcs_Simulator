@@ -365,10 +365,11 @@ def apply_custom_transition(idx, c1, c2):
     t0 = float(samples[0].get("t") or 0.0)
     t1 = float(samples[-1].get("t") or t0)
     n = max(1, len(samples) - 1)
+    arc = bake._arc_fracs(samples)
     for k, sm in enumerate(samples):
         if k == 0 or k == len(samples) - 1:
             continue
-        u = sm.get("u")
+        u = arc[k] if arc else sm.get("u")
         if u is None:
             u = float(k) / float(n)
         s = _s_for_progress(c1, c2, float(u))
@@ -684,7 +685,7 @@ def _node_color_map():
     """
     White = no IK. Yellow = IK, speed not checked yet.
     Orange (too_fast) = this hop failed speed. Green = speed passed.
-    No green after yellow/orange. Hop color matches the hop, not a default.
+    Hop color matches the hop, not a default.
     """
     key_st = {}
     sample_st = {}
@@ -729,11 +730,10 @@ def _node_color_map():
                 return
             sample_st[ref] = st
 
-    blocked = False
+    # Each span keeps its own state: a too-fast span does not repaint later
+    # spans yellow (yellow means "not checked yet").
     for i, seg in enumerate(bake.segments):
-        st = "uncalc" if blocked else (_seg_ui_state(seg) or "unbaked")
-        if blocked and seg.get("status") == "ok":
-            st = "uncalc"
+        st = _seg_ui_state(seg) or "unbaked"
         sms = seg.get("samples") or []
         for k, sm in enumerate(sms):
             if k == 0 or k == len(sms) - 1:
@@ -758,8 +758,6 @@ def _node_color_map():
                 key_st[i + 1] = "ok"
             elif st == "uncalc":
                 key_st[i + 1] = "uncalc"
-        if st == "too_fast":
-            blocked = True
     return key_st, sample_st
 
 

@@ -147,6 +147,20 @@ def InitViewer():
         rr.set_hide_real_robot(True)
 
 
+_tick_err_last = {}
+
+
+def _report_tick_error(name, err):
+    """Print a viewer-loop error with traceback, at most once per 5 s per tick."""
+    now = time.time()
+    if now - _tick_err_last.get(name, 0.0) < 5.0:
+        return
+    _tick_err_last[name] = now
+    import traceback
+    print("viewer loop:", name, "failed:", err)
+    traceback.print_exc()
+
+
 def start_viewer():
     global viewer, server, VISER_PORT, playhead_t
     _silence_browser_opens()
@@ -368,12 +382,16 @@ def start_viewer():
                 wp.snap_global_gizmos_idle()
             if not playing and not real_playing and hasattr(wp, "flush_idle_path_rebuild"):
                 wp.flush_idle_path_rebuild()
-            if hasattr(rr, "tick_simulation"):
-                rr.tick_simulation()
-            if hasattr(rr, "tick_real_path"):
-                rr.tick_real_path()
-            if hasattr(rr, "tick_track_object"):
-                rr.tick_track_object()
+            # One failing tick must not kill this loop: nothing else would
+            # then end a finished sim/run, follow the path window or redraw.
+            for _tick in ("tick_simulation", "tick_real_path", "tick_track_object"):
+                fn = getattr(rr, _tick, None)
+                if fn is None:
+                    continue
+                try:
+                    fn()
+                except Exception as e:
+                    _report_tick_error(_tick, e)
             try:
                 t_win = playhead_t
                 st = rr.sim_status() if hasattr(rr, "sim_status") else {}
@@ -399,8 +417,11 @@ def start_viewer():
                     pass
                 time.sleep(0.008)
             else:
-                rr.update_cursors()
-                viewer.redraw()
+                try:
+                    rr.update_cursors()
+                    viewer.redraw()
+                except Exception as e:
+                    _report_tick_error("update_cursors", e)
                 time.sleep(0.03)
     except KeyboardInterrupt:
         print("Shutting down...")
