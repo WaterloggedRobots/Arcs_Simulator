@@ -850,8 +850,6 @@ def api_file_new():
     data = request.get_json(silent=True) or {}
     if not data.get("force") and not fman.scene_is_empty():
         return jsonify({"ok": False, "needs_confirm": True})
-    if hasattr(viewer_main, "file_requests"):
-        viewer_main.file_requests.append(("new", None))
     out = fman.new_project()
     return jsonify({**out, "session": fman.session_info()})
 

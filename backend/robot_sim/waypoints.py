@@ -2926,6 +2926,15 @@ def _remove_wp_handles(wp):
                     ctrl._gizmo.remove()
                 except Exception:
                     pass
+    # Node paths are unique per waypoint now, so drop the empty parent frame
+    # too instead of leaving one behind per deleted waypoint.
+    node = wp.get("node")
+    remove_by_name = getattr(getattr(server, "scene", None), "remove_by_name", None)
+    if node and callable(remove_by_name):
+        try:
+            remove_by_name(node)
+        except Exception:
+            pass
 
 
 def _clear_scene_only():

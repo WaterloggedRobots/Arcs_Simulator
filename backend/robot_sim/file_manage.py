@@ -922,11 +922,28 @@ def load_from_path(path, recovered=False):
 
 
 def new_project():
-    if hasattr(wp, "clear_waypoints"):
-        wp.clear_waypoints()
-    if hasattr(wp, "clear_scene_objects"):
-        wp.clear_scene_objects()
+    # One full reset, on this thread only. /api/file/new used to also queue
+    # reset_document on the viewer thread, so both cleared the same lists at
+    # once and a swallowed error could leave objects in the scene.
     wp.sim_camera = None
+    if hasattr(wp, "reset_document"):
+        wp.reset_document()
+    else:
+        if hasattr(wp, "clear_waypoints"):
+            wp.clear_waypoints()
+        if hasattr(wp, "clear_scene_objects"):
+            wp.clear_scene_objects()
+    try:
+        import robot_runtime as rr
+        if hasattr(rr, "set_track_object"):
+            rr.set_track_object(on=False, name="", pick=False, added=False)
+    except Exception as e:
+        print("new: track reset failed", e)
+    if hasattr(wp, "refresh_sim_camera_viz"):
+        try:
+            wp.refresh_sim_camera_viz()
+        except Exception:
+            pass
     wp.extra_tracks = []
     if hasattr(bake, "invalidate_from"):
         bake.invalidate_from(0, drop_all=True)
