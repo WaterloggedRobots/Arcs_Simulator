@@ -326,7 +326,7 @@ def _usb_backend():
                 return be
         except Exception:
             pass
-    hint = "Place libusb-1.0.dll in Scripts/cameras (or next to webui.py)."
+    hint = "Place libusb-1.0.dll in backend/cameras (or next to webui.py)."
     if found:
         hint = "Found %s but pyusb could not load it." % found[0]
     raise RuntimeError("No USB backend (libusb). " + hint)
@@ -515,7 +515,12 @@ def _forced_cv_index():
             pass
     try:
         import json
-        data = json.loads((_roots()[1] / "config" / "settings.json").read_text(encoding="utf-8"))
+        try:
+            import app_paths
+            settings_path = app_paths.SETTINGS_PATH
+        except ImportError:  # run standalone from backend/cameras
+            settings_path = _roots()[1].parent / "user_files" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         if data.get("sony_opencv_index") is not None:
             return int(data["sony_opencv_index"])
     except Exception:

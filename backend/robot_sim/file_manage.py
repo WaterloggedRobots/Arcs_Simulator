@@ -31,7 +31,7 @@ def session_info():
 
 
 def autosave_path():
-    return app_paths.ensure_dir(app_paths.CONFIG_DIR) / TEMP_NAME
+    return app_paths.ensure_dir(app_paths.STATE_DIR) / TEMP_NAME
 
 
 def _stable_doc(data):

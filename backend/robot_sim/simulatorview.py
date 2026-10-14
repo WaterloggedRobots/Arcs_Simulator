@@ -1400,7 +1400,7 @@ def _resolve_cv_script(cam):
     path = str(cam.get("script") or "").strip()
     if path and os.path.isfile(path):
         return path
-    moved = app_paths.relocate(path, app_paths.CAM_SCRIPTS_DIR)
+    moved = app_paths.relocate(path, app_paths.CAM_SCRIPTS_DIR, app_paths.EXAMPLE_CAM_SCRIPTS_DIR)
     if path and os.path.isfile(moved):
         cam["script"] = moved
         return moved

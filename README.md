@@ -324,23 +324,15 @@ The following are known to be rough or incomplete at this stage:
 
 ## Project layout
 
-Run the app with `python Scripts/webui.py`. Every file the app reads or writes is resolved in `Scripts/app_paths.py`, so it works from any working directory.
+Run the app with `python backend/webui.py`. Every file the app reads or writes is resolved in `backend/app_paths.py`, so it works from any working directory. The tree is split three ways with a future Electron build in mind:
 
 ```
-docs/                     Function List, slides, SDK manual, bug log, export format, demo videos
-archive/                  old snapshots kept for reference
-CameraRemoteCommand-2.00.02/   Sony PTP SDK (sibling of Scripts/, used by the Sony camera)
-Scripts/
+backend/                  everything needed to run the app
   webui.py                Flask web UI (entry point)
-  app_paths.py            folder constants (config, user data, cameras)
+  app_paths.py            folder constants
   templates/index.html    the page
-  config/                 settings.json (settings, global saved points/paths), temp.json (autosave)
-  user_data/
-    paths/                saved .arcspath projects
-    exports/              export.json, bake_overspeed.csv / .xlsx
-    recordings/           camera recordings
-    imported_meshes/      meshes added with Import mesh
-  cameras/                sony_liveview.py, libusb-1.0.dll, cam_scripts/ (OpenCV/RealSense), models/ (YOLO)
+  cameras/                sony_liveview.py, libusb-1.0.dll (Sony camera support)
+  state/temp.json         autosave (internal, not for hand editing)
   robot_sim/
     robot_sim_run.py      Viser viewer loop and request queues
     robot_runtime.py      sim/real robot state, IK, Simulate / Run, path buffer
@@ -351,6 +343,19 @@ Scripts/
     file_manage.py        save / open / export
     arcscontrol.py        AUBO SDK wrapper
     aubo-i5-full-master/  robot URDFs and meshes
+user_files/               ships with the app, editable by the user
+  settings.json           settings, global saved points and paths
+  cam_scripts/            OpenCV / RealSense scripts added from the GUI
+  paths/                  saved .arcspath projects
+  exports/                export.json, bake_overspeed.csv / .xlsx
+  recordings/             camera recordings
+  imported_meshes/        meshes added with Import mesh
+docs/                     not needed at runtime
+  examples/cam_scripts/   example camera scripts (YOLO / RealSense), models/ holds yolov8n.pt
+  CameraRemoteCommand-2.00.02/   Sony PTP SDK reference and examples
+  archive/, demo/, export-format/, Function List, slides, SDK manual, bug log
 ```
+
+A packaged build can move the writable folders with the `ARCS_USER_DIR` (for `user_files`) and `ARCS_STATE_DIR` (for `backend/state`) environment variables.
 
 Functions moved into `simulatorview.py` and `timeline.py` are still reachable through their old module (for example `wp.add_scene_object` or `bake.pin_key_times`), so existing calls keep working.
