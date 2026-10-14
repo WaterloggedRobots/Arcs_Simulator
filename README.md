@@ -29,6 +29,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
 - [Miscellaneous features](#miscellaneous-features)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
+- [Project layout](#project-layout)
 
 ---
 
@@ -319,3 +320,37 @@ The following are known to be rough or incomplete at this stage:
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
 
+---
+
+## Project layout
+
+Run the app with `python Scripts/webui.py`. Every file the app reads or writes is resolved in `Scripts/app_paths.py`, so it works from any working directory.
+
+```
+docs/                     Function List, slides, SDK manual, bug log, export format, demo videos
+archive/                  old snapshots kept for reference
+CameraRemoteCommand-2.00.02/   Sony PTP SDK (sibling of Scripts/, used by the Sony camera)
+Scripts/
+  webui.py                Flask web UI (entry point)
+  app_paths.py            folder constants (config, user data, cameras)
+  templates/index.html    the page
+  config/                 settings.json (settings, global saved points/paths), temp.json (autosave)
+  user_data/
+    paths/                saved .arcspath projects
+    exports/              export.json, bake_overspeed.csv / .xlsx
+    recordings/           camera recordings
+    imported_meshes/      meshes added with Import mesh
+  cameras/                sony_liveview.py, libusb-1.0.dll, cam_scripts/ (OpenCV/RealSense), models/ (YOLO)
+  robot_sim/
+    robot_sim_run.py      Viser viewer loop and request queues
+    robot_runtime.py      sim/real robot state, IK, Simulate / Run, path buffer
+    waypoints.py          waypoints, Bezier handles, bookmarked points, saved paths, selection, undo/redo
+    simulatorview.py      other scene objects: primitives, meshes, parenting, measure, cameras
+    path_bake.py          path sampling, IK and speed checks, baking
+    timeline.py           timeline control: keyframe drag/snap, sample times, transitions, copy/paste
+    file_manage.py        save / open / export
+    arcscontrol.py        AUBO SDK wrapper
+    aubo-i5-full-master/  robot URDFs and meshes
+```
+
+Functions moved into `simulatorview.py` and `timeline.py` are still reachable through their old module (for example `wp.add_scene_object` or `bake.pin_key_times`), so existing calls keep working.

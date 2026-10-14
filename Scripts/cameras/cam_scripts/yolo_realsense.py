@@ -23,6 +23,7 @@ def _start():
     if _started:
         return
     import pyrealsense2 as rs
+    from pathlib import Path
     from ultralytics import YOLO
 
     _pipe = rs.pipeline()
@@ -31,7 +32,7 @@ def _start():
     cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
     _pipe.start(cfg)
     _align = rs.align(rs.stream.color)
-    _model = YOLO("yolov8n.pt")
+    _model = YOLO(str(Path(__file__).resolve().parent.parent / "models" / "yolov8n.pt"))
     _started = True
 
 

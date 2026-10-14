@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 import numpy as np
 
+import app_paths
 import waypoints as wp
 import path_bake as bake
 import robot_runtime as rr
@@ -30,7 +31,7 @@ def session_info():
 
 
 def autosave_path():
-    return Path(__file__).resolve().parent / TEMP_NAME
+    return app_paths.ensure_dir(app_paths.CONFIG_DIR) / TEMP_NAME
 
 
 def _stable_doc(data):
@@ -457,7 +458,7 @@ def write_export_json(path=None, title=None):
     data["objects"] = _dump_scene_objects()
     stem = _safe_stem(title or data.get("title"), "export")
     data["title"] = stem
-    dest = Path(path) if path else Path(__file__).resolve().parent / (stem + ".json")
+    dest = Path(path) if path else app_paths.ensure_dir(app_paths.EXPORTS_DIR) / (stem + ".json")
     dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print("exported", dest, "pts", data["total_pts"])
     return {"ok": True, "path": str(dest), "count": data["total_pts"], "doc": data, "title": stem}
@@ -768,7 +769,7 @@ def apply_loaded_doc(data):
 
 
 def pick_save_path(title=None, default=None):
-    start = default or SESSION.get("path") or str(Path(__file__).resolve().parent / ((title or "path") + ".arcspath"))
+    start = default or SESSION.get("path") or str(app_paths.ensure_dir(app_paths.PATHS_DIR) / ((title or "path") + ".arcspath"))
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -790,7 +791,7 @@ def pick_save_path(title=None, default=None):
 
 
 def pick_open_path():
-    start = SESSION.get("path") or str(Path(__file__).resolve().parent)
+    start = SESSION.get("path") or str(app_paths.ensure_dir(app_paths.PATHS_DIR))
     try:
         import tkinter as tk
         from tkinter import filedialog

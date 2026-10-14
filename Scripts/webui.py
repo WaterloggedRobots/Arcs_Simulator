@@ -15,7 +15,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 _PARENT = _ROOT.parent
 _SIM = _ROOT / "robot_sim"
-for _p in (_SIM, _ROOT, _PARENT):
+_CAMERAS = _ROOT / "cameras"
+for _p in (_CAMERAS, _SIM, _ROOT, _PARENT):
     s = str(_p)
     if _p.is_dir() and s not in sys.path:
         sys.path.insert(0, s)
@@ -23,14 +24,16 @@ for _p in (_SIM, _ROOT, _PARENT):
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.serving import WSGIRequestHandler
 
+import app_paths
 import file_manage as fman
 import path_bake as bake
 import robot_runtime as rr
 import robot_sim_run as viewer_main
+import simulatorview as sv
 import waypoints as wp
 
 ROOT = Path(__file__).resolve().parent
-SETTINGS_PATH = ROOT / "settings.json"
+SETTINGS_PATH = app_paths.SETTINGS_PATH
 SETTINGS_DEFAULT = {
     "joint_vel_deg": [223.0, 223.0, 223.0, 267.0, 267.0, 267.0],
     "joint_acc_deg": [496.0, 496.0, 496.0, 594.0, 594.0, 594.0],
@@ -122,6 +125,7 @@ def load_settings():
 def save_settings(data):
     cur = load_settings()
     cur.update(data or {})
+    app_paths.ensure_dir(SETTINGS_PATH.parent)
     SETTINGS_PATH.write_text(json.dumps(cur, indent=2), encoding="utf-8")
     return cur
 
@@ -210,7 +214,7 @@ def _scene_objects_payload():
             "mesh_error": obj.get("mesh_error"),
             "camera": obj.get("camera"),
             "cam_type": str(((obj.get("camera") or {}).get("type") or "sim")),
-            "has_frame": bool(obj.get("id") in getattr(wp, "_cam_frame_jpeg", {})),
+            "has_frame": bool(obj.get("id") in getattr(sv, "_cam_frame_jpeg", {})),
             "cam_error": obj.get("cam_error") or ((obj.get("camera") or {}).get("error")),
         })
     return rows
@@ -422,8 +426,7 @@ def api_settings():
 
 @app.route("/api/import_mesh", methods=["POST"])
 def api_import_mesh():
-    dest_dir = ROOT / "imported_meshes"
-    dest_dir.mkdir(exist_ok=True)
+    dest_dir = app_paths.ensure_dir(app_paths.MESHES_DIR)
     path = None
     name = None
     if request.files.get("file"):
@@ -1221,8 +1224,7 @@ def api_camera_state():
 
 @app.route("/api/cam_script", methods=["POST"])
 def api_cam_script():
-    dest_dir = ROOT / "cam_scripts"
-    dest_dir.mkdir(exist_ok=True)
+    dest_dir = app_paths.ensure_dir(app_paths.CAM_SCRIPTS_DIR)
     f = request.files.get("file")
     oid = request.form.get("id") or (request.get_json(silent=True) or {}).get("id")
     if not f or not f.filename:
@@ -1262,7 +1264,7 @@ def api_cam_click():
 def api_cam_frame():
     oid = request.args.get("id")
     blob = None
-    store = getattr(wp, "_cam_frame_jpeg", None)
+    store = getattr(sv, "_cam_frame_jpeg", None)
     if isinstance(store, dict):
         if oid:
             blob = store.get(oid)
@@ -1296,7 +1298,7 @@ def api_optomise():
 @app.route("/api/speed_export")
 def api_speed_export():
     if request.args.get("download"):
-        path = ROOT / "bake_overspeed.csv"
+        path = app_paths.EXPORTS_DIR / "bake_overspeed.csv"
         if path.is_file():
             return send_file(str(path), as_attachment=True)
     if hasattr(bake, "export_overspeed"):

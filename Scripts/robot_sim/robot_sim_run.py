@@ -7,6 +7,8 @@ if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 if str(_ROOT) not in sys.path:
     sys.path.insert(1, str(_ROOT))
+import app_paths
+app_paths.add_cameras_to_sys_path()
 from skrobot.viewers import ViserViewer
 import time
 import numpy as np
