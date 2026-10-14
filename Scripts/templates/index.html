@@ -2059,6 +2059,32 @@
     </div>
   </div>
   <script>
+    function uiDbg(event, extra) {
+      try {
+        const body = Object.assign({ event: event }, extra || {});
+        fetch("/api/dbg_client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }).catch(function () {});
+      } catch (err) {}
+    }
+    (function wrapFetch() {
+      const raw = window.fetch.bind(window);
+      window.fetch = function (url, opts) {
+        const u = String(url || "");
+        return raw(url, opts).catch(function (err) {
+          uiDbg("fetch_fail", { url: u, err: String(err) });
+          throw err;
+        });
+      };
+    })();
+    window.addEventListener("error", function (e) {
+      uiDbg("js_error", { msg: String(e.message || e), src: e.filename, line: e.lineno });
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      uiDbg("js_reject", { msg: String(e.reason) });
+    });
     const CORE_TRACKS = [
       { id: "arm", name: "Arm", simple: true },
       { id: "dio00", name: "T_DI/O_00", simple: false },
@@ -4661,8 +4687,9 @@
     function clearSpeedGraph() { spdSim = []; spdReal = []; spdMax = 0.25; }
     function pushSpeedSample(t, simV, realV) {
       const s = Number(simV || 0), r = Number(realV || 0);
-      spdSim.push({ t: Number(t || 0), v: s });
-      spdReal.push({ t: Number(t || 0), v: r });
+      const tt = Number(t || 0);
+      spdSim.push({ t: tt, v: s });
+      spdReal.push({ t: tt, v: r });
       spdMax = Math.max(spdMax, s, r, 0.05);
     }
     function renderSpeedGraph() {
@@ -5693,12 +5720,16 @@
           body: JSON.stringify({ view: btn.getAttribute("data-view") }),
         });
       });
+      let camPollBusy = false;
       async function pollCam() {
+        if (camPollBusy) return;
+        camPollBusy = true;
         try {
           const r = await fetch("/api/camera_state");
           const d = await r.json();
           if (d && d.ok !== false) applyViewCubePose(d.yaw, d.pitch);
         } catch (err) {}
+        camPollBusy = false;
       }
       pollCam();
       setInterval(pollCam, 80);
@@ -7010,6 +7041,7 @@
     }
     document.getElementById("simulate").onclick = async () => {
       if (document.getElementById("simulate").disabled) return;
+      uiDbg("simulate_click", playLoopOpts());
       const r = await fetch("/api/simulate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

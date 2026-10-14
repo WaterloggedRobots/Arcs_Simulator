@@ -9,6 +9,7 @@ from skrobot.model import RobotModel
 import arcscontrol
 from scipy.spatial.transform import Rotation as R
 import waypoints as wp
+import debug_trace as dbg
 
 _cursor_sim = None
 _arrow_sim = None
@@ -285,7 +286,15 @@ def robot_connected():
         if robot is None or not robot.hasConnected():
             return False
         q = robot.GetJoints()
-        return q is not None and len(list(q)) >= 6
+        ok = q is not None and len(list(q)) >= 6
+        if ok:
+            try:
+                arr = [float(v) for v in list(q)[:6]]
+                if max(abs(v) for v in arr) < 1e-8:
+                    dbg.every("rpc_zero", 2.0, "rpc", "GetJoints all zeros — PowerOff treated as connected")
+            except Exception:
+                pass
+        return ok
     except Exception:
         return False
 
@@ -1778,23 +1787,14 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
         p0, w0 = _ee_frame(model)
         dpos, dang = _pose_err(p0, w0)
         if dpos <= 0.002 and dang <= 0.05:
-            print("backup IK already there", tag, "pos", round(dpos, 4), "ang", round(dang, 4))
             return np.array(seed_use, dtype=float)
-        print("backup IK target", [round(float(v), 4) for v in pose], "seed", tag, [round(float(v), 4) for v in seed_use])
         qq = _jacobian_ik6(model, p_des, rot, seed_use, iters=28)
         if qq is None:
-            print("backup IK fail", tag, "target", [round(float(v), 4) for v in pose])
             return None
         _set_q(model, qq)
         p_fk, w_fk = _ee_frame(model)
         err, aerr = _pose_err(p_fk, w_fk)
-        print(
-            "backup IK q", [round(float(v), 4) for v in qq],
-            "fk", [round(float(v), 4) for v in np.asarray(p_fk).reshape(3)],
-            "err", round(err, 4), "ang", round(aerr, 4),
-        )
         if err > max(float(IK_POS_TOL), 0.04):
-            print("backup IK far", tag, "err", round(err, 4))
             return None
         return qq
 
@@ -1804,8 +1804,6 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
             if q is not None:
                 return q
             q = _try(home, "home")
-            if q is not None:
-                print("backup IK used home seed")
             return q
         except Exception as e:
             print("backup IK exception", e)
@@ -1983,6 +1981,18 @@ def start_hold_move(ik=None, q=None, mode="ik"):
         print("hold move: no sim q")
         return False
     _hold_mode = "fk" if (want_fk or q_src is not None) else "ik"
+    dbg.log(
+        "hold",
+        "start_hold_move",
+        want_fk=want_fk,
+        mode_in=mode,
+        chosen=_hold_mode,
+        copied_sim_q=(q is None and q_src is not None),
+        has_ik=(_hold_target_ik is not None),
+        lin=float(HOLD_LIN_MPS),
+    )
+    if _hold_mode == "fk" and str(mode or "").lower() == "ik":
+        dbg.log("hold", "MoveL skipped — sim q forced joint mode")
     _hold_target_q = q_src
     _hold_arrived = False
     if _hold_mode == "fk" and _hold_target_q is None:
@@ -2002,11 +2012,13 @@ def start_hold_move(ik=None, q=None, mode="ik"):
         jvel = float(HOLD_MOVE_SPEED)
         jacc = float(HOLD_MOVE_ACCEL)
         if _hold_mode == "fk":
+            dbg.log("hold", "MoveJAsync", jvel=jvel, jacc=jacc)
             if hasattr(robot, "MoveJAsync"):
                 robot.MoveJAsync(_hold_target_q, jvel=jvel, jacc=jacc)
             else:
                 robot.mc.moveJoint(_hold_target_q, jvel, jacc, 0.0, 0)
         elif hasattr(robot, "MoveLAsync") and _hold_target_ik is not None:
+            dbg.log("hold", "MoveLAsync", lin=lin)
             try:
                 robot.MoveLAsync(_hold_target_ik, v=lin)
             except TypeError:
@@ -2106,6 +2118,11 @@ def real_robot_updater():
                     except Exception:
                         pass
                 miss += 1
+                playing = bool(_pb.get("active") or _rp.get("active"))
+                if playing:
+                    miss = 0
+                    time.sleep(0.25)
+                    continue
                 if miss >= 8:
                     miss = 0
                     if robot is not None and robot.reconnect():
@@ -2266,8 +2283,10 @@ def enter_simulation_mode(loops=0, delay=0.0):
         bake.timed_joint_samples() if hasattr(bake, "timed_joint_samples") else []
     )
     ik_ok = bake.is_ik_playable() if hasattr(bake, "is_ik_playable") else len(samples) >= 2
+    dbg.sample_gaps(samples, "sim_samples")
     if len(samples) < 2 or not ik_ok:
         print("simulate: need IK-baked samples")
+        dbg.log("sim", "REFUSED need IK-baked samples", n=len(samples), ik_ok=ik_ok)
         return False
     # Sim plays baked q(t) as-is. Joint vel limits do not block it.
     hide_sim_gizmo()
@@ -2313,11 +2332,13 @@ def enter_simulation_mode(loops=0, delay=0.0):
         sim_path = None
     _apply_q_at_t(0.0)
     print("sim mode on", "t_end", _pb["t_end"], "n", len(samples))
+    dbg.log("sim", "ON", t_end=_pb["t_end"], n=len(samples), loops=_pb.get("loops_left"), delay=_pb.get("loop_delay"))
     return True
 
 
 def exit_simulation_mode():
     global sim_mode, _hold_sim, _sim_ik_pending, _last_good_q
+    dbg.log("sim", "OFF restore_q", t=_pb.get("t"), t_end=_pb.get("t_end"), had_saved=(_pb.get("saved_q") is not None))
     if not _pb["active"] and _pb["saved_q"] is None:
         return False
     _pb["active"] = False
@@ -2409,17 +2430,23 @@ def tick_simulation(dt=None):
         return
     last = _pb.get("wall")
     _pb["wall"] = now
-    if _pb.get("origin_wall") is None:
-        _pb["origin_wall"] = now
-        _pb["origin_t"] = float(_pb.get("t") or 0.0)
+    # A stalled viewer frame must not skip path time. Catching up from the
+    # wall clock teleports the ghost and dumps that whole jump into one
+    # speed sample. Advance at most one frame; the next ticks continue.
+    raw_step = 0.0 if last is None else max(0.0, now - float(last))
+    step = raw_step
+    if step > 0.05:
+        dbg.every("sim_cap", 0.4, "sim", "tick capped (viewer stall)", raw_step=raw_step, t=float(_pb.get("t") or 0))
+        step = 0.05
     t0 = _pb["samples"][0]["t"] if _pb["samples"] else 0.0
-    _pb["t"] = min(_pb["t_end"], float(_pb["origin_t"]) + (now - float(_pb["origin_wall"])))
-    if now - _last_vis >= 0.07:
-        _last_vis = now
-        if _pb["t"] < t0:
-            _apply_q_at_t(t0)
-        else:
-            _apply_q_at_t(_pb["t"])
+    _pb["t"] = min(_pb["t_end"], float(_pb.get("t") or 0.0) + step)
+    _pb["origin_t"] = float(_pb["t"])
+    _pb["origin_wall"] = now
+    _last_vis = now
+    if _pb["t"] < t0:
+        _apply_q_at_t(t0)
+    else:
+        _apply_q_at_t(_pb["t"])
     if _cursor_sim is not None and robot_sim is not None:
         try:
             pos, _ = _cursor_pose_from_ee(robot_sim, "sim")
@@ -2432,6 +2459,8 @@ def tick_simulation(dt=None):
             q_now = _flat(robot_sim.angle_vector(), 6)
             _note_motion("sim", q_now, pos, t=_pb.get("t"))
             _pb["lin_mps"] = float(_motion["sim"]["lin_mps"])
+            if float(_pb["lin_mps"] or 0) > 0.4:
+                dbg.log("sim", "SPEED SPIKE", t=float(_pb.get("t") or 0), lin_mps=float(_pb["lin_mps"]), step=step)
         except Exception:
             pass
     try:
@@ -2467,6 +2496,7 @@ def tick_simulation(dt=None):
                 pass
             exit_simulation_mode()
             print("sim path finished")
+            dbg.log("sim", "path finished")
 
 
 def sim_status():
@@ -2478,6 +2508,18 @@ def sim_status():
         "lin_mps": float(_pb.get("lin_mps") or 0.0),
         "playhead_restore": _pb.get("playhead_restore"),
     }
+
+
+def playhead_now():
+    if _pb.get("active"):
+        return float(_pb.get("t") or 0.0)
+    if _rp.get("active"):
+        return float(_rp.get("t") or 0.0)
+    try:
+        import robot_sim_run as viewer_main
+        return float(getattr(viewer_main, "playhead_t", 0.0) or 0.0)
+    except Exception:
+        return 0.0
 
 
 _rp = {
@@ -2499,14 +2541,17 @@ _rp_gen = 0
 
 def _abort_real_motion(name=None):
     """Talk to the controller on this thread. stopMove alone does not abort movePathBuffer."""
+    buf = str(name or _rp.get("name") or "rec")
+    dbg.log("halt", "abort_real_motion", robot=(robot is not None), buf=buf, has_abort=bool(robot is not None and hasattr(robot, "AbortPathBuffer")))
     if robot is None:
         return
-    buf = str(name or _rp.get("name") or "rec")
     try:
         if hasattr(robot, "AbortPathBuffer"):
+            dbg.log("halt", "calling AbortPathBuffer", buf=buf)
             robot.AbortPathBuffer(buf)
             return
     except Exception as e:
+        dbg.log("halt", "AbortPathBuffer failed", err=str(e))
         print("AbortPathBuffer failed:", e)
     try:
         robot.StopMove()
@@ -2536,6 +2581,7 @@ def _abort_real_motion(name=None):
 
 def request_halt():
     global _halt, _rp_gen
+    dbg.log("halt", "request_halt", sim_active=bool(_pb.get("active")), real_active=bool(_rp.get("active")), real_paused=bool(_rp.get("paused")))
     _halt = True
     _rp_gen += 1
     _rp["active"] = False
@@ -2597,6 +2643,7 @@ def real_at_start():
 
 def start_goto_path_start():
     q0 = _first_path_q()
+    dbg.log("hold", "goto path start forces joint MoveJ", has_q=(q0 is not None))
     if q0 is None:
         return False
     return start_hold_move(q=q0, mode="fk")
@@ -2729,6 +2776,14 @@ def plan_joint_path(loops=0, delay=0.0):
 
 
 def _start_path_buffer():
+    dbg.log(
+        "real",
+        "movePathBuffer (no abort first)",
+        name=_rp.get("name"),
+        t=float(_rp.get("t") or 0),
+        loops=_rp.get("loops_left"),
+        active=bool(_rp.get("active")),
+    )
     if robot is None:
         return None
     try:
@@ -2809,7 +2864,21 @@ def start_real_path(loops=0, delay=0.0):
 
 def pause_real_path():
     if not _rp["active"]:
+        dbg.log(
+            "real",
+            "pause_real_path skipped",
+            t=float(_rp.get("t") or 0),
+            note="real path not active, no stopMove",
+        )
         return False
+    dbg.log(
+        "real",
+        "pause_real_path",
+        was_paused=bool(_rp.get("paused")),
+        t=float(_rp.get("t") or 0),
+        uses_abort=False,
+        note="stopMove+speed0 only, no AbortPathBuffer",
+    )
     _rp["paused"] = not _rp["paused"]
     _rp["wall"] = None
     if _rp["paused"]:
@@ -2850,7 +2919,16 @@ def pause_real_path():
             if exec_id == -1:
                 import path_bake as bake
                 t = _rp["t"]
+                dbg.log("real", "resume replan tail", play_t=float(t), preroll=float(_rp.get("preroll") or 0), n_samples=len(_rp.get("samples") or []))
                 rest = [s for s in _rp["samples"] if s["t"] >= t - 1e-6]
+                dbg.log(
+                    "real",
+                    "resume filter by sample t vs clock t",
+                    play_t=float(t),
+                    rest_n=len(rest),
+                    first_rest_t=(float(rest[0]["t"]) if rest else None),
+                    preroll=float(_rp.get("preroll") or 0),
+                )
                 if len(rest) < 2:
                     rest = (_rp["samples"] or [])[-2:]
                 if len(rest) >= 2:
@@ -2865,6 +2943,7 @@ def pause_real_path():
 
 def stop_real_path():
     global _halt, _rp_gen
+    dbg.log("real", "stop_real_path then abort", t=float(_rp.get("t") or 0), active=bool(_rp.get("active")))
     _halt = True
     _rp_gen += 1
     _rp["active"] = False
@@ -2907,6 +2986,7 @@ def tick_real_path():
                 _rp["origin_wall"] = now2
                 _rp["wall"] = now2
                 _rp["motion_started"] = True
+                dbg.log("real", "loop delay end — movePathBuffer again without abort")
                 _start_path_buffer()
                 return
             stop_real_path()
@@ -2951,6 +3031,7 @@ def tick_real_path():
                 _rp["origin_t"] = 0.0
                 _rp["origin_wall"] = now2
                 _rp["motion_started"] = True
+                dbg.log("real", "loop restart — movePathBuffer again without abort")
                 _start_path_buffer()
         else:
             hold = pe + preroll

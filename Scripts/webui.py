@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import sys
 import threading
 import time
@@ -23,6 +24,7 @@ for _p in (_SIM, _ROOT, _PARENT):
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.serving import WSGIRequestHandler
 
+import debug_trace as dbg
 import file_manage as fman
 import path_bake as bake
 import robot_runtime as rr
@@ -70,12 +72,27 @@ _console_lines = []
 _console_i = 0
 
 
+_SESSION_LOG = ROOT / "session_log.txt"
+_session_lock = threading.Lock()
+
+
+def _session_write(line):
+    try:
+        with _session_lock:
+            with _SESSION_LOG.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception:
+        pass
+
+
 def _console_add(msg):
     global _console_i
     _console_i += 1
-    _console_lines.append({"i": _console_i, "t": time.time(), "line": str(msg)})
+    text = str(msg)
+    _console_lines.append({"i": _console_i, "t": time.time(), "line": text})
     if len(_console_lines) > 400:
         del _console_lines[: len(_console_lines) - 400]
+    _session_write(text)
 
 
 class _ConsoleStream:
@@ -101,9 +118,58 @@ class _ConsoleStream:
             pass
 
 
-sys.stdout = _ConsoleStream(sys.stdout)
-sys.stderr = _ConsoleStream(sys.stderr)
+if not isinstance(sys.stdout, _ConsoleStream):
+    sys.stdout = _ConsoleStream(sys.stdout)
+if not isinstance(sys.stderr, _ConsoleStream):
+    sys.stderr = _ConsoleStream(sys.stderr)
+_session_write("===== session %s =====" % time.strftime("%Y-%m-%d %H:%M:%S"))
 _console_add("console ready")
+dbg.reset()
+dbg.install_app_hooks()
+
+_QUIET_API = (
+    "/api/status",
+    "/api/clock",
+    "/api/console",
+    "/api/cam_frame",
+    "/api/camera_state",
+    "/api/file/session",
+)
+
+
+@app.before_request
+def _dbg_api():
+    request._dbg_t0 = time.perf_counter()
+    path = request.path or ""
+    if path in _QUIET_API:
+        return
+    if path.startswith("/api/"):
+        body = None
+        if request.method in ("POST", "PUT"):
+            body = request.get_json(silent=True)
+        dbg.log("api", request.method, path=path, body=body)
+
+
+@app.after_request
+def _dbg_api_after(resp):
+    try:
+        path = request.path or ""
+        dt = time.perf_counter() - float(getattr(request, "_dbg_t0", time.perf_counter()))
+        if path not in _QUIET_API:
+            if path.startswith("/api/") or path == "/":
+                dbg.log("api", "resp", path=path, code=resp.status_code, dt=dt)
+            if dt > 0.25:
+                dbg.log("api", "SLOW", path=path, dt=dt, code=resp.status_code)
+    except Exception:
+        pass
+    return resp
+
+
+@app.route("/api/dbg_client", methods=["POST"])
+def api_dbg_client():
+    data = request.get_json(silent=True) or {}
+    dbg.log("ui", str(data.get("msg") or data.get("event") or "event"), **{k: v for k, v in data.items() if k not in ("msg", "event")})
+    return jsonify({"ok": True})
 
 
 def load_settings():
@@ -151,6 +217,7 @@ def apply_settings(data):
     if "snap_to_grid" in data:
         try:
             wp.snap_to_grid = bool(data.get("snap_to_grid"))
+            dbg.log("wp", "snap_to_grid set", on=bool(wp.snap_to_grid), note="add_waypoint still ignores it")
         except Exception:
             pass
     if hasattr(wp, "load_global_saved_paths"):
@@ -397,12 +464,18 @@ def api_clock():
             t = rr.playhead_now()
     except Exception:
         t = None
+    sim = rr.sim_status() if hasattr(rr, "sim_status") else {}
+    real = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
+    lin_sim = sim.get("lin_mps") if isinstance(sim, dict) else None
+    lin_real = real.get("lin_mps") if isinstance(real, dict) else None
     return jsonify({
         "ok": True,
         "t": t,
         "playhead": t,
-        "sim": rr.sim_status() if hasattr(rr, "sim_status") else {},
-        "real": rr.real_path_status() if hasattr(rr, "real_path_status") else {},
+        "lin_sim": lin_sim,
+        "lin_real": lin_real,
+        "sim": sim,
+        "real": real,
     })
 
 
@@ -680,6 +753,7 @@ def api_redo():
 @app.route("/api/bake", methods=["POST"])
 def api_bake():
     data = request.get_json(silent=True) or {}
+    dbg.log("bake", "queued", spacing=data.get("spacing"))
     viewer_main.bake_requests.append(data.get("spacing"))
     return jsonify({"ok": True})
 
@@ -696,20 +770,30 @@ def api_simulate():
     data = request.get_json(silent=True) or {}
     loops = data.get("loops", data.get("repeat", 0))
     delay = data.get("delay", 0.0)
+    dbg.log("simulate", "request", loops=loops, delay=delay)
     ok = False
     if hasattr(rr, "enter_simulation_mode"):
         ok = bool(rr.enter_simulation_mode(loops=loops, delay=delay))
+        dbg.log("simulate", "enter_simulation_mode", ok=ok)
     else:
         viewer_main.sim_requests.append(data.get("duration"))
         ok = True
+        dbg.log("simulate", "legacy sim_requests queued")
     st = rr.sim_status() if hasattr(rr, "sim_status") else {}
+    dbg.log("simulate", "status", **{k: st.get(k) for k in ("active", "paused", "t", "t_end", "lin_mps")})
     return jsonify({"ok": bool(ok), "sim": st})
 
 
 @app.route("/api/sim/pause", methods=["POST"])
 def api_sim_pause():
     if hasattr(rr, "pause_simulation"):
+        dbg.log("sim_pause", "pause_simulation")
         rr.pause_simulation()
+    elif hasattr(rr, "toggle_sim_pause"):
+        dbg.log("sim_pause", "toggle_sim_pause (pause_simulation missing)")
+        rr.toggle_sim_pause()
+    else:
+        dbg.log("sim_pause", "NO pause function on runtime")
     return jsonify({"ok": True})
 
 
@@ -722,6 +806,7 @@ def api_real_upload():
             loops=data.get("loops") or 0,
             delay=data.get("delay") or 0.0,
         ))
+        dbg.log("real", "upload", ok=ok)
     elif hasattr(rr, "plan_joint_path"):
         ok = bool(rr.plan_joint_path())
     st = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
@@ -735,9 +820,11 @@ def api_real_start():
     if hasattr(rr, "fire_real_path"):
         try:
             ok = bool(rr.fire_real_path())
+            dbg.log("real", "start", ok=ok)
         except Exception as e:
             err = str(e)
             print("real start failed", e)
+            dbg.log("real", "start EXCEPTION", err=err)
     else:
         viewer_main.real_requests.append(("start", None))
         ok = True
@@ -756,12 +843,19 @@ def api_real_start():
 
 @app.route("/api/real/pause", methods=["POST"])
 def api_real_pause():
+    dbg.log("real", "UI pause queued", direct_pause=hasattr(rr, "pause_real_path"))
     viewer_main.real_requests.append(("pause", None))
     return jsonify({"ok": True})
 
 
 @app.route("/api/real/stop", methods=["POST"])
 def api_real_stop():
+    dbg.log(
+        "real",
+        "UI stop queued",
+        has_abort_fn=hasattr(rr, "abort_path_buffer"),
+        note="viewer stop_real_path calls AbortPathBuffer",
+    )
     if hasattr(rr, "abort_path_buffer"):
         rr.abort_path_buffer()
     viewer_main.real_requests.append(("stop", None))
@@ -809,7 +903,13 @@ def api_snap_sim_to_real():
 @app.route("/api/halt", methods=["POST"])
 def api_halt():
     if hasattr(rr, "abort_path_buffer"):
+        dbg.log("halt", "abort_path_buffer")
         rr.abort_path_buffer()
+    elif hasattr(rr, "request_halt"):
+        dbg.log("halt", "request_halt (abort_path_buffer missing)")
+        rr.request_halt()
+    else:
+        dbg.log("halt", "NO abort on runtime")
     return jsonify({"ok": True})
 
 
@@ -1299,11 +1399,24 @@ def api_speed_export():
 
 
 def _open_ui():
-    time.sleep(2)
+    time.sleep(1.5)
+    url = "http://127.0.0.1:5000"
+    dbg.log("boot", "opening Web UI (not Viser 8080)", url=url)
+    opened = False
     try:
-        webbrowser.open("http://127.0.0.1:5000")
-    except Exception:
-        pass
+        if hasattr(viewer_main, "open_web_ui"):
+            viewer_main.open_web_ui(url)
+            opened = True
+    except Exception as e:
+        dbg.log("boot", "open_web_ui failed", err=str(e))
+    if not opened:
+        try:
+            if os.name == "nt":
+                os.startfile(url)
+            else:
+                webbrowser.open(url)
+        except Exception as e:
+            dbg.log("boot", "browser open failed", err=str(e))
 
 
 def _autosave_loop():
@@ -1327,11 +1440,13 @@ def _wait_viewer(timeout=20.0):
 
 if __name__ == "__main__":
     apply_settings(load_settings())
+    dbg.log("boot", "starting viewer thread")
     start_viewer_thread()
     port = _wait_viewer()
-    print("Viser    http://127.0.0.1:%s (iframe)" % port)
+    print("Viser    http://127.0.0.1:%s (iframe inside the UI — do not use this tab)" % port)
     _ensure_status_worker()
-    print("Web UI   http://127.0.0.1:5000")
+    print("Web UI   http://127.0.0.1:5000   <--- open this")
+    dbg.log("boot", "flask listening", viser=port, ui=5000)
     threading.Thread(target=_open_ui, daemon=True).start()
     threading.Thread(target=_autosave_loop, daemon=True).start()
     app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True, request_handler=QuietHandler)

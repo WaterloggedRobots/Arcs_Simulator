@@ -2,6 +2,7 @@
 """Save / open / export for .arcspath and export.json."""
 import json
 import math
+import sys
 import time
 from pathlib import Path
 import numpy as np
@@ -195,6 +196,14 @@ def _load_sim_poses(raw):
         wp.refresh_pose_markers()
     try:
         import webui
+        import debug_trace as dbg
+        dbg.log(
+            "mod",
+            "file_manage import webui",
+            webui_name=getattr(webui, "__name__", None),
+            webui_file=getattr(webui, "__file__", None),
+            main_file=sys.modules.get("__main__") and getattr(sys.modules["__main__"], "__file__", None),
+        )
         wp.load_global_stored_points((webui.load_settings() or {}).get("stored_points") or [])
     except Exception:
         pass

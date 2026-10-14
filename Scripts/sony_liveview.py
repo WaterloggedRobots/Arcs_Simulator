@@ -695,6 +695,11 @@ def grab_via_control(out_path=None):
 
 def grab_jpeg(index=None, prefer_ptp=None):
     global _last_err, _prefer_ptp
+    try:
+        import debug_trace as dbg
+        dbg.every("grab_jpeg", 2.0, "cam", "grab_jpeg never uses OpenCV VideoCapture", prefer_ptp=prefer_ptp, index=index)
+    except Exception:
+        pass
     errs = []
     steps = []
     if time.time() < float(_ptp_denied_until or 0):

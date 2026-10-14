@@ -18,6 +18,7 @@ import waypoints as wp
 import robot_runtime as rr
 import path_bake as bake
 import file_manage as fman
+import debug_trace as dbg
 print("robot_runtime", getattr(rr, "__file__", rr), "init", hasattr(rr, "init"))
 
 viewer = None
@@ -38,14 +39,27 @@ move_requests = []
 real_requests = []
 
 
+_wb_open = webbrowser.open
+_wb_open_new = webbrowser.open_new
+_wb_open_new_tab = webbrowser.open_new_tab
+
+
 def _no_browser(*args, **kwargs):
     return None
 
 
 def _silence_browser_opens():
+    """Stop Viser from popping its own tab. Keep originals for the Flask UI."""
     webbrowser.open = _no_browser
     webbrowser.open_new = _no_browser
     webbrowser.open_new_tab = _no_browser
+
+
+def open_web_ui(url="http://127.0.0.1:5000"):
+    try:
+        _wb_open(url)
+    except Exception:
+        pass
 
 
 def _read_viser_port(v):
@@ -88,6 +102,9 @@ def _make_viewer():
             kwargs["port"] = 8080
         if "host" in params:
             kwargs["host"] = "127.0.0.1"
+        for flag in ("open_browser", "launch_browser", "show_browser"):
+            if flag in params:
+                kwargs[flag] = False
     except Exception:
         pass
     return ViserViewer(**kwargs)
@@ -137,10 +154,12 @@ def _force_collapse_viser_gui(server):
 def InitViewer():
     global viewer, server
     viewer.show()
+    dbg.log("viewer", "InitViewer start")
     rr.init(viewer)
     server = sceneBG.SetScene(viewer)
     wp.init(server)
     rr.init_cursors(server)
+    dbg.log("viewer", "InitViewer done")
     if hasattr(rr, "robot_connected") and not rr.robot_connected():
         rr.set_hide_real_robot(True)
 
@@ -192,6 +211,7 @@ def start_viewer():
                 return
             result = fn(_spacing)
             print("bake:", result)
+            dbg.log("bake", "viewer _bake", result=result)
         except Exception as e:
             print("bake failed:", e)
 
@@ -208,9 +228,12 @@ def start_viewer():
     )
 
     try:
+        _loop_i = 0
         while viewer.is_active:
+            _loop_t0 = time.perf_counter()
             while add_requests:
                 req = add_requests.pop(0)
+                dbg.log("viewer", "add_request", req=req)
                 try:
                     replace = True
                     if isinstance(req, str):
@@ -338,6 +361,7 @@ def start_viewer():
                     print("reset sim failed:", e)
             while bake_requests:
                 sp = bake_requests.pop(0)
+                dbg.log("viewer", "bake_request", spacing=sp)
                 _bake(sp)
             while sim_requests:
                 dur = sim_requests.pop(0)
@@ -400,6 +424,10 @@ def start_viewer():
                 rr.update_cursors()
                 viewer.redraw()
                 time.sleep(0.03)
+            _loop_i += 1
+            _loop_dt = time.perf_counter() - _loop_t0
+            if _loop_dt > 0.12:
+                dbg.log("viewer", "SLOW FRAME", dt=_loop_dt, playing=playing, i=_loop_i)
     except KeyboardInterrupt:
         print("Shutting down...")
         rr.shutdown()

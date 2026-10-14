@@ -2212,6 +2212,12 @@ def move_waypoint(idx, pos, wxyz=None, q=None):
 
 def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_ctrls=False):
     global _drag_checkpointed
+    try:
+        import debug_trace as dbg
+        if snap_to_grid:
+            dbg.log("wp", "snap_to_grid True but add_waypoint does not snap", t=t)
+    except Exception:
+        pass
 
     if mode is None:
         mode = current_mode or "arc"
@@ -4505,6 +4511,11 @@ _sony_rec_on = set()
 
 def _set_sony_rec(oid, on):
     on = bool(on)
+    try:
+        import debug_trace as dbg
+        dbg.log("cam", "sony set_recording", oid=oid, on=on, already=(oid in _sony_rec_on))
+    except Exception:
+        pass
     if on and oid in _sony_rec_on:
         return
     if (not on) and oid not in _sony_rec_on:
@@ -4924,6 +4935,11 @@ def _tick_sony_cameras():
             cam["error"] = "Sony not connected"
             if want:
                 try:
+                    import debug_trace as dbg
+                    dbg.log("cam", "Sony rec on EMPTY blob — imdecode None", oid=oid)
+                except Exception:
+                    pass
+                try:
                     import cv2
                     import numpy as np
                     arr = np.frombuffer(blob, dtype=np.uint8)
@@ -5037,7 +5053,10 @@ def _ensure_cv_thread():
             try:
                 _tick_cv_cameras()
             except Exception as e:
-                print("cv camera loop", e)
+                n = int(getattr(_loop, "_cv_fail", 0) or 0)
+                if n < 1:
+                    print("cv camera loop", e, "(further prints suppressed)")
+                _loop._cv_fail = n + 1
             dt = time.time() - t0
             time.sleep(max(0.0, 0.04 - dt))
 

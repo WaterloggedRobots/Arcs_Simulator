@@ -17,6 +17,7 @@ from scipy.spatial.transform import Slerp
 
 import waypoints as wp
 import robot_runtime as rr
+import debug_trace as dbg
 
 SPACING_DEFAULT = 0.05
 JOINT_JUMP_MAX = 0.5
@@ -1247,10 +1248,17 @@ def is_baking():
 def run_bake(spacing_m=None):
     global _speed_valid, _baking
     if _baking:
+        dbg.log("bake", "rejected already in progress")
         return {"ok": False, "error": "bake in progress", "baked": 0, "total": len(segments)}
     _baking = True
+    dbg.log("bake", "start", spacing=spacing_m, waypoints=len(getattr(wp, "waypoints", []) or []))
     try:
-        return _run_bake_body(spacing_m)
+        result = _run_bake_body(spacing_m)
+        dbg.log("bake", "done", result=result)
+        return result
+    except Exception as e:
+        dbg.log("bake", "EXCEPTION", err=str(e))
+        raise
     finally:
         _baking = False
 
@@ -1920,6 +1928,7 @@ def _apply_seg_time_profile(seg, t0, t1):
         for k in range(1, len(samples) - 1):
             samples[k]["t"] = t0 + span * (float(k) / float(n))
     else:
+        dbg.log("bake", "time profile by parameter u not arc length", mode=mode, n=len(samples), t0=t0, t1=t1)
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
                 continue
@@ -2125,7 +2134,10 @@ def joint_angle_deltas(q0, q1):
     out = []
     for i in range(min(6, len(a), len(b))):
         d = float(b[i] - a[i])
-        d = (d + math.pi) % (2.0 * math.pi) - math.pi
+        wrapped = (d + math.pi) % (2.0 * math.pi) - math.pi
+        if abs(d) - abs(wrapped) > 0.5:
+            dbg.log("bake", "joint wrap short-path", joint=i, raw=d, wrapped=wrapped)
+        d = wrapped
         out.append(abs(d))
     return out
 
@@ -2419,6 +2431,16 @@ def evaluate_timing(force=False):
             span["over_time"] = False
         span["over"] = bool(span["over_vel"] or span["over_time"])
         if span.get("over"):
+            dbg.log(
+                "bake",
+                "span too_fast",
+                seg=i,
+                t_span=round(t_span, 4),
+                need_s=round(need_vel, 4),
+                over_vel=bool(span.get("over_vel")),
+                over_time=bool(span.get("over_time")),
+                lin_m=round(lin, 4),
+            )
             seg["timing"] = "too_fast"
             any_fast = True
             for sm in samples:
@@ -2632,6 +2654,8 @@ def _node_color_map():
             elif st == "uncalc":
                 key_st[i + 1] = "uncalc"
         if st == "too_fast":
+            if not blocked:
+                dbg.log("bake", "color map BLOCK later spans uncalc after too_fast", seg=i)
             blocked = True
     return key_st, sample_st
 
@@ -3116,6 +3140,7 @@ def is_runnable():
     if not is_ik_playable():
         return False
     if any(s.get("timing") == "too_fast" for s in segments):
+        dbg.every("run_fast", 1.0, "bake", "is_runnable False because too_fast")
         return False
     if any(s.get("status") != "ok" or s.get("timing") not in ("ok", "fk") for s in segments):
         return False

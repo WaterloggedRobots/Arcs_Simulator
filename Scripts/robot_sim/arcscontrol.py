@@ -1,9 +1,14 @@
 
 import math
+import socket
 import time
 import threading
 import numpy as np
 import pyaubo_sdk
+try:
+    import debug_trace as dbg
+except Exception:
+    dbg = None
 
 robot_ip = "192.168.2.124"#"192.168.1.102"##"192.168.0.101"
 robot_port = 30004
@@ -49,7 +54,27 @@ class RobotArcs:
             self._drop_client()
             return False
 
+    def _port_reachable(self, timeout_s=0.35):
+        """Cheap TCP probe so a dead arm does not freeze Python inside the SDK (~21s)."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.settimeout(float(timeout_s))
+            s.connect((self.ip, int(self.port)))
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
     def _connect_once(self):
+        if not self._port_reachable():
+            print("arcscontrol: RPC connect failed")
+            if dbg:
+                dbg.every("rpc_fail", 5.0, "rpc", "port closed, skip SDK", ip=self.ip, port=self.port)
+            return False
         self._drop_client()
         self.client = pyaubo_sdk.RpcClient()
         try:
@@ -59,6 +84,8 @@ class RobotArcs:
         self.client.connect(self.ip, self.port)
         if not self.client.hasConnected():
             print("arcscontrol: RPC connect failed")
+            if dbg:
+                dbg.every("rpc_fail", 5.0, "rpc", "connect failed", ip=self.ip, port=self.port)
             self._drop_client()
             return False
         self.client.login(self.user, self.pwd)
@@ -75,6 +102,8 @@ class RobotArcs:
         cfg.setTcpOffset([0, 0, 0, 0, 0, 0])
         self._dead = False
         print("arcscontrol: RPC connected", self.ip)
+        if dbg:
+            dbg.log("rpc", "connected", ip=self.ip, name=self.name)
         return True
 
     def connect(self, force=False, timeout_s=8.0):
@@ -265,7 +294,18 @@ class RobotArcs:
         if int(code) != 0:
             return None
         q = [float(v) for v in q]
-        if len(q) != 6 or np.allclose(q[:3], pose[:3], atol=1e-4):
+        if len(q) != 6:
+            if dbg:
+                dbg.log("ik", "GetIK reject not 6 joints", n=len(q), code=int(code))
+            return None
+        if np.allclose(q[:3], pose[:3], atol=1e-4):
+            if dbg:
+                dbg.log(
+                    "ik",
+                    "GetIK REJECT joints~xyz (rad vs meters)",
+                    q0=q[0], q1=q[1], q2=q[2],
+                    x=pose[0], y=pose[1], z=pose[2],
+                )
             return None
         return q
 
