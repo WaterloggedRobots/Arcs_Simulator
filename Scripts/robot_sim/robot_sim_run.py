@@ -8,6 +8,7 @@ if str(_PARENT) not in sys.path:
 if str(_ROOT) not in sys.path:
     sys.path.insert(1, str(_ROOT))
 from skrobot.viewers import ViserViewer
+import threading
 import time
 import numpy as np
 import webbrowser
@@ -37,6 +38,9 @@ file_requests = []
 prop_requests = []
 move_requests = []
 real_requests = []
+_bake_thread = None
+_bake_lock = threading.Lock()
+_bake_pending = None
 
 
 _wb_open = webbrowser.open
@@ -215,6 +219,35 @@ def start_viewer():
         except Exception as e:
             print("bake failed:", e)
 
+    def _bake_bg(_spacing=None):
+        """Run bake off the viewer loop so frames / clock polls keep moving."""
+        global _bake_thread, _bake_pending
+        with _bake_lock:
+            _bake_pending = _spacing
+            if _bake_thread is not None and _bake_thread.is_alive():
+                dbg.log("viewer", "bake_request coalesced", spacing=_spacing)
+                return
+
+            def _run():
+                global _bake_thread, _bake_pending
+                while True:
+                    with _bake_lock:
+                        sp = _bake_pending
+                        _bake_pending = None
+                    dbg.log("viewer", "bake_bg start", spacing=sp)
+                    try:
+                        _bake(sp)
+                    except Exception as e:
+                        print("bake bg failed:", e)
+                    with _bake_lock:
+                        if _bake_pending is None:
+                            _bake_thread = None
+                            break
+                        # Another bake was queued while we ran — loop again.
+
+            _bake_thread = threading.Thread(target=_run, daemon=True, name="bake-bg")
+            _bake_thread.start()
+
     keymap.setup_hotkeys(
         server,
         add_from_real=_add_from_real,
@@ -223,7 +256,7 @@ def start_viewer():
         delete_selected=wp.delete_selected,
         undo=wp.undo,
         redo=wp.redo,
-        bake_path=_bake,
+        bake_path=_bake_bg,
         reset_camera=lambda: rr.apply_camera_view("front"),
     )
 
@@ -231,7 +264,10 @@ def start_viewer():
         _loop_i = 0
         while viewer.is_active:
             _loop_t0 = time.perf_counter()
-            while add_requests:
+            # While background bake holds path_bake._state_lock, do not start
+            # path mutations here (would block the viewer). Leave requests queued.
+            _baking_now = bool(getattr(bake, "is_baking", lambda: False)())
+            while (not _baking_now) and add_requests:
                 req = add_requests.pop(0)
                 dbg.log("viewer", "add_request", req=req)
                 try:
@@ -262,7 +298,7 @@ def start_viewer():
                                 }
                 except Exception as e:
                     print("add_waypoint failed:", e)
-            while delete_requests:
+            while (not _baking_now) and delete_requests:
                 delete_requests.pop(0)
                 try:
                     wp.delete_selected()
@@ -327,7 +363,7 @@ def start_viewer():
                         rr.apply_selected_q(payload)
                 except Exception as e:
                     print("prop apply failed", e)
-            while file_requests:
+            while (not _baking_now) and file_requests:
                 kind, payload = file_requests.pop(0)
                 try:
                     if kind == "new":
@@ -361,8 +397,10 @@ def start_viewer():
                     print("reset sim failed:", e)
             while bake_requests:
                 sp = bake_requests.pop(0)
+                while bake_requests:
+                    sp = bake_requests.pop(0)
                 dbg.log("viewer", "bake_request", spacing=sp)
-                _bake(sp)
+                _bake_bg(sp)
             while sim_requests:
                 dur = sim_requests.pop(0)
                 try:
@@ -388,7 +426,12 @@ def start_viewer():
             )
             if not playing and not real_playing and hasattr(wp, "snap_global_gizmos_idle"):
                 wp.snap_global_gizmos_idle()
-            if not playing and not real_playing and hasattr(wp, "flush_idle_path_rebuild"):
+            if (
+                not _baking_now
+                and not playing
+                and not real_playing
+                and hasattr(wp, "flush_idle_path_rebuild")
+            ):
                 wp.flush_idle_path_rebuild()
             if hasattr(rr, "tick_simulation"):
                 rr.tick_simulation()

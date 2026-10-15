@@ -4690,7 +4690,11 @@
       const tt = Number(t || 0);
       spdSim.push({ t: tt, v: s });
       spdReal.push({ t: tt, v: r });
-      spdMax = Math.max(spdMax, s, r, 0.05);
+      // Recompute from samples so a brief spike does not pin ymax forever.
+      let m = 0.05;
+      for (let i = 0; i < spdSim.length; i++) m = Math.max(m, spdSim[i].v || 0);
+      for (let i = 0; i < spdReal.length; i++) m = Math.max(m, spdReal[i].v || 0);
+      spdMax = Math.max(0.05, m);
     }
     function renderSpeedGraph() {
       const cv = document.getElementById("spdCanvas");

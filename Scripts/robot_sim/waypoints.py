@@ -1418,7 +1418,8 @@ def set_path_store(pid, mode):
 
 def persist_saved_paths():
     try:
-        import webui
+        import file_manage as fman
+        webui = fman._webui()
         rows = []
         for p in saved_paths or []:
             if str(p.get("store") or "local") != "global":
@@ -1642,7 +1643,8 @@ def unwrap_clip(clip_id):
 def persist_stored_points():
     """Write global stored points into settings.json."""
     try:
-        import webui
+        import file_manage as fman
+        webui = fman._webui()
         rows = []
         for p in sim_poses or []:
             if not isinstance(p, dict) or p.get("builtin") or str(p.get("id")) in ("real", "home"):
@@ -2212,12 +2214,6 @@ def move_waypoint(idx, pos, wxyz=None, q=None):
 
 def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_ctrls=False):
     global _drag_checkpointed
-    try:
-        import debug_trace as dbg
-        if snap_to_grid:
-            dbg.log("wp", "snap_to_grid True but add_waypoint does not snap", t=t)
-    except Exception:
-        pass
 
     if mode is None:
         mode = current_mode or "arc"
@@ -2230,7 +2226,9 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
     if t is None:
         t = 0.0 if not waypoints else None
     if t is not None:
-        t = round(float(t) / 0.01) * 0.01
+        t = float(t)
+        if snap_to_grid:
+            t = _snap_t(t)
         hit = None
         if not _suspend_history and not allow_multiple_waypoints_per_keyframe:
             hit = find_waypoint_at_time(t)
@@ -2296,7 +2294,9 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
             t = (0.0 if prev_t is None else float(prev_t)) + 1.0
         else:
             t = 0.0
-    t = round(float(t) / 0.01) * 0.01
+    t = float(t)
+    if snap_to_grid:
+        t = _snap_t(t)
     if q is None:
         q = _capture_current_q()
     if q is not None:
@@ -2327,6 +2327,13 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
         "halo": None,
     })
 
+    # Bulk Open/load sets _suspend_history — defer gizmo, path redraw, and bake
+    # invalidate until the loader finishes (one pass instead of N).
+    if _suspend_history:
+        new_idx = idx
+        print(f"Added waypoint #{new_idx}  mode={mode}  t={t:.2f}")
+        return {"ok": True, "index": new_idx, "t": t}
+
     _bind_waypoint_gizmo(idx)
 
     if mode == "arc" and idx > 0 and len(waypoints) >= 2 and not skip_ctrls:
@@ -2347,11 +2354,10 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
                 place_segment_ctrls(new_idx, new_idx + 1)
     prune_end_handles()
     draw_path()
-    if not _suspend_history:
-        try:
-            select_waypoint(new_idx)
-        except Exception:
-            pass
+    try:
+        select_waypoint(new_idx)
+    except Exception:
+        pass
     dirty = max(0, new_idx - 1)
     if reordered:
         dirty = _dirty_start_from_moves(old_ids, {id(item)})
@@ -3090,7 +3096,8 @@ def reset_document():
     except Exception:
         pass
     try:
-        import webui
+        import file_manage as fman
+        webui = fman._webui()
         st = webui.load_settings() or {}
         load_global_stored_points(st.get("stored_points") or [])
         load_global_saved_paths(st.get("stored_paths") or [])
@@ -3253,6 +3260,12 @@ def load_editor_waypoints(rows):
                 except Exception:
                     pass
         place_saved_path._clip_seq = seq
+        # Gizmos were deferred during bulk add_waypoint(_suspend_history).
+        for i in range(len(waypoints)):
+            try:
+                _bind_waypoint_gizmo(i)
+            except Exception:
+                pass
         draw_path()
         deselect_all()
         hide_unselected_handles()
@@ -3328,6 +3341,11 @@ def load_from_motion_points(wp_rows, sample_rows):
                 mids = [((k + 1) / (n + 1), sm["pos"]) for k, sm in enumerate(samples)]
             place_segment_ctrls(i, i + 1, force=False)
         prune_end_handles()
+        for i in range(len(waypoints)):
+            try:
+                _bind_waypoint_gizmo(i)
+            except Exception:
+                pass
         draw_path()
         deselect_all()
         hide_unselected_handles()
@@ -4930,15 +4948,7 @@ def _tick_sony_cameras():
         if blob:
             _cam_frame_jpeg[oid] = blob
             cam["error"] = ""
-        else:
-            _cam_frame_jpeg.pop(oid, None)
-            cam["error"] = "Sony not connected"
             if want:
-                try:
-                    import debug_trace as dbg
-                    dbg.log("cam", "Sony rec on EMPTY blob — imdecode None", oid=oid)
-                except Exception:
-                    pass
                 try:
                     import cv2
                     import numpy as np
@@ -4946,6 +4956,26 @@ def _tick_sony_cameras():
                     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                     if frame is not None:
                         _record_bgr(oid, cam, frame)
+                    else:
+                        try:
+                            import debug_trace as dbg
+                            dbg.log("cam", "Sony rec on — imdecode None", oid=oid)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        else:
+            _cam_frame_jpeg.pop(oid, None)
+            cam["error"] = "Sony not connected"
+            if want:
+                try:
+                    import debug_trace as dbg
+                    dbg.log("cam", "Sony rec on EMPTY blob", oid=oid)
+                except Exception:
+                    pass
+                # Still poke recorder so a stalled stream releases the file.
+                try:
+                    _record_bgr(oid, cam, None)
                 except Exception:
                     pass
 

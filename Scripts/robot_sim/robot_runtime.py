@@ -35,7 +35,7 @@ robot_ik = None
 robot = None
 
 IK_POS_TOL = 0.03
-IK_ANG_TOL = 0.45
+IK_ANG_TOL = 0.25
 IK_RECONNECT_POS = 0.05
 IK_REJECT_POS = 0.12
 CURSOR_R = 0.03
@@ -286,15 +286,15 @@ def robot_connected():
         if robot is None or not robot.hasConnected():
             return False
         q = robot.GetJoints()
-        ok = q is not None and len(list(q)) >= 6
-        if ok:
-            try:
-                arr = [float(v) for v in list(q)[:6]]
-                if max(abs(v) for v in arr) < 1e-8:
-                    dbg.every("rpc_zero", 2.0, "rpc", "GetJoints all zeros — PowerOff treated as connected")
-            except Exception:
-                pass
-        return ok
+        if q is None or len(list(q)) < 6:
+            return False
+        arr = [float(v) for v in list(q)[:6]]
+        # PowerOff / idle controllers often report all-zero joints. Treat as
+        # disconnected so the viewer does not snap the real arm to origin.
+        if max(abs(v) for v in arr) < 1e-8:
+            dbg.every("rpc_zero", 2.0, "rpc", "GetJoints all zeros — treat as disconnected")
+            return False
+        return True
     except Exception:
         return False
 
@@ -1646,7 +1646,15 @@ def _ik_to_pose(pos, wxyz, seed=None):
         return _ik_to_xyzrpy(pose, seed=seed)
     if use_local_ik():
         q_now = seed
-        if q_now is None and robot_sim is not None:
+        # During bake the ghost does not track the path — never freeze every
+        # unseeded solve on the same live joints.
+        baking = False
+        try:
+            import path_bake as _bake
+            baking = bool(getattr(_bake, "is_baking", lambda: False)())
+        except Exception:
+            baking = False
+        if q_now is None and robot_sim is not None and not baking:
             q_now = _flat(robot_sim.angle_vector(), 6)
         return solve_backup_ik(pos, wxyz, q_now)
     return None
@@ -1754,23 +1762,21 @@ def _ik_sim_cursor():
 
 
 def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
-    """Offline 6-DOF IK. Current q first, then home. No position-only fallback."""
+    """Offline 6-DOF IK. Seed first, then home. Rejects large orientation error."""
     model = robot_ik
     if model is None:
         return None
+    home = np.deg2rad(np.array(HOME_Q_DEG, dtype=float))
     if seed_q is not None:
         seed = np.array(_flat(seed_q, 6), dtype=float)
-    elif robot_sim is not None:
-        seed = np.array(_flat(robot_sim.angle_vector(), 6), dtype=float)
     else:
-        return None
-    if seed.size < 6 or not np.all(np.isfinite(seed)):
-        return None
+        # No seed: try home only. Live ghost is often stale during bake.
+        seed = None
+    if seed is not None and (seed.size < 6 or not np.all(np.isfinite(seed))):
+        seed = None
     p_des = np.asarray(target_pos, dtype=float).reshape(3)
     if not np.all(np.isfinite(p_des)):
         return None
-    home = np.deg2rad(np.array(HOME_Q_DEG, dtype=float))
-    pose = aubo_pose_from_viewer(p_des, target_wxyz)
     rot = R.from_quat(wxyz_to_xyzw(target_wxyz)).as_matrix()
 
     def _pose_err(p, w):
@@ -1794,17 +1800,17 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
         _set_q(model, qq)
         p_fk, w_fk = _ee_frame(model)
         err, aerr = _pose_err(p_fk, w_fk)
-        if err > max(float(IK_POS_TOL), 0.04):
+        if err > max(float(IK_POS_TOL), 0.04) or aerr > float(IK_ANG_TOL):
             return None
         return qq
 
     with _ik_lock:
         try:
-            q = _try(seed, "live")
-            if q is not None:
-                return q
-            q = _try(home, "home")
-            return q
+            if seed is not None:
+                q = _try(seed, "seed")
+                if q is not None:
+                    return q
+            return _try(home, "home")
         except Exception as e:
             print("backup IK exception", e)
             return None
@@ -2876,8 +2882,8 @@ def pause_real_path():
         "pause_real_path",
         was_paused=bool(_rp.get("paused")),
         t=float(_rp.get("t") or 0),
-        uses_abort=False,
-        note="stopMove+speed0 only, no AbortPathBuffer",
+        uses_abort=True,
+        note="pause aborts buffer; resume replans from path_t",
     )
     _rp["paused"] = not _rp["paused"]
     _rp["wall"] = None
@@ -2900,6 +2906,18 @@ def pause_real_path():
                 robot.mc.stopMove(True, True)
             except Exception:
                 pass
+            # stopMove alone does not abort movePathBuffer — free the buffer.
+            try:
+                buf = _rp.get("name") or "rec"
+                if hasattr(robot, "AbortPathBuffer"):
+                    robot.AbortPathBuffer(buf)
+                elif hasattr(robot, "mc") and robot.mc is not None:
+                    try:
+                        robot.mc.pathBufferFree(buf)
+                    except Exception:
+                        pass
+            except Exception as e:
+                print("pause AbortPathBuffer failed:", e)
             print("real path paused")
         else:
             try:
@@ -2910,31 +2928,35 @@ def pause_real_path():
                 robot.mc.startMove()
             except Exception:
                 pass
-            # If the planner dropped the buffer during pause, re-feed the tail.
-            exec_id = -1
-            try:
-                exec_id = robot.mc.getExecId()
-            except Exception:
-                exec_id = -1
-            if exec_id == -1:
-                import path_bake as bake
-                t = _rp["t"]
-                dbg.log("real", "resume replan tail", play_t=float(t), preroll=float(_rp.get("preroll") or 0), n_samples=len(_rp.get("samples") or []))
-                rest = [s for s in _rp["samples"] if s["t"] >= t - 1e-6]
-                dbg.log(
-                    "real",
-                    "resume filter by sample t vs clock t",
-                    play_t=float(t),
-                    rest_n=len(rest),
-                    first_rest_t=(float(rest[0]["t"]) if rest else None),
-                    preroll=float(_rp.get("preroll") or 0),
-                )
-                if len(rest) < 2:
-                    rest = (_rp["samples"] or [])[-2:]
-                if len(rest) >= 2:
-                    interval = bake.sample_interval(rest)
-                    robot.plan_joint_path([s["q"] for s in rest], interval=interval, name=_rp["name"])
-                    robot.run_path_buffer(_rp["name"], wait=False)
+            # Always replan the remaining path from sample time (not play clock).
+            import path_bake as bake
+            play_t = float(_rp.get("t") or 0.0)
+            preroll = float(_rp.get("preroll") or 0.0)
+            path_t = max(0.0, play_t - preroll)
+            dbg.log(
+                "real",
+                "resume replan tail",
+                play_t=play_t,
+                path_t=path_t,
+                preroll=preroll,
+                n_samples=len(_rp.get("samples") or []),
+            )
+            rest = [s for s in (_rp.get("samples") or []) if float(s.get("t") or 0.0) >= path_t - 1e-6]
+            dbg.log(
+                "real",
+                "resume filter by sample t vs path_t",
+                play_t=play_t,
+                path_t=path_t,
+                rest_n=len(rest),
+                first_rest_t=(float(rest[0]["t"]) if rest else None),
+                preroll=preroll,
+            )
+            if len(rest) < 2:
+                rest = (_rp.get("samples") or [])[-2:]
+            if len(rest) >= 2:
+                interval = bake.sample_interval(rest)
+                robot.plan_joint_path([s["q"] for s in rest], interval=interval, name=_rp["name"])
+                robot.run_path_buffer(_rp["name"], wait=False)
             print("real path resumed")
     except Exception as e:
         print("real path pause/resume failed:", e)

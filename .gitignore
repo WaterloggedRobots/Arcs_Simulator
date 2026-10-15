@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local / IDE
+.env
+.idea/
+.vscode/
+*.swp
+
+# Office lock files
+~$*
+
+# Runtime logs & bake exports
+Scripts/session_log.txt
+Scripts/debug_run.log
+Scripts/bake_overspeed.csv
+Scripts/bake_overspeed.xlsx
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

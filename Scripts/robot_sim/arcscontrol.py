@@ -25,6 +25,7 @@ class RobotArcs:
         self.mc = None
         self._dead = True
         self._connecting = False
+        self._port_down_until = 0.0
         self.initPos = [-1.4687596998706127, 0.6089765683721227, 1.9923472065558696, -0.1984839510809548, 1.57996713558883, 0.1695107834780384]
         self.loadPosJ = [0, -15*math.pi/180, 100*math.pi/180, 25*math.pi/180, 90*math.pi/180, 0]
         if block:
@@ -54,7 +55,7 @@ class RobotArcs:
             self._drop_client()
             return False
 
-    def _port_reachable(self, timeout_s=0.35):
+    def _port_reachable(self, timeout_s=0.15):
         """Cheap TCP probe so a dead arm does not freeze Python inside the SDK (~21s)."""
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -70,11 +71,20 @@ class RobotArcs:
                 pass
 
     def _connect_once(self):
+        now = time.time()
+        if now < float(getattr(self, "_port_down_until", 0.0) or 0.0):
+            if dbg:
+                dbg.every("rpc_skip", 5.0, "rpc", "port down cooldown", ip=self.ip, port=self.port)
+            return False
         if not self._port_reachable():
+            # Skip further probes for a few seconds so a closed port does not
+            # keep costing ~0.15–0.35 s on the updater / GIL every cycle.
+            self._port_down_until = time.time() + 5.0
             print("arcscontrol: RPC connect failed")
             if dbg:
                 dbg.every("rpc_fail", 5.0, "rpc", "port closed, skip SDK", ip=self.ip, port=self.port)
             return False
+        self._port_down_until = 0.0
         self._drop_client()
         self.client = pyaubo_sdk.RpcClient()
         try:
@@ -133,7 +143,11 @@ class RobotArcs:
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
-        t.join(max(1.0, float(timeout_s)))
+        wait = float(timeout_s)
+        if wait <= 0.0:
+            # Fire-and-forget: caller must not block on a closed port.
+            return bool(self.hasConnected())
+        t.join(wait)
         if t.is_alive():
             print("arcscontrol: RPC connect still running", self.ip, "wait", timeout_s)
             return False
@@ -144,11 +158,21 @@ class RobotArcs:
         return bool(box["ok"])
 
     def reconnect(self):
+        """Non-blocking reconnect. Never joins the connect thread on the caller.
+
+        A closed port used to block the caller ~0.35–2 s on t.join(). The
+        updater / viewer only needs to kick a background attempt.
+        """
         if self.hasConnected():
             return True
         if self._connecting:
             return False
-        return self.connect(force=True, timeout_s=2.0)
+        now = time.time()
+        if now < float(getattr(self, "_port_down_until", 0.0) or 0.0):
+            return False
+        # Start connect without waiting — poll hasConnected() on later ticks.
+        self.connect(force=True, timeout_s=0.0)
+        return bool(self.hasConnected())
 
     def wait_arrival(self, start_timeout_s=2.0):
         t0 = time.time()
@@ -298,11 +322,13 @@ class RobotArcs:
             if dbg:
                 dbg.log("ik", "GetIK reject not 6 joints", n=len(q), code=int(code))
             return None
-        if np.allclose(q[:3], pose[:3], atol=1e-4):
+        # Reject only when the SDK echoed the full TCP pose as "joints"
+        # (rad-vs-meters mix-up). Matching q[:3]≈xyz alone rejects valid IK.
+        if len(pose) >= 6 and np.allclose(q, pose[:6], atol=1e-3):
             if dbg:
                 dbg.log(
                     "ik",
-                    "GetIK REJECT joints~xyz (rad vs meters)",
+                    "GetIK REJECT echoed pose as joints (rad vs meters)",
                     q0=q[0], q1=q[1], q2=q[2],
                     x=pose[0], y=pose[1], z=pose[2],
                 )
@@ -458,13 +484,13 @@ class RobotArcs:
                 chunk_pts = [list(map(float, q)) for q in traj[i:i + chunk]]
                 self.mc.pathBufferAppend(name, chunk_pts)
                 i += chunk
-            # Empty limits first (keep sample timing). If firmware rejects
-            # that (-5) or never goes Valid, eval with joint vmax/amax.
-            ev = self.mc.pathBufferEval(name, [], [], dt)
+            # Joint vmax/amax first — empty limits often return -5 on this
+            # firmware. Fall back to empty only if the limited eval is rejected.
+            ev = self.mc.pathBufferEval(name, vmax, amax, dt)
             print("pathBufferEval", name, "type", path_type, "n", n, "dt", dt, "ret", ev)
             if ev == -5:
-                ev = self.mc.pathBufferEval(name, vmax, amax, dt)
-                print("pathBufferEval retry limits", "ret", ev)
+                ev = self.mc.pathBufferEval(name, [], [], dt)
+                print("pathBufferEval retry empty limits", "ret", ev)
             t0 = time.time()
             while not self.mc.pathBufferValid(name):
                 if time.time() - t0 > wait_s:

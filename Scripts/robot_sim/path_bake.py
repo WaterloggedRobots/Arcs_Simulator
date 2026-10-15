@@ -10,6 +10,7 @@ Future motion fields (unused now, reserved):
 """
 import json
 import math
+import threading
 from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -18,6 +19,10 @@ from scipy.spatial.transform import Slerp
 import waypoints as wp
 import robot_runtime as rr
 import debug_trace as dbg
+
+# Shared bake / timeline state. Background bake and viewer/Flask edits must
+# not mutate segments at the same time.
+_state_lock = threading.RLock()
 
 SPACING_DEFAULT = 0.05
 JOINT_JUMP_MAX = 0.5
@@ -50,6 +55,8 @@ DEFAULT_SPEED = 0.05
 FORMAT_VERSION = "beta.0904"
 BAKE_SEED_DEG = [0.0, 0.0, 90.0, 90.0, 0.0, 0.0]
 _tl_cache = None
+_padded_cache = None  # (key, list)
+_runnable_cache = None  # (key, bool)
 
 
 def _as3(x, default=(0.0, 0.0, 0.0)):
@@ -516,30 +523,38 @@ show_viewer_samples = True
 show_tl_samples = True
 
 
+def _clear_motion_caches():
+    global _tl_cache, _padded_cache, _runnable_cache
+    _tl_cache = None
+    _padded_cache = None
+    _runnable_cache = None
+
+
 def clear_bake():
     """Drop IK/speed bake and timeline sample nodes. Keep waypoints."""
-    global baked_hops, baked_points, _speed_valid, segments, _tl_cache, _bake_generation
-    baked_hops = []
-    baked_points = []
-    _speed_valid = False
-    _tl_cache = None
-    _bake_generation += 1
-    _sync_segment_count()
-    for i in range(len(segments)):
-        segments[i] = _build_segment(i)
-        segments[i]["status"] = "pending"
-        segments[i]["timing"] = None
-        segments[i]["micro"] = []
-        segments[i]["fail_index"] = None
-        for sm in segments[i].get("samples") or []:
-            sm["q"] = None
-            sm["t"] = None
-            sm["timing"] = None
-            sm["speed"] = None
-    clear_sample_dots()
-    if hasattr(wp, "draw_path"):
-        wp.draw_path()
-    _tl_cache = None
+    global baked_hops, baked_points, _speed_valid, segments, _bake_generation
+    with _state_lock:
+        baked_hops = []
+        baked_points = []
+        _speed_valid = False
+        _clear_motion_caches()
+        _bake_generation += 1
+        _sync_segment_count()
+        for i in range(len(segments)):
+            segments[i] = _build_segment(i)
+            segments[i]["status"] = "pending"
+            segments[i]["timing"] = None
+            segments[i]["micro"] = []
+            segments[i]["fail_index"] = None
+            for sm in segments[i].get("samples") or []:
+                sm["q"] = None
+                sm["t"] = None
+                sm["timing"] = None
+                sm["speed"] = None
+        clear_sample_dots()
+        if hasattr(wp, "draw_path"):
+            wp.draw_path()
+        _clear_motion_caches()
     return {"ok": True, "segments": len(segments), "bake": status_dict()}
 
 
@@ -744,45 +759,13 @@ def get_selected_sample():
 
 def invalidate_timing_span(seg_i):
     """Drop speed scores for one span. Keep IK and other spans."""
-    global _speed_valid, baked_hops, baked_points, _tl_cache
-    _speed_valid = False
-    _tl_cache = None
-    if seg_i < 0 or seg_i >= len(segments):
-        return
-    seg = segments[seg_i]
-    if seg.get("status") == "ok":
-        seg["timing"] = "uncalc"
-        seg["micro"] = []
-    for sm in seg.get("samples") or []:
-        if sm.get("q") is not None:
-            sm["timing"] = "uncalc"
-            sm["speed"] = None
-            sm["accel"] = None
-            sm["limit"] = None
-    t0 = t1 = None
-    try:
-        t0 = float(wp.waypoints[seg_i].get("t") or 0.0)
-        t1 = float(wp.waypoints[seg_i + 1].get("t") or t0)
-    except Exception:
-        t0 = t1 = None
-    if t0 is not None and t1 is not None:
-        lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
-        baked_hops = [
-            h for h in baked_hops
-            if not (float(h.get("t0") or 0.0) >= lo - 1e-6 and float(h.get("t1") or 0.0) <= hi + 1e-6)
-        ]
-
-
-def invalidate_timing_from(seg_i):
-    """Drop speed from seg_i onward. Keep earlier hop scores and all IK."""
-    global baked_hops, baked_points, _speed_valid
-    _speed_valid = False
-    t_cut = None
-    if 0 <= seg_i < len(wp.waypoints):
-        t_cut = float(wp.waypoints[seg_i].get("t") or 0.0)
-    for j, seg in enumerate(segments):
-        if j < max(0, int(seg_i)):
-            continue
+    global _speed_valid, baked_hops, baked_points
+    with _state_lock:
+        _speed_valid = False
+        _clear_motion_caches()
+        if seg_i < 0 or seg_i >= len(segments):
+            return
+        seg = segments[seg_i]
         if seg.get("status") == "ok":
             seg["timing"] = "uncalc"
             seg["micro"] = []
@@ -792,23 +775,59 @@ def invalidate_timing_from(seg_i):
                 sm["speed"] = None
                 sm["accel"] = None
                 sm["limit"] = None
-    if t_cut is None:
-        baked_hops = []
-        baked_points = []
-    else:
-        baked_hops = [h for h in baked_hops if float(h.get("t1") or 0.0) <= t_cut + 1e-9]
-        baked_points = [p for p in baked_points if float(p.get("t") or 0.0) <= t_cut + 1e-9]
+        t0 = t1 = None
+        try:
+            t0 = float(wp.waypoints[seg_i].get("t") or 0.0)
+            t1 = float(wp.waypoints[seg_i + 1].get("t") or t0)
+        except Exception:
+            t0 = t1 = None
+        if t0 is not None and t1 is not None:
+            lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
+            baked_hops = [
+                h for h in baked_hops
+                if not (float(h.get("t0") or 0.0) >= lo - 1e-6 and float(h.get("t1") or 0.0) <= hi + 1e-6)
+            ]
+
+
+def invalidate_timing_from(seg_i):
+    """Drop speed from seg_i onward. Keep earlier hop scores and all IK."""
+    global baked_hops, baked_points, _speed_valid
+    with _state_lock:
+        _speed_valid = False
+        _clear_motion_caches()
+        t_cut = None
+        if 0 <= seg_i < len(wp.waypoints):
+            t_cut = float(wp.waypoints[seg_i].get("t") or 0.0)
+        for j, seg in enumerate(segments):
+            if j < max(0, int(seg_i)):
+                continue
+            if seg.get("status") == "ok":
+                seg["timing"] = "uncalc"
+                seg["micro"] = []
+            for sm in seg.get("samples") or []:
+                if sm.get("q") is not None:
+                    sm["timing"] = "uncalc"
+                    sm["speed"] = None
+                    sm["accel"] = None
+                    sm["limit"] = None
+        if t_cut is None:
+            baked_hops = []
+            baked_points = []
+        else:
+            baked_hops = [h for h in baked_hops if float(h.get("t1") or 0.0) <= t_cut + 1e-9]
+            baked_points = [p for p in baked_points if float(p.get("t") or 0.0) <= t_cut + 1e-9]
 
 
 def _ease_time_frac(mode, u):
+    """Map arc-length fraction u in [0,1] → time fraction in [0,1].
+
+    Forward easing (slow start = ease_in → t = u²). Older code used the
+    inverse curves (sqrt), which swapped ease-in / ease-out.
+    """
     u = min(1.0, max(0.0, float(u)))
-    if mode == "ease_in":
-        return math.sqrt(u)
-    if mode == "ease_out":
-        return 1.0 - math.sqrt(max(0.0, 1.0 - u))
-    if mode == "ease_in_out":
-        x = min(1.0 - 1e-9, max(1e-9, u))
-        return math.acos(1.0 - 2.0 * x) / math.pi
+    fn = TRANSITIONS.get(mode)
+    if callable(fn):
+        return float(fn(u))
     if mode == "sine_in":
         return 1.0 - math.cos(0.5 * math.pi * u)
     if mode == "sine_out":
@@ -816,36 +835,38 @@ def _ease_time_frac(mode, u):
     if mode == "sine_in_out":
         return 0.5 - 0.5 * math.cos(math.pi * u)
     if mode == "cubic_in":
-        return u ** (1.0 / 3.0)
+        return u * u * u
     if mode == "cubic_out":
-        return 1.0 - (1.0 - u) ** (1.0 / 3.0)
+        return 1.0 - (1.0 - u) ** 3.0
     if mode == "cubic_in_out":
         if u < 0.5:
-            return 0.5 * (2.0 * u) ** (1.0 / 3.0)
-        return 1.0 - 0.5 * (2.0 * (1.0 - u)) ** (1.0 / 3.0)
+            return 4.0 * u * u * u
+        return 1.0 - (-2.0 * u + 2.0) ** 3.0 / 2.0
     return u
 
 
 def remap_segment_times(seg_i, old_t0, old_t1, new_t0, new_t1):
-    if seg_i < 0 or seg_i >= len(segments):
-        return
-    samples = segments[seg_i].get("samples") or []
-    span0 = float(old_t1) - float(old_t0)
-    span1 = float(new_t1) - float(new_t0)
-    for k, sm in enumerate(samples):
-        if k == 0:
-            sm["t"] = float(new_t0)
-            continue
-        if k == len(samples) - 1:
-            sm["t"] = float(new_t1)
-            continue
-        old = float(sm.get("t") if sm.get("t") is not None else old_t0)
-        u = 0.5 if abs(span0) < 1e-9 else (old - float(old_t0)) / span0
-        u = min(1.0, max(0.0, u))
-        t = float(new_t0) + u * span1
-        t = max(0.0, round(t / 0.01) * 0.01)
-        sm["t"] = t
-        sm.pop("t_lock", None)
+    with _state_lock:
+        if seg_i < 0 or seg_i >= len(segments):
+            return
+        samples = segments[seg_i].get("samples") or []
+        span0 = float(old_t1) - float(old_t0)
+        span1 = float(new_t1) - float(new_t0)
+        for k, sm in enumerate(samples):
+            if k == 0:
+                sm["t"] = float(new_t0)
+                continue
+            if k == len(samples) - 1:
+                sm["t"] = float(new_t1)
+                continue
+            old = float(sm.get("t") if sm.get("t") is not None else old_t0)
+            u = 0.5 if abs(span0) < 1e-9 else (old - float(old_t0)) / span0
+            u = min(1.0, max(0.0, u))
+            t = float(new_t0) + u * span1
+            t = max(0.0, round(t / 0.01) * 0.01)
+            sm["t"] = t
+            sm.pop("t_lock", None)
+        _clear_motion_caches()
 
 
 def _bez(p0, p1, p2, p3, s):
@@ -866,46 +887,47 @@ def _s_for_progress(c1, c2, y, steps=48):
 
 
 def apply_custom_transition(idx, c1, c2):
-    c1 = [min(1.0, max(0.0, float(c1[0]))), min(1.0, max(0.0, float(c1[1])))]
-    c2 = [min(1.0, max(0.0, float(c2[0]))), min(1.0, max(0.0, float(c2[1])))]
-    if c2[0] < c1[0]:
-        c1[0], c2[0] = c2[0], c1[0]
-    if idx < 0 or idx >= len(segments):
-        return False
-    samples = segments[idx].get("samples") or []
-    if len(samples) < 2:
-        return False
-    t0 = float(samples[0].get("t") or 0.0)
-    t1 = float(samples[-1].get("t") or t0)
-    n = max(1, len(samples) - 1)
-    for k, sm in enumerate(samples):
-        if k == 0 or k == len(samples) - 1:
-            continue
-        u = sm.get("u")
-        if u is None:
-            u = float(k) / float(n)
-        s = _s_for_progress(c1, c2, float(u))
-        tau = _bez(0.0, c1[0], c2[0], 1.0, s)
-        t = t0 + max(0.0, min(1.0, tau)) * (t1 - t0)
-        t = max(0.0, round(t / 0.01) * 0.01)
-        sm["t"] = t
-        sm.pop("t_lock", None)
-    for k in range(1, len(samples) - 1):
-        lo = float(samples[k - 1]["t"]) + 0.01
-        hi = float(samples[k + 1]["t"]) - 0.01
-        if hi >= lo:
-            samples[k]["t"] = min(max(float(samples[k]["t"]), lo), hi)
-            samples[k].pop("t_lock", None)
-    custom_curves[int(idx)] = [list(c1), list(c2)]
-    segments[idx]["transition"] = "custom"
-    try:
-        wp.waypoints[idx]["transition"] = "custom"
-        wp.waypoints[idx]["trans_c1"] = list(c1)
-        wp.waypoints[idx]["trans_c2"] = list(c2)
-    except Exception:
-        pass
-    invalidate_timing_from(idx)
-    return True
+    with _state_lock:
+        c1 = [min(1.0, max(0.0, float(c1[0]))), min(1.0, max(0.0, float(c1[1])))]
+        c2 = [min(1.0, max(0.0, float(c2[0]))), min(1.0, max(0.0, float(c2[1])))]
+        if c2[0] < c1[0]:
+            c1[0], c2[0] = c2[0], c1[0]
+        if idx < 0 or idx >= len(segments):
+            return False
+        samples = segments[idx].get("samples") or []
+        if len(samples) < 2:
+            return False
+        t0 = float(samples[0].get("t") or 0.0)
+        t1 = float(samples[-1].get("t") or t0)
+        n = max(1, len(samples) - 1)
+        for k, sm in enumerate(samples):
+            if k == 0 or k == len(samples) - 1:
+                continue
+            u = sm.get("u")
+            if u is None:
+                u = float(k) / float(n)
+            s = _s_for_progress(c1, c2, float(u))
+            tau = _bez(0.0, c1[0], c2[0], 1.0, s)
+            t = t0 + max(0.0, min(1.0, tau)) * (t1 - t0)
+            t = max(0.0, round(t / 0.01) * 0.01)
+            sm["t"] = t
+            sm.pop("t_lock", None)
+        for k in range(1, len(samples) - 1):
+            lo = float(samples[k - 1]["t"]) + 0.01
+            hi = float(samples[k + 1]["t"]) - 0.01
+            if hi >= lo:
+                samples[k]["t"] = min(max(float(samples[k]["t"]), lo), hi)
+                samples[k].pop("t_lock", None)
+        custom_curves[int(idx)] = [list(c1), list(c2)]
+        segments[idx]["transition"] = "custom"
+        try:
+            wp.waypoints[idx]["transition"] = "custom"
+            wp.waypoints[idx]["trans_c1"] = list(c1)
+            wp.waypoints[idx]["trans_c2"] = list(c2)
+        except Exception:
+            pass
+        invalidate_timing_from(idx)
+        return True
 
 
 def get_custom_curve(idx):
@@ -916,32 +938,32 @@ def get_custom_curve(idx):
 
 
 def apply_transition(idx, mode, c1=None, c2=None):
-    global _tl_cache
     mode = str(mode or "linear")
     if mode == "custom":
         rec = get_custom_curve(idx)
         return apply_custom_transition(idx, c1 or rec["c1"], c2 or rec["c2"])
-    if idx < 0 or idx >= len(segments):
-        return False
-    samples = segments[idx].get("samples") or []
-    if len(samples) < 2:
-        return False
-    for sm in samples:
-        sm.pop("t_lock", None)
-        if sm is not samples[0] and sm is not samples[-1]:
-            sm["t"] = None
-    segments[idx]["transition"] = mode
-    try:
-        wp.waypoints[idx]["transition"] = mode
-    except Exception:
-        pass
-    t0 = float(wp.waypoints[idx].get("t") or samples[0].get("t") or 0.0)
-    t1 = float(wp.waypoints[idx + 1].get("t") or samples[-1].get("t") or t0)
-    _apply_seg_time_profile(segments[idx], t0, t1)
-    _tl_cache = None
-    invalidate_timing_from(idx)
-    bump_timeline_cache()
-    return True
+    with _state_lock:
+        if idx < 0 or idx >= len(segments):
+            return False
+        samples = segments[idx].get("samples") or []
+        if len(samples) < 2:
+            return False
+        for sm in samples:
+            sm.pop("t_lock", None)
+            if sm is not samples[0] and sm is not samples[-1]:
+                sm["t"] = None
+        segments[idx]["transition"] = mode
+        try:
+            wp.waypoints[idx]["transition"] = mode
+        except Exception:
+            pass
+        t0 = float(wp.waypoints[idx].get("t") or samples[0].get("t") or 0.0)
+        t1 = float(wp.waypoints[idx + 1].get("t") or samples[-1].get("t") or t0)
+        _apply_seg_time_profile(segments[idx], t0, t1)
+        _clear_motion_caches()
+        invalidate_timing_from(idx)
+        bump_timeline_cache()
+        return True
 
 
 def set_transition(idx, mode, c1=None, c2=None):
@@ -959,57 +981,57 @@ def invalidate_timing():
 
 
 def set_sample_time(seg_i, k, t):
-    if seg_i < 0 or seg_i >= len(segments):
-        return None
-    samples = segments[seg_i].get("samples") or []
-    if k <= 0 or k >= len(samples) - 1:
-        return None
-    prev_t = float(samples[k - 1].get("t") or 0.0)
-    next_t = float(samples[k + 1].get("t") or prev_t)
-    lo = prev_t + 0.01
-    hi = next_t - 0.01
-    if hi < lo:
-        t = 0.5 * (prev_t + next_t)
-    else:
-        t = min(max(float(t), lo), hi)
-    t = max(0.0, round(t / 0.01) * 0.01)
-    samples[k]["t"] = t
-    samples[k]["t_lock"] = t
-    invalidate_timing_from(seg_i)
-    bump_timeline_cache()
-    return t
+    with _state_lock:
+        if seg_i < 0 or seg_i >= len(segments):
+            return None
+        samples = segments[seg_i].get("samples") or []
+        if k <= 0 or k >= len(samples) - 1:
+            return None
+        prev_t = float(samples[k - 1].get("t") or 0.0)
+        next_t = float(samples[k + 1].get("t") or prev_t)
+        lo = prev_t + 0.01
+        hi = next_t - 0.01
+        if hi < lo:
+            t = 0.5 * (prev_t + next_t)
+        else:
+            t = min(max(float(t), lo), hi)
+        t = max(0.0, round(t / 0.01) * 0.01)
+        samples[k]["t"] = t
+        samples[k]["t_lock"] = t
+        invalidate_timing_from(seg_i)
+        bump_timeline_cache()
+        return t
 
 
 def set_sample_times(moves):
     """Batch-move interior samples. Returns applied [{seg, index, t}]."""
-    parsed = []
-    for rec in moves or []:
-        try:
-            if isinstance(rec, dict):
-                seg_i, k, t = int(rec.get("seg")), int(rec.get("index")), float(rec.get("t"))
-            else:
-                seg_i, k, t = int(rec[0]), int(rec[1]), float(rec[2])
-        except Exception:
-            continue
-        if seg_i < 0 or seg_i >= len(segments):
-            continue
-        samples = segments[seg_i].get("samples") or []
-        if k <= 0 or k >= len(samples) - 1:
-            continue
-        parsed.append((seg_i, k, t))
-    for seg_i, k, t in parsed:
-        sm = segments[seg_i]["samples"][k]
-        sm["t"] = float(t)
-        sm["t_lock"] = float(t)
-    applied = []
-    dirty = None
-    for seg_i, k, _t in sorted(parsed, key=lambda r: (r[0], r[1])):
-        nt = set_sample_time(seg_i, k, segments[seg_i]["samples"][k]["t"])
-        if nt is None:
-            continue
-        applied.append({"seg": seg_i, "index": k, "t": nt})
-        dirty = seg_i if dirty is None else min(dirty, seg_i)
-    return applied
+    with _state_lock:
+        parsed = []
+        for rec in moves or []:
+            try:
+                if isinstance(rec, dict):
+                    seg_i, k, t = int(rec.get("seg")), int(rec.get("index")), float(rec.get("t"))
+                else:
+                    seg_i, k, t = int(rec[0]), int(rec[1]), float(rec[2])
+            except Exception:
+                continue
+            if seg_i < 0 or seg_i >= len(segments):
+                continue
+            samples = segments[seg_i].get("samples") or []
+            if k <= 0 or k >= len(samples) - 1:
+                continue
+            parsed.append((seg_i, k, t))
+        for seg_i, k, t in parsed:
+            sm = segments[seg_i]["samples"][k]
+            sm["t"] = float(t)
+            sm["t_lock"] = float(t)
+        applied = []
+        for seg_i, k, _t in sorted(parsed, key=lambda r: (r[0], r[1])):
+            nt = set_sample_time(seg_i, k, segments[seg_i]["samples"][k]["t"])
+            if nt is None:
+                continue
+            applied.append({"seg": seg_i, "index": k, "t": nt})
+        return applied
 
 
 def _segment_sig_matches(j):
@@ -1020,44 +1042,45 @@ def _segment_sig_matches(j):
 
 def invalidate_from(idx, drop_all=False):
     """idx = waypoint index that changed. Dirties segment idx-1 and all after."""
-    global baked_hops, baked_points, _bake_generation, _tl_cache, _speed_valid
-    start = 0 if drop_all else max(0, idx - 1)
-    if not drop_all and segments:
-        changed = False
-        n = min(len(segments), max(0, len(wp.waypoints) - 1))
-        if n != len(segments):
-            changed = True
-        else:
-            for j in range(start, n):
-                if not _segment_sig_matches(j):
-                    changed = True
-                    break
-        if not changed:
+    global baked_hops, baked_points, _bake_generation, _speed_valid
+    with _state_lock:
+        start = 0 if drop_all else max(0, idx - 1)
+        if not drop_all and segments:
+            changed = False
+            n = min(len(segments), max(0, len(wp.waypoints) - 1))
+            if n != len(segments):
+                changed = True
+            else:
+                for j in range(start, n):
+                    if not _segment_sig_matches(j):
+                        changed = True
+                        break
+            if not changed:
+                return
+        _bake_generation += 1
+        _clear_motion_caches()
+        if not segments:
+            _sync_segment_count()
+            _draw_sample_dots()
+            if hasattr(wp, "draw_path"):
+                wp.draw_path()
             return
-    _bake_generation += 1
-    _tl_cache = None
-    if not segments:
+        baked_hops = []
+        baked_points = []
+        _speed_valid = False
+        for j in range(start, len(segments)):
+            segments[j]["status"] = "pending"
+            segments[j]["samples"] = []
+            segments[j]["fail_index"] = None
+            segments[j]["sig"] = None
+            segments[j]["micro"] = []
+            segments[j]["timing"] = None
         _sync_segment_count()
+        for j in range(start, len(segments)):
+            segments[j] = _build_segment(j)
         _draw_sample_dots()
         if hasattr(wp, "draw_path"):
             wp.draw_path()
-        return
-    baked_hops = []
-    baked_points = []
-    _speed_valid = False
-    for j in range(start, len(segments)):
-        segments[j]["status"] = "pending"
-        segments[j]["samples"] = []
-        segments[j]["fail_index"] = None
-        segments[j]["sig"] = None
-        segments[j]["micro"] = []
-        segments[j]["timing"] = None
-    _sync_segment_count()
-    for j in range(start, len(segments)):
-        segments[j] = _build_segment(j)
-    _draw_sample_dots()
-    if hasattr(wp, "draw_path"):
-        wp.draw_path()
 
 
 def on_waypoint_moved(idx):
@@ -1080,20 +1103,21 @@ def _sync_segment_count():
 
 
 def rebuild_preview():
-    global _bake_generation, _tl_cache
-    _bake_generation += 1
-    _tl_cache = None
-    _sync_segment_count()
-    for i in range(len(segments)):
-        sig = (_wp_sig(i), _wp_sig(i + 1))
-        if segments[i].get("sig") != sig or not segments[i].get("samples") or segments[i].get("spacing") != spacing:
-            old_tr = segments[i].get("transition")
-            segments[i] = _build_segment(i)
-            if old_tr:
-                segments[i]["transition"] = old_tr
-    _draw_sample_dots()
-    if hasattr(wp, "draw_path"):
-        wp.draw_path()
+    global _bake_generation
+    with _state_lock:
+        _bake_generation += 1
+        _clear_motion_caches()
+        _sync_segment_count()
+        for i in range(len(segments)):
+            sig = (_wp_sig(i), _wp_sig(i + 1))
+            if segments[i].get("sig") != sig or not segments[i].get("samples") or segments[i].get("spacing") != spacing:
+                old_tr = segments[i].get("transition")
+                segments[i] = _build_segment(i)
+                if old_tr:
+                    segments[i]["transition"] = old_tr
+        _draw_sample_dots()
+        if hasattr(wp, "draw_path"):
+            wp.draw_path()
 
 
 def bake_seed_q():
@@ -1247,20 +1271,25 @@ def is_baking():
 
 def run_bake(spacing_m=None):
     global _speed_valid, _baking
-    if _baking:
-        dbg.log("bake", "rejected already in progress")
-        return {"ok": False, "error": "bake in progress", "baked": 0, "total": len(segments)}
-    _baking = True
+    with _state_lock:
+        if _baking:
+            dbg.log("bake", "rejected already in progress")
+            return {"ok": False, "error": "bake in progress", "baked": 0, "total": len(segments)}
+        _baking = True
     dbg.log("bake", "start", spacing=spacing_m, waypoints=len(getattr(wp, "waypoints", []) or []))
     try:
-        result = _run_bake_body(spacing_m)
+        # Hold bake state for the whole solve so viewer/Flask edits cannot
+        # interleave with segment / sample mutation.
+        with _state_lock:
+            result = _run_bake_body(spacing_m)
         dbg.log("bake", "done", result=result)
         return result
     except Exception as e:
         dbg.log("bake", "EXCEPTION", err=str(e))
         raise
     finally:
-        _baking = False
+        with _state_lock:
+            _baking = False
 
 
 def _run_bake_body(spacing_m=None):
@@ -1928,7 +1957,7 @@ def _apply_seg_time_profile(seg, t0, t1):
         for k in range(1, len(samples) - 1):
             samples[k]["t"] = t0 + span * (float(k) / float(n))
     else:
-        dbg.log("bake", "time profile by parameter u not arc length", mode=mode, n=len(samples), t0=t0, t1=t1)
+        # sm["u"] is already arc-length fraction from _arc_length_samples.
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
                 continue
@@ -1944,47 +1973,52 @@ def assign_sample_times():
     Do not rewrite existing interior times — a transition or user drag owns those
     until the next explicit apply_transition / bake rebuild.
     """
-    wps = wp.waypoints
-    for i, seg in enumerate(segments):
-        if i + 1 >= len(wps):
-            break
-        t0 = float(wps[i].get("t") or 0.0)
-        t1 = float(wps[i + 1].get("t") or t0)
-        samples = seg.get("samples") or []
-        if len(samples) < 2:
-            continue
-        missing = any(
-            k not in (0, len(samples) - 1) and samples[k].get("t") is None
-            for k in range(len(samples))
-        )
-        if missing:
-            _apply_seg_time_profile(seg, t0, t1)
-        else:
-            samples[0]["t"] = t0
-            samples[-1]["t"] = t1
+    with _state_lock:
+        wps = wp.waypoints
+        for i, seg in enumerate(segments):
+            if i + 1 >= len(wps):
+                break
+            t0 = float(wps[i].get("t") or 0.0)
+            t1 = float(wps[i + 1].get("t") or t0)
+            samples = seg.get("samples") or []
+            if len(samples) < 2:
+                continue
+            missing = any(
+                k not in (0, len(samples) - 1) and samples[k].get("t") is None
+                for k in range(len(samples))
+            )
+            if missing:
+                _apply_seg_time_profile(seg, t0, t1)
+            else:
+                samples[0]["t"] = t0
+                samples[-1]["t"] = t1
+        _clear_motion_caches()
 
 
 def pin_key_times():
     """Move diamond endpoints only. Interior samples stay put unless a diamond crosses them."""
-    wps = wp.waypoints
-    for i, seg in enumerate(segments):
-        if i + 1 >= len(wps):
-            break
-        t0 = float(wps[i].get("t") or 0.0)
-        t1 = float(wps[i + 1].get("t") or t0)
-        if t1 < t0:
-            t0, t1 = t1, t0
-        samples = seg.get("samples") or []
-        if len(samples) < 2:
-            continue
-        samples[0]["t"] = t0
-        samples[-1]["t"] = t1
-        micros = seg.get("micro") or []
-        if micros:
-            if micros[0].get("t0") is not None:
-                micros[0]["t0"] = t0
-            if micros[-1].get("t1") is not None:
-                micros[-1]["t1"] = t1
+    with _state_lock:
+        wps = wp.waypoints
+        for i, seg in enumerate(segments):
+            if i + 1 >= len(wps):
+                break
+            t0 = float(wps[i].get("t") or 0.0)
+            t1 = float(wps[i + 1].get("t") or t0)
+            if t1 < t0:
+                t0, t1 = t1, t0
+            samples = seg.get("samples") or []
+            if len(samples) < 2:
+                continue
+            samples[0]["t"] = t0
+            samples[-1]["t"] = t1
+            micros = seg.get("micro") or []
+            if micros:
+                if micros[0].get("t0") is not None:
+                    micros[0]["t0"] = t0
+                if micros[-1].get("t1") is not None:
+                    micros[-1]["t1"] = t1
+        # Sample times changed — drop padded / timeline caches.
+        _clear_motion_caches()
 
 
 def _blend_knot_times():
@@ -2349,10 +2383,15 @@ def _timing_points():
 
 
 def evaluate_timing(force=False):
-    """Score every hop for display. Limit pass/fail is keyframe-to-keyframe only.
+    """Score hops and keyframe spans vs joint-speed limits.
 
-    A yellow span does not block later spans. Sim / run still allowed.
+    A too_fast span marks later OK spans uncalc until retimed.
     """
+    with _state_lock:
+        return _evaluate_timing_body(force)
+
+
+def _evaluate_timing_body(force=False):
     if not force and not _speed_valid:
         return False
     pin_key_times()
@@ -2391,15 +2430,14 @@ def evaluate_timing(force=False):
                 kin_speeds=kin_w,
             )
             prev_speeds = rec.get("speeds")
-            # Per-sample numbers only — do not fail the hop.
-            rec["over"] = False
-            rec["status"] = "ok"
-            rec["over_vel"] = False
+            # Accel on short hops false-flags look-at paths — ignore for fail.
+            # Joint velocity over limit still counts.
             rec["over_acc"] = False
-            rec["over_time"] = False
+            rec["over"] = bool(rec.get("over_vel") or rec.get("over_time"))
+            rec["status"] = "too_fast" if rec["over"] else "ok"
             seg["micro"].append(rec)
-            a["timing"] = "ok"
-            b["timing"] = "ok"
+            a["timing"] = "ok" if not rec["over"] else "too_fast"
+            b["timing"] = "ok" if not rec["over"] else "too_fast"
             b["speed"] = rec["speed"]
             b["accel"] = rec["acc"]
             b["limit"] = rec["limit"]
@@ -2413,17 +2451,17 @@ def evaluate_timing(force=False):
         t_span = float(samples[-1].get("t") or 0.0) - float(samples[0].get("t") or 0.0)
         deltas = joint_angle_deltas(samples[0]["q"], samples[-1]["q"])
         lin = _lin_dist(samples[0], samples[-1])
-        # Keyframe span: mean joint rate vs limit only.
-        # Accel / from-rest triangle on 0.1 s hops false-flags look-at paths.
+        # Keyframe span: mean joint rate, plus any hop that exceeds joint vel.
         dt_use = max(t_span, 1e-3)
         mean_w = [abs(d) / dt_use for d in deltas]
         slop = 1.10
         over_vel = any(mean_w[j] > wmax[j] * slop for j in range(len(mean_w)))
+        hop_vel_fail = any(bool(h.get("over_vel")) for h in seg["micro"])
         need_vel = 0.0
         for j, d in enumerate(deltas):
             need_vel = max(need_vel, abs(d) / max(wmax[j], 1e-6))
         span["need"] = need_vel
-        span["over_vel"] = bool(over_vel)
+        span["over_vel"] = bool(over_vel or hop_vel_fail)
         span["over_acc"] = False
         span["over_time"] = bool(t_span + 1e-6 < need_vel)
         if lin < 0.002 and max(deltas) < 0.02:
@@ -2439,18 +2477,20 @@ def evaluate_timing(force=False):
                 need_s=round(need_vel, 4),
                 over_vel=bool(span.get("over_vel")),
                 over_time=bool(span.get("over_time")),
+                hop_vel=bool(hop_vel_fail),
                 lin_m=round(lin, 4),
             )
             seg["timing"] = "too_fast"
             any_fast = True
+            blocked = True
             for sm in samples:
                 sm["timing"] = "too_fast"
             for hop in seg["micro"]:
                 hop["over"] = True
                 hop["status"] = "too_fast"
-                hop["over_vel"] = span.get("over_vel")
-                hop["over_acc"] = span.get("over_acc")
-                hop["over_time"] = span.get("over_time")
+                hop["over_vel"] = hop.get("over_vel") or span.get("over_vel")
+                hop["over_acc"] = False
+                hop["over_time"] = hop.get("over_time") or span.get("over_time")
         elif _seg_force_fk(i) or seg.get("force_fk"):
             span["status"] = "fk"
             for hop in seg["micro"]:
@@ -2463,19 +2503,25 @@ def evaluate_timing(force=False):
     return any_fast
 
 
+def _overspeed_csv_path():
+    """Scripts/bake_overspeed.csv — same file /api/speed_export downloads."""
+    return Path(__file__).resolve().parent.parent / "bake_overspeed.csv"
+
+
 def write_overspeed_report(path=None):
-    """Write every overspeed/over-accel hop to CSV + xlsx under artifacts."""
+    """Write hops from spans that failed the bake speed check (timing too_fast)."""
     wmax, amax = _joint_wmax()
     names = _JOINT_NAMES
     rows = []
     for si, seg in enumerate(segments):
+        # Match the bake UI: only report spans that evaluate_timing marked too_fast.
+        if seg.get("timing") != "too_fast":
+            continue
         samples = [sm for sm in (seg.get("samples") or []) if sm.get("q") is not None]
         prev = None
         for k, (a, b) in enumerate(zip(samples, samples[1:])):
             rec = _hop_metrics(a, b, wmax, amax, prev_speeds=prev)
             prev = rec.get("speeds")
-            if not rec.get("over"):
-                continue
             fv = rec.get("fault_vel") or []
             fa = rec.get("fault_acc") or []
             rows.append({
@@ -2502,9 +2548,8 @@ def write_overspeed_report(path=None):
                 "speed_rad_s": rec.get("speed"),
                 "acc_rad_s2": rec.get("acc"),
             })
-    out_dir = Path("/home/workdir/artifacts")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = Path(path) if path else out_dir / "bake_overspeed.csv"
+    csv_path = Path(path) if path else _overspeed_csv_path()
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     xlsx_path = csv_path.with_suffix(".xlsx")
     cols = [
         "seg", "hop", "t0_s", "t1_s", "dt_s", "lin_m", "set_duration_s",
@@ -2528,6 +2573,11 @@ def write_overspeed_report(path=None):
         xlsx_path = None
     print("overspeed report", csv_path, "rows", len(rows))
     return {"ok": True, "csv": str(csv_path), "xlsx": str(xlsx_path) if xlsx_path else None, "rows": len(rows)}
+
+
+def export_overspeed():
+    """Called by /api/speed_export before download."""
+    return write_overspeed_report(_overspeed_csv_path())
 
 
 def _first_overspeed_t():
@@ -2719,8 +2769,8 @@ def _spans_from_timed():
 
 
 def bump_timeline_cache():
-    global _tl_cache
-    _tl_cache = None
+    """Drop timeline / motion caches after keyframe or sample time edits."""
+    _clear_motion_caches()
 
 
 def timeline_payload():
@@ -3085,10 +3135,39 @@ def _pad_holds(samples, dt=0.05):
     return out
 
 
+def _padded_cache_key():
+    """Include sample and keyframe times so timeline edits invalidate the cache."""
+    return (
+        _bake_generation,
+        len(segments),
+        tuple(s.get("status") for s in segments),
+        tuple(s.get("timing") for s in segments),
+        tuple(round(float(w.get("t") or 0.0), 4) for w in (wp.waypoints or [])),
+        tuple(
+            tuple(round(float(sm.get("t") or 0.0), 4) for sm in (s.get("samples") or [])[:64])
+            for s in segments
+        ),
+    )
+
+
 def padded_timed_joints(samples=None):
     """Joint samples from t=0. Diamonds stay in the list."""
-    if not samples:
+    global _padded_cache
+    if samples is None:
+        key = _padded_cache_key()
+        if _padded_cache is not None and _padded_cache[0] == key:
+            return list(_padded_cache[1])
         samples = execution_joint_samples()
+        if not samples:
+            _padded_cache = (key, [])
+            return []
+        out = _padded_timed_joints_body(samples)
+        _padded_cache = (key, out)
+        return list(out)
+    return _padded_timed_joints_body(samples)
+
+
+def _padded_timed_joints_body(samples):
     if not samples:
         return []
     q0 = list(samples[0]["q"])
@@ -3135,16 +3214,25 @@ def is_ik_playable():
 
 def is_runnable():
     """Real Run needs a finished bake: IK plus every span scored, including Force FK."""
-    if not segments:
-        return False
-    if not is_ik_playable():
-        return False
-    if any(s.get("timing") == "too_fast" for s in segments):
-        dbg.every("run_fast", 1.0, "bake", "is_runnable False because too_fast")
-        return False
-    if any(s.get("status") != "ok" or s.get("timing") not in ("ok", "fk") for s in segments):
-        return False
-    return True
+    global _runnable_cache
+    key = (
+        _bake_generation,
+        len(segments),
+        tuple((s.get("status"), s.get("timing")) for s in segments),
+    )
+    if _runnable_cache is not None and _runnable_cache[0] == key:
+        return bool(_runnable_cache[1])
+    ok = False
+    if segments and is_ik_playable():
+        if any(s.get("timing") == "too_fast" for s in segments):
+            dbg.every("run_fast", 1.0, "bake", "is_runnable False because too_fast")
+            ok = False
+        elif any(s.get("status") != "ok" or s.get("timing") not in ("ok", "fk") for s in segments):
+            ok = False
+        else:
+            ok = True
+    _runnable_cache = (key, ok)
+    return ok
 
 
 def status_dict():
@@ -3240,43 +3328,45 @@ def import_bake_state(data):
     global segments, baked_hops, baked_points, _speed_valid, spacing
     if not data:
         return False
-    if data.get("spacing") is not None:
-        try:
-            spacing = float(data["spacing"])
-        except Exception:
-            pass
-    _sync_segment_count()
-    raw = data.get("segments") or []
-    for i, rec in enumerate(raw):
-        if i >= len(segments):
-            break
-        samples = []
-        for sm in rec.get("samples") or []:
-            item = dict(sm)
-            if sm.get("pos") is not None:
-                item["pos"] = np.asarray(sm["pos"], dtype=float).reshape(-1)[:3]
-            if sm.get("wxyz") is not None:
-                item["wxyz"] = np.asarray(sm["wxyz"], dtype=float).reshape(-1)[:4]
-            if sm.get("q") is not None:
-                item["q"] = np.asarray(sm["q"], dtype=float).reshape(-1)[:6]
-            samples.append(item)
-        segments[i]["status"] = rec.get("status") or "pending"
-        segments[i]["timing"] = rec.get("timing")
-        segments[i]["fail_index"] = rec.get("fail_index")
-        segments[i]["samples"] = samples
-        segments[i]["micro"] = list(rec.get("micro") or [])
-    baked_hops = list(data.get("hops") or [])
-    baked_points = list(data.get("points") or [])
-    _speed_valid = bool(data.get("speed_valid"))
-    if any((s.get("samples") or []) for s in segments):
-        try:
-            evaluate_timing(force=True)
-        except Exception as e:
-            print("import timing failed", e)
-    _draw_sample_dots()
-    if hasattr(wp, "draw_path"):
-        wp.draw_path()
-    return True
+    with _state_lock:
+        if data.get("spacing") is not None:
+            try:
+                spacing = float(data["spacing"])
+            except Exception:
+                pass
+        _sync_segment_count()
+        raw = data.get("segments") or []
+        for i, rec in enumerate(raw):
+            if i >= len(segments):
+                break
+            samples = []
+            for sm in rec.get("samples") or []:
+                item = dict(sm)
+                if sm.get("pos") is not None:
+                    item["pos"] = np.asarray(sm["pos"], dtype=float).reshape(-1)[:3]
+                if sm.get("wxyz") is not None:
+                    item["wxyz"] = np.asarray(sm["wxyz"], dtype=float).reshape(-1)[:4]
+                if sm.get("q") is not None:
+                    item["q"] = np.asarray(sm["q"], dtype=float).reshape(-1)[:6]
+                samples.append(item)
+            segments[i]["status"] = rec.get("status") or "pending"
+            segments[i]["timing"] = rec.get("timing")
+            segments[i]["fail_index"] = rec.get("fail_index")
+            segments[i]["samples"] = samples
+            segments[i]["micro"] = list(rec.get("micro") or [])
+        baked_hops = list(data.get("hops") or [])
+        baked_points = list(data.get("points") or [])
+        _speed_valid = bool(data.get("speed_valid"))
+        _clear_motion_caches()
+        if any((s.get("samples") or []) for s in segments):
+            try:
+                evaluate_timing(force=True)
+            except Exception as e:
+                print("import timing failed", e)
+        _draw_sample_dots()
+        if hasattr(wp, "draw_path"):
+            wp.draw_path()
+        return True
 
 
 def _kf_chain(sel_kf):

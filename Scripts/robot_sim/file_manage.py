@@ -26,6 +26,23 @@ SESSION = {
 }
 
 
+def _webui():
+    """Running UI module without re-executing Scripts/webui.py.
+
+    When the app is started as ``python webui.py``, settings live on
+    ``__main__``. A plain ``import webui`` would load the file a second time
+    and call ``debug_trace.reset()``, wiping the session log.
+    """
+    main = sys.modules.get("__main__")
+    if main is not None and callable(getattr(main, "load_settings", None)):
+        return main
+    mod = sys.modules.get("webui")
+    if mod is not None and callable(getattr(mod, "load_settings", None)):
+        return mod
+    import webui as mod
+    return mod
+
+
 def session_info():
     return dict(SESSION)
 
@@ -195,11 +212,11 @@ def _load_sim_poses(raw):
     if hasattr(wp, "refresh_pose_markers"):
         wp.refresh_pose_markers()
     try:
-        import webui
+        webui = _webui()
         import debug_trace as dbg
         dbg.log(
             "mod",
-            "file_manage import webui",
+            "file_manage webui resolve",
             webui_name=getattr(webui, "__name__", None),
             webui_file=getattr(webui, "__file__", None),
             main_file=sys.modules.get("__main__") and getattr(sys.modules["__main__"], "__file__", None),
@@ -719,7 +736,7 @@ def apply_loaded_doc(data):
                     pass
         wp._saved_path_seq = max(int(getattr(wp, "_saved_path_seq", 0) or 0), seq)
     try:
-        import webui
+        webui = _webui()
         if hasattr(wp, "load_global_saved_paths"):
             wp.load_global_saved_paths((webui.load_settings() or {}).get("stored_paths") or [])
     except Exception:
@@ -740,12 +757,11 @@ def apply_loaded_doc(data):
         for w in getattr(wp, "waypoints", []) or []:
             w["force_fk"] = False
         try:
-            import webui
+            webui = _webui()
             webui.save_settings({"snap_to_grid": False})
         except Exception as e:
             print("json import snap off failed", e)
-    if hasattr(wp, "draw_path"):
-        wp.draw_path()
+    # One draw after bake import/invalidate — avoid a full redraw mid-load.
     baked = data.get("bake")
     has_real_bez = False
     stub = getattr(wp, "_ctrl_is_stub", None)
@@ -799,7 +815,8 @@ def pick_save_path(title=None, default=None):
 
 
 def pick_open_path():
-    start = SESSION.get("path") or str(Path(__file__).resolve().parent)
+    _paths_dir = Path(__file__).resolve().parent.parent / "paths"
+    start = SESSION.get("path") or (str(_paths_dir) if _paths_dir.is_dir() else str(Path(__file__).resolve().parent))
     try:
         import tkinter as tk
         from tkinter import filedialog

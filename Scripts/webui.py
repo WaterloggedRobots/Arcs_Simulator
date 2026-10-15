@@ -124,7 +124,11 @@ if not isinstance(sys.stderr, _ConsoleStream):
     sys.stderr = _ConsoleStream(sys.stderr)
 _session_write("===== session %s =====" % time.strftime("%Y-%m-%d %H:%M:%S"))
 _console_add("console ready")
-dbg.reset()
+# Once per process. A late ``import webui`` while the app is already ``__main__``
+# must not truncate debug_run.log or restart the debug clock.
+if not getattr(dbg, "_arcs_session_started", False):
+    dbg.reset()
+    dbg._arcs_session_started = True
 dbg.install_app_hooks()
 
 _QUIET_API = (
@@ -217,7 +221,7 @@ def apply_settings(data):
     if "snap_to_grid" in data:
         try:
             wp.snap_to_grid = bool(data.get("snap_to_grid"))
-            dbg.log("wp", "snap_to_grid set", on=bool(wp.snap_to_grid), note="add_waypoint still ignores it")
+            dbg.log("wp", "snap_to_grid set", on=bool(wp.snap_to_grid))
         except Exception:
             pass
     if hasattr(wp, "load_global_saved_paths"):
@@ -802,11 +806,10 @@ def api_real_upload():
     data = request.get_json(silent=True) or {}
     ok = False
     if hasattr(rr, "upload_real_path"):
-        ok = bool(rr.upload_real_path(
-            loops=data.get("loops") or 0,
-            delay=data.get("delay") or 0.0,
-        ))
-        dbg.log("real", "upload", ok=ok)
+        loops = data.get("loops", data.get("repeat", 0))
+        delay = data.get("delay", 0.0)
+        ok = bool(rr.upload_real_path(loops=loops, delay=delay))
+        dbg.log("real", "upload", ok=ok, loops=loops, delay=delay)
     elif hasattr(rr, "plan_joint_path"):
         ok = bool(rr.plan_joint_path())
     st = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
