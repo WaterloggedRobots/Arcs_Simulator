@@ -859,13 +859,44 @@ _path_win_r = 1.0
 _path_win_t = None
 
 
+def in_path_window(t):
+    """True when time t falls inside the path window, i.e. is hidden in 3D."""
+    if _path_window is None or t is None:
+        return False
+    try:
+        t = float(t)
+    except Exception:
+        return False
+    return _path_window[0] <= t <= _path_window[1]
+
+
+def _wp_mesh_shown(item):
+    return item.get("visible", True) is not False and not in_path_window(item.get("t"))
+
+
+def _apply_path_window_wps():
+    for item in waypoints:
+        shown = _wp_mesh_shown(item)
+        for key in ("sphere", "arrow", "side"):
+            h = item.get(key)
+            if h is None:
+                continue
+            try:
+                h.visible = shown
+            except Exception:
+                pass
+
+
 def set_path_window(t0=None, t1=None):
+    """Visual only: hide path, samples and waypoints within the window around
+    the playhead. Bake, timeline and the path itself are untouched."""
     global _path_window
     if t0 is None or t1 is None:
         _path_window = None
     else:
         _path_window = (float(min(t0, t1)), float(max(t0, t1)))
     draw_path()
+    _apply_path_window_wps()
     try:
         import path_bake as bake
         bake._draw_sample_dots()
@@ -918,13 +949,9 @@ def draw_path():
     segs = []
     cols = []
     for i in range(len(waypoints) - 1):
-        if _path_window is not None:
-            ta = waypoints[i].get("t")
-            tb = waypoints[i + 1].get("t")
-            if ta is not None and tb is not None:
-                lo, hi = _path_window
-                if max(float(ta), float(tb)) < lo or min(float(ta), float(tb)) > hi:
-                    continue
+        # Path window hides a segment once both its ends are inside it.
+        if in_path_window(waypoints[i].get("t")) and in_path_window(waypoints[i + 1].get("t")):
+            continue
         poly = _segment_polyline(i)
         color = _bake_call("segment_color", i) or (255, 160, 40)
         for k in range(len(poly) - 1):
@@ -2813,7 +2840,7 @@ def hide_unselected_handles():
     if selected_idx is not None:
         sel.add(selected_idx)
     for i, item in enumerate(waypoints):
-        show_mesh = item.get("visible", True) is not False
+        show_mesh = _wp_mesh_shown(item)
         for key in ("sphere", "arrow", "side"):
             h = item.get(key)
             if h is None:

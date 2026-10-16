@@ -571,10 +571,8 @@ def _draw_sample_dots():
         for si, sm in enumerate(samples):
             if si == 0 or si == len(samples) - 1:
                 continue
-            win = getattr(wp, "_path_window", None)
-            if win is not None and sm.get("t") is not None:
-                if float(sm["t"]) < win[0] or float(sm["t"]) > win[1]:
-                    continue
+            if wp.in_path_window(sm.get("t")):
+                continue
             if fail_i is not None and si == fail_i:
                 continue
             if st == "ok" or sm.get("q") is not None:
@@ -2073,10 +2071,11 @@ def evaluate_timing(force=False):
         if span.get("over"):
             seg["timing"] = "too_fast"
             any_fast = True
-            for sm in samples:
-                sm["timing"] = "too_fast"
+            # A hop fault already marked its own two samples above; only a
+            # failed keyframe-to-keyframe mean marks the whole span.
             if not (hop_vel or hop_acc):
-                # Only the keyframe-to-keyframe mean failed: mark the whole span.
+                for sm in samples:
+                    sm["timing"] = "too_fast"
                 for hop in seg["micro"]:
                     hop["over"] = True
                     hop["status"] = "too_fast"

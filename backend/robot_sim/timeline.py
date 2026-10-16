@@ -732,6 +732,12 @@ def _node_color_map():
 
     # Each span keeps its own state: a too-fast span does not repaint later
     # spans yellow (yellow means "not checked yet").
+    def _own(sm, st):
+        # In a too-fast span only the samples on a failing hop are orange.
+        if st != "too_fast":
+            return st
+        return "too_fast" if sm.get("timing") == "too_fast" else "ok"
+
     for i, seg in enumerate(bake.segments):
         st = _seg_ui_state(seg) or "unbaked"
         sms = seg.get("samples") or []
@@ -739,22 +745,24 @@ def _node_color_map():
             if k == 0 or k == len(sms) - 1:
                 continue
             if (i, k) in sample_st:
-                sample_st[(i, k)] = st
+                sample_st[(i, k)] = _own(sm, st)
+        st_a = _own(sms[0], st) if sms else st
+        st_b = _own(sms[-1], st) if sms else st
         if key_st.get(i) != "fail":
-            if st == "too_fast":
+            if st_a == "too_fast":
                 key_st[i] = "too_fast"
             elif st in ("fk", "force_fk"):
                 key_st[i] = "fk"
-            elif st == "ok" and key_st.get(i) not in ("too_fast", "fk"):
+            elif st_a == "ok" and key_st.get(i) not in ("too_fast", "fk"):
                 key_st[i] = "ok"
             elif st == "uncalc":
                 key_st[i] = "uncalc"
         if key_st.get(i + 1) != "fail":
-            if st == "too_fast":
+            if st_b == "too_fast":
                 key_st[i + 1] = "too_fast"
             elif st in ("fk", "force_fk"):
                 key_st[i + 1] = "fk"
-            elif st == "ok" and key_st.get(i + 1) not in ("too_fast", "fk"):
+            elif st_b == "ok" and key_st.get(i + 1) not in ("too_fast", "fk"):
                 key_st[i + 1] = "ok"
             elif st == "uncalc":
                 key_st[i + 1] = "uncalc"
@@ -979,6 +987,9 @@ def _timeline_payload_body():
             lo, hi = (t0, t1) if t0 <= t1 else (t1, t0)
             if lo - 1e-6 <= mid <= hi + 1e-6:
                 st = _seg_ui_state(seg) or st
+                if st == "too_fast" and not rec.get("over"):
+                    # Only the failing sample-to-sample hop is orange.
+                    st = "ok"
                 break
         rec["status"] = st
         dt = float(rec.get("dt") or 0.0)

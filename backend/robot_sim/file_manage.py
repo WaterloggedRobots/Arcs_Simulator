@@ -357,6 +357,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
         doc["saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         doc["spacing"] = bake.spacing
         doc["cursor"] = _sim_cursor_record()
+        doc["sim_track"] = _sim_track_record()
         src_tracks = tracks
         if src_tracks is None:
             if hasattr(wp, "sync_camera_tracks"):
@@ -765,7 +766,38 @@ def apply_loaded_doc(data):
             rr.restore_sim_cursor(cur)
         except Exception as e:
             print("restore cursor failed:", e)
+    # After objects and cursor: the Track target must exist and the pin is the cursor.
+    _restore_sim_track(data.get("sim_track"))
     return {"ok": True, "waypoints": len(wp.waypoints), "points": len(pts)}
+
+
+def _sim_track_record():
+    """The sim cursor's Track component; waypoints keep their own track_object."""
+    tr = getattr(rr, "_track", None) or {}
+    if not tr.get("added") and not tr.get("on"):
+        return None
+    return {
+        "on": bool(tr.get("on")),
+        "name": str(tr.get("name") or ""),
+        "added": bool(tr.get("added")),
+        "offset": [float(v) for v in list(tr.get("offset") or [0.0, 0.0, 0.0])[:3]],
+    }
+
+
+def _restore_sim_track(rec):
+    try:
+        if isinstance(rec, dict):
+            rr.set_track_object(
+                on=bool(rec.get("on")),
+                name=str(rec.get("name") or ""),
+                pick=False,
+                added=bool(rec.get("added", True)),
+                offset=rec.get("offset"),
+            )
+        else:
+            rr.set_track_object(on=False, name="", pick=False, added=False)
+    except Exception as e:
+        print("restore track failed:", e)
 
 
 def pick_save_path(title=None, default=None):

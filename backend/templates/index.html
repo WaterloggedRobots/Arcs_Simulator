@@ -1838,10 +1838,10 @@
           <button type="button" class="slide" id="gizmoSpace" title="Local / Global axes"></button>
           <span class="mode-advanced">Global</span>
         </div>
-        <div class="tl-mode simple" id="pathWinWrap" title="Show only nodes near playhead">
+        <div class="tl-mode simple" id="pathWinWrap" title="Hide path near playhead">
           <span class="hud-label">Path Window</span>
           <span class="mode-simple">Off</span>
-          <button type="button" class="slide" id="pathWinToggle" title="Clip path to playhead window"></button>
+          <button type="button" class="slide" id="pathWinToggle" title="Hide path within the playhead window"></button>
           <span class="mode-advanced">On</span>
         </div>
         <div id="robotLinkWarn">Robot not connected</div>
@@ -3216,7 +3216,31 @@
         sm.t = snapToTick(Number(sm._t0) + dt);
       });
     }
+    /* Times the user just dropped. Status is rebuilt in the background and can
+       lag the drop, so it is not applied over these until it shows them. */
+    let pendingTimes = null;
+    function holdDroppedTimes(group) {
+      const keys = {}, sms = {};
+      group.keys.forEach((rec) => { keys[rec.index] = Number(rec.kf.t); });
+      group.sms.forEach((sm) => { sms[sm.seg + ":" + sm.index] = Number(sm.t); });
+      pendingTimes = { keys: keys, sms: sms, until: Date.now() + 4000 };
+    }
+    function statusShowsDrop(d) {
+      if (!pendingTimes) return true;
+      if (Date.now() > pendingTimes.until) return true;
+      const near = (a, b) => a != null && Math.abs(Number(a) - Number(b)) < 1e-3;
+      for (const idx in pendingTimes.keys) {
+        const kf = (d.keyframes || []).find((k) => String(k.index) === String(idx));
+        if (!kf || !near(kf.t, pendingTimes.keys[idx])) return false;
+      }
+      for (const id in pendingTimes.sms) {
+        const sm = (d.samples || []).find((x) => (x.seg + ":" + x.index) === id);
+        if (sm && !near(sm.t, pendingTimes.sms[id])) return false;
+      }
+      return true;
+    }
     function postGroupTimes(group, released) {
+      if (released) holdDroppedTimes(group);
       let req = Promise.resolve();
       if (group.keys.length) {
         req = fetch("/api/keyframe_time", {
@@ -3231,7 +3255,12 @@
             d.moves.forEach((mv) => {
               const kf = keyframes.find((k) => k.index === mv.index);
               if (kf && mv.t != null) kf.t = Number(mv.t);
+              if (pendingTimes && mv.t != null) pendingTimes.keys[mv.index] = Number(mv.t);
             });
+            /* A drop past a neighbour renumbers keys; take the server's order. */
+            if (pendingTimes && d.moves.some((mv) => !group.keys.some((rec) => rec.index === mv.index))) {
+              pendingTimes = null;
+            }
             renderTimeline();
           }
         }).catch(() => {});
@@ -3249,6 +3278,7 @@
             d.moves.forEach((mv) => {
               const sm = samples.find((s) => s.seg === mv.seg && s.index === mv.index);
               if (sm && mv.t != null) sm.t = Number(mv.t);
+              if (pendingTimes && mv.t != null) pendingTimes.sms[mv.seg + ":" + mv.index] = Number(mv.t);
             });
             renderTimeline();
           }
@@ -3266,12 +3296,13 @@
       dragSm = null;
       dragKf = null;
       dragGroup = null;
-      fetch("/api/select_waypoint", {
+      const req = fetch("/api/select_waypoint", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ index: null }),
       });
       renderTimeline();
+      return req;
     }
     const kfMenu = document.getElementById("kfMenu");
     function hideKfMenu() { kfMenu.hidden = true; document.getElementById("trSub").classList.remove("open"); }
@@ -4905,7 +4936,7 @@
         return;
       }
       const row = e.target.closest("[data-oid]");
-      if (!row) { deselectGui(); refresh(); return; }
+      if (!row) { deselectGui().then(refresh, refresh); return; }
       fetch("/api/select_object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5246,7 +5277,7 @@
         return;
       }
       const row = e.target.closest("[data-wi]");
-      if (!row) { deselectGui(); refresh(); return; }
+      if (!row) { deselectGui().then(refresh, refresh); return; }
       const i = Number(row.getAttribute("data-wi"));
       fetch("/api/select_waypoint", {
         method: "POST",
@@ -5300,7 +5331,12 @@
             JSON.stringify((tr && tr.keys) || []) === JSON.stringify(extraTracks[i].keys || []));
         if (!same) applyExtraTracks(d.tracks);
       }
-      if (!dragKf && !dragSm && !window.__holdSamples) {
+      const dropShown = statusShowsDrop(d);
+      if (dropShown) pendingTimes = null;
+      else if (!pendingTimes.timer) {
+        pendingTimes.timer = setTimeout(() => { if (pendingTimes) pendingTimes.timer = null; refresh(); }, 250);
+      }
+      if (!dragKf && !dragSm && !window.__holdSamples && dropShown) {
         if (Number(d.waypoint_count) === 0) {
           keyframes = [];
           samples = [];

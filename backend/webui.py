@@ -318,6 +318,9 @@ def _build_status_heavy():
 
 
 _status_last_req = 0.0
+# Set by timeline edits so the next status build runs at once, not on the
+# 0.25 s cadence; a stale build made dropped frames jump back.
+_status_dirty = threading.Event()
 # The page polls /api/status every 1.2 s; rebuilding the heavy payload
 # (is_runnable, timeline, padded samples) 8x a second re-scored the same bake.
 STATUS_REBUILD_S = 0.25
@@ -336,14 +339,16 @@ def _status_loop():
                 wp.tick_cameras()
             now = time.time()
             polled = now - _status_last_req < 3.0
-            if (polled or not _status_heavy) and now - last_build >= STATUS_REBUILD_S:
+            dirty = _status_dirty.is_set()
+            if dirty or ((polled or not _status_heavy) and now - last_build >= STATUS_REBUILD_S):
+                _status_dirty.clear()
                 heavy = _build_status_heavy()
                 last_build = time.time()
                 with _status_lock:
                     _status_heavy = heavy
         except Exception:
             traceback.print_exc()
-        time.sleep(0.12)
+        _status_dirty.wait(0.12)
 
 
 def _ensure_status_worker():
@@ -586,6 +591,7 @@ def api_select_object():
     data = request.get_json(silent=True) or {}
     if hasattr(wp, "select_scene_object"):
         wp.select_scene_object(data.get("id"), mode=data.get("mode") or "replace")
+    _status_dirty.set()
     return jsonify({"ok": True})
 
 
@@ -595,8 +601,10 @@ def api_select_waypoint():
     if data.get("index") is None:
         # The page sends index null when the user clicks empty space.
         wp.deselect_all()
+        _status_dirty.set()
         return jsonify({"ok": True})
     wp.select_waypoint(data.get("index"), mode=data.get("mode") or "replace")
+    _status_dirty.set()
     return jsonify({"ok": True})
 
 
@@ -682,6 +690,7 @@ def api_keyframe_time():
             released=released,
             stretch=stretch,
         )
+        _status_dirty.set()
         return jsonify({"ok": True, "moves": rows})
     t = wp.set_keyframe_time(int(data.get("index")), float(data.get("t")), released=released)
     return jsonify({"ok": True, "t": t})
@@ -693,6 +702,7 @@ def api_sample_time():
     applied = []
     if hasattr(bake, "set_sample_times"):
         applied = bake.set_sample_times(data.get("moves") or []) or []
+    _status_dirty.set()
     return jsonify({"ok": True, "moves": applied})
 
 
