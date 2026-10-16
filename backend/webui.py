@@ -145,9 +145,13 @@ def apply_settings(data):
             pass
     if hasattr(rr, "set_joint_limits"):
         try:
-            rr.set_joint_limits(data.get("joint_vel_deg"), data.get("joint_acc_deg"))
-        except Exception:
-            pass
+            if rr.set_joint_limits(data.get("joint_vel_deg"), data.get("joint_acc_deg")):
+                # New limits: re-score the bake (IK stays) so colours match them.
+                bake.evaluate_timing(force=True)
+                if hasattr(bake, "bump_timeline_cache"):
+                    bake.bump_timeline_cache()
+        except Exception as e:
+            print("joint limits failed", e)
     if "hold_lin_mps" in data and hasattr(rr, "set_hold_lin_mps"):
         try:
             rr.set_hold_lin_mps(data.get("hold_lin_mps"))

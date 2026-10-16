@@ -729,6 +729,34 @@ def _snap_sim_cursor_to_ee():
         pass
 
 
+_JOINT_ORDER = (
+    "shoulder_joint", "upperArm_joint", "foreArm_joint",
+    "wrist1_joint", "wrist2_joint", "wrist3_joint",
+)
+
+
+def set_joint_limits(vel_deg=None, acc_deg=None):
+    """Preferences > Speed limits (deg/s, deg/s^2). The speed check reads these.
+
+    Returns True when a limit changed, so the caller can re-score timing.
+    """
+    changed = False
+    for table, vals in ((AUBO_I5_MAX_VEL_DEG, vel_deg), (AUBO_I5_MAX_ACCEL_DEG, acc_deg)):
+        if not vals:
+            continue
+        for name, v in zip(_JOINT_ORDER, list(vals)[:6]):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v <= 0:
+                continue
+            if abs(table.get(name, 0.0) - v) > 1e-9:
+                table[name] = v
+                changed = True
+    return changed
+
+
 def apply_aubo_i5_joint_limits(model):
     for joint in model.joint_list:
         name = getattr(joint, "name", None)
@@ -2531,6 +2559,23 @@ def tick_simulation(dt=None):
                 pass
             exit_simulation_mode()
             print("sim path finished")
+
+
+def seek_playhead(t):
+    """Idle timeline scrub. The viewer loop centres the path window on its
+    playhead_t; without this it kept the last play time and fought the UI."""
+    if _pb["active"] or _rp.get("active"):
+        return False
+    try:
+        t = max(0.0, float(t))
+    except (TypeError, ValueError):
+        return False
+    try:
+        import robot_sim_run as viewer_main
+        viewer_main.playhead_t = t
+    except Exception:
+        return False
+    return True
 
 
 def sim_status():

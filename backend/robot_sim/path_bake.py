@@ -10,6 +10,7 @@ Future motion fields (unused now, reserved):
 """
 import json
 import math
+import threading
 from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -543,17 +544,42 @@ def clear_bake():
     return {"ok": True, "segments": len(segments), "bake": status_dict()}
 
 
+# Dots are redrawn from the viewer thread (path window follow) and from
+# request threads (bake, edits). Unlocked, two redraws could each clear the
+# other's list and leave dots in the scene that no list owns.
+_dots_lock = threading.RLock()
+_dots_high = 0
+
+
 def clear_sample_dots():
     global sample_handles
-    for h in sample_handles:
-        try:
-            h.remove()
-        except Exception:
-            pass
-    sample_handles = []
+    with _dots_lock:
+        for h in sample_handles:
+            try:
+                h.remove()
+            except Exception:
+                pass
+        sample_handles = []
 
 
 def _draw_sample_dots():
+    global _dots_high
+    with _dots_lock:
+        _draw_sample_dots_locked()
+        n = len(sample_handles)
+        srv = getattr(wp, "server", None)
+        if srv is not None:
+            # Names below n were just redrawn (a name replaces its node); drop
+            # any higher name an earlier draw left behind.
+            for k in range(n, _dots_high):
+                try:
+                    srv.scene.remove_by_name(f"/bake_pt/{k}")
+                except Exception:
+                    pass
+        _dots_high = n
+
+
+def _draw_sample_dots_locked():
     """Dots only on calculated segments: green if solved, red if IK failed.
     Pending (not yet baked) segments stay empty. Need 2+ waypoints."""
     clear_sample_dots()
@@ -1974,6 +2000,67 @@ def _timing_points():
     return pts
 
 
+def _signed_rates(a, b):
+    """Signed joint rates (rad/s) over one hop and its dt."""
+    dt = float(b.get("t") or 0.0) - float(a.get("t") or 0.0)
+    qa = np.asarray(a["q"], dtype=float).reshape(-1)[:6]
+    qb = np.asarray(b["q"], dtype=float).reshape(-1)[:6]
+    d = (qb - qa + math.pi) % (2.0 * math.pi) - math.pi
+    if dt <= 1e-6:
+        return None, dt
+    return d / dt, dt
+
+
+def _hop_accels(wmax):
+    """Joint acceleration at every sample, from the rate change between the
+    hops on either side: |w_k - w_(k-1)| / mean(dt). Each sample's
+    acceleration is blamed on the faster of its two hops, so a fault stays on
+    the hop that causes it instead of leaking onto a neighbour.
+
+    Returns {(seg, k): [acc per joint]} keyed by the hop's start sample index.
+    """
+    chain = []
+    for i, seg in enumerate(segments):
+        if seg.get("status") != "ok":
+            break
+        sms = [sm for sm in (seg.get("samples") or []) if sm.get("q") is not None]
+        for k, (a, b) in enumerate(zip(sms, sms[1:])):
+            w, dt = _signed_rates(a, b)
+            if w is None:
+                continue
+            chain.append({"key": (i, k), "w": w, "dt": dt})
+    out = {c["key"]: [0.0] * 6 for c in chain}
+    zero = np.zeros(6)
+
+    def _blame(acc, prev, cur):
+        pick = cur
+        if prev is not None and cur is not None:
+            rp = max(abs(prev["w"][j]) / max(wmax[j], 1e-6) for j in range(6))
+            rc = max(abs(cur["w"][j]) / max(wmax[j], 1e-6) for j in range(6))
+            pick = prev if rp > rc else cur
+        elif cur is None:
+            pick = prev
+        rec = out[pick["key"]]
+        for j in range(6):
+            rec[j] = max(rec[j], float(acc[j]))
+
+    for n in range(len(chain) + 1):
+        prev = chain[n - 1] if n > 0 else None
+        cur = chain[n] if n < len(chain) else None
+        if prev is None and cur is None:
+            continue
+        # The arm starts and ends the path at rest.
+        w0 = prev["w"] if prev is not None else zero
+        w1 = cur["w"] if cur is not None else zero
+        if prev is not None and cur is not None:
+            span = 0.5 * (prev["dt"] + cur["dt"])
+        else:
+            span = (cur or prev)["dt"]
+        acc = np.abs(w1 - w0) / max(span, 1e-6)
+        _blame(acc, prev, cur)
+    return out
+
+
 def evaluate_timing(force=False):
     """Score every hop and fail a span when any hop in it is over the limits.
 
@@ -1988,6 +2075,7 @@ def evaluate_timing(force=False):
     any_fast = False
     prev_speeds = None
     series = _timing_points()
+    acc_by_hop = _hop_accels(wmax)
     for i, seg in enumerate(segments):
         if seg.get("status") != "ok":
             if seg.get("status") == "fail":
@@ -2001,9 +2089,12 @@ def evaluate_timing(force=False):
         if len(samples) < 2:
             seg["timing"] = "uncalc"
             continue
-        for a, b in zip(samples, samples[1:]):
+        for k, (a, b) in enumerate(zip(samples, samples[1:])):
             mid = 0.5 * (float(a.get("t") or 0.0) + float(b.get("t") or 0.0))
-            kin_w, kin_a = _joint_kin_at(series, mid)
+            kin_w, _ = _joint_kin_at(series, mid)
+            # Per-sample rate change, not a windowed fit: the fit smoothed a
+            # short fast hop away and smeared its fault onto the hop before.
+            kin_a = acc_by_hop.get((i, k), [0.0] * 6)
             rec = _hop_metrics(
                 a, b, wmax, amax,
                 prev_speeds=prev_speeds,
@@ -2031,8 +2122,7 @@ def evaluate_timing(force=False):
             seg["micro"].append(rec)
             if a is samples[0]:
                 a["timing"] = "ok"
-            if rec["over"]:
-                a["timing"] = "too_fast"
+            # Orange goes on the failing hop and the frame it arrives at only.
             b["timing"] = rec["status"]
             b["speed"] = rec["speed"]
             b["accel"] = rec["acc"]
