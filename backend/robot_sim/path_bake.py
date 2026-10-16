@@ -699,7 +699,7 @@ def set_spacing(value):
     value = max(0.005, min(1.0, value))
     if abs(value - spacing) > 1e-9:
         spacing = value
-        invalidate_from(0, drop_all=True)
+        invalidate_from(0, drop_all=True, keep_times=True)
     return spacing
 
 
@@ -720,8 +720,14 @@ def _segment_sig_matches(j):
     return segments[j].get("sig") == (_wp_sig(j), _wp_sig(j + 1))
 
 
-def invalidate_from(idx, drop_all=False):
-    """idx = waypoint index that changed. Dirties segment idx-1 and all after."""
+def invalidate_from(idx, drop_all=False, keep_times=None):
+    """idx = waypoint index that changed. Dirties segment idx-1 and all after.
+
+    keep_times (default: not drop_all) carries existing sample frames into the
+    rebuilt spans. New-document resets pass drop_all and start clean.
+    """
+    if keep_times is None:
+        keep_times = not drop_all
     global baked_hops, baked_points, _bake_generation, _tl_cache, _speed_valid
     start = 0 if drop_all else max(0, idx - 1)
     if not drop_all and segments:
@@ -747,6 +753,7 @@ def invalidate_from(idx, drop_all=False):
     baked_hops = []
     baked_points = []
     _speed_valid = False
+    old_segs = {j: dict(segments[j]) for j in range(start, len(segments))} if keep_times else {}
     for j in range(start, len(segments)):
         segments[j]["status"] = "pending"
         segments[j]["samples"] = []
@@ -757,6 +764,8 @@ def invalidate_from(idx, drop_all=False):
     _sync_segment_count()
     for j in range(start, len(segments)):
         segments[j] = _build_segment(j)
+        if j in old_segs:
+            _carry_sample_times(old_segs[j], segments[j], j)
     _draw_sample_dots()
     if hasattr(wp, "draw_path"):
         wp.draw_path()
@@ -789,13 +798,63 @@ def rebuild_preview():
     for i in range(len(segments)):
         sig = (_wp_sig(i), _wp_sig(i + 1))
         if segments[i].get("sig") != sig or not segments[i].get("samples") or segments[i].get("spacing") != spacing:
-            old_tr = segments[i].get("transition")
+            old = segments[i]
+            old_tr = old.get("transition")
             segments[i] = _build_segment(i)
             if old_tr:
                 segments[i]["transition"] = old_tr
+            _carry_sample_times(old, segments[i], i)
     _draw_sample_dots()
     if hasattr(wp, "draw_path"):
         wp.draw_path()
+
+
+def _carry_sample_times(old, new, i):
+    """Keep the sample frames a span already had; only new samples get times.
+
+    Frames are matched by index and kept while they stay in order inside the
+    span. assign_sample_times spaces the samples left without one.
+    """
+    olds = (old or {}).get("samples") or []
+    news = new.get("samples") or []
+    if len(olds) < 3 or len(news) < 3 or i + 1 >= len(wp.waypoints):
+        return
+    t0 = float(wp.waypoints[i].get("t") or 0.0)
+    t1 = float(wp.waypoints[i + 1].get("t") or t0)
+    # Same span only: after an insert or delete, index i is a different span.
+    ta, tb = olds[0].get("t"), olds[-1].get("t")
+    if ta is None or tb is None or abs(float(ta) - t0) > 1e-6 or abs(float(tb) - t1) > 1e-6:
+        return
+    last = t0
+    for k in range(1, len(news) - 1):
+        if k >= len(olds) - 1:
+            break
+        t = olds[k].get("t")
+        if t is None or not (last < float(t) < t1):
+            break
+        news[k]["t"] = float(t)
+        if olds[k].get("t_lock") is not None:
+            news[k]["t_lock"] = olds[k]["t_lock"]
+        last = float(t)
+
+
+def _fill_missing_times(samples):
+    """Equal spacing for interior samples with no time, between their timed neighbours."""
+    k = 1
+    n = len(samples)
+    while k < n - 1:
+        if samples[k].get("t") is not None:
+            k += 1
+            continue
+        a = k - 1
+        b = k
+        while b < n - 1 and samples[b].get("t") is None:
+            b += 1
+        ta = float(samples[a]["t"])
+        tb = float(samples[b]["t"])
+        for j in range(a + 1, b):
+            samples[j]["t"] = ta + (tb - ta) * float(j - a) / float(b - a)
+        k = b
 
 
 def bake_seed_q():
@@ -1668,15 +1727,18 @@ def assign_sample_times():
         samples = seg.get("samples") or []
         if len(samples) < 2:
             continue
-        missing = any(
-            k not in (0, len(samples) - 1) and samples[k].get("t") is None
-            for k in range(len(samples))
-        )
-        if missing:
+        missing = [
+            k for k in range(1, len(samples) - 1) if samples[k].get("t") is None
+        ]
+        if missing and len(missing) == len(samples) - 2:
+            # A span with no frames yet takes its transition profile.
             _apply_seg_time_profile(seg, t0, t1)
         else:
             samples[0]["t"] = t0
             samples[-1]["t"] = t1
+            if missing:
+                # Keep the frames that exist; space only the new ones.
+                _fill_missing_times(samples)
 
 
 def path_distance():

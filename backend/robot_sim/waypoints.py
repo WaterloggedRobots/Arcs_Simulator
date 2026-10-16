@@ -2865,6 +2865,8 @@ def deselect_all():
     selected_obj_ids = []
     selected_wp_idxs = []
     _selection = []
+    # Also clears selection_kind, so the panel falls back to the actual robot.
+    _sync_selection_globals()
     simulatorview._clear_measure_line()
     clear_dotted_lines()
     simulatorview._hide_all_object_gizmos()
@@ -3327,7 +3329,8 @@ def _apply_selection_viz():
         elif kind == "sim":
             try:
                 import robot_runtime as rr
-                if rr._sim_gizmo is None and wp_server_ready():
+                # No cursor gizmo while a sim plays; playback owns the cursor.
+                if rr._sim_gizmo is None and wp_server_ready() and not rr._pb["active"]:
                     p, w = rr.get_sim_cursor_pose()
                     rr._make_sim_gizmo(server, p, w)
             except Exception:

@@ -6595,13 +6595,14 @@
         btn.classList.toggle("advanced", pathWinOn);
         wrap.classList.toggle("simple", !pathWinOn);
         wrap.classList.toggle("advanced", pathWinOn);
+        /* /api/path_window saves its own setting. A full settings save here
+           re-applied bake spacing and could drop the bake. */
         syncPathWindow();
         renderTimeline();
-        saveCtrlSettings();
       };
       if (box) box.addEventListener("change", () => {
-        if (pathWinOn) { syncPathWindow(); renderTimeline(); }
-        saveCtrlSettings();
+        syncPathWindow();
+        if (pathWinOn) renderTimeline();
       });
     })();
 
@@ -7046,6 +7047,8 @@
         const d = await r.json().catch(() => ({}));
         if (d.sim) simState = mergeState(simState, d.sim);
         if (d.real) realState = mergeState(realState, d.real);
+        /* The clock stops moving the playhead while paused; show where it stopped. */
+        if (d.sim && d.sim.paused && typeof d.sim.t === "number") playhead = d.sim.t;
         syncPlayButtons();
         refresh();
       });

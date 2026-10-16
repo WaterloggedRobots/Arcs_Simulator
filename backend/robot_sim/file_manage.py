@@ -697,7 +697,6 @@ def apply_loaded_doc(data):
                 loaded_tracks.append(rec)
             else:
                 loaded_tracks.append({"name": str(tr)})
-    wp.extra_tracks = loaded_tracks
     _load_sim_poses(data.get("sim_poses"))
     if isinstance(data.get("saved_paths"), list):
         wp.saved_paths = [dict(p) for p in data.get("saved_paths") if isinstance(p, dict)]
@@ -726,6 +725,9 @@ def apply_loaded_doc(data):
                 pass
     else:
         wp.sim_camera = None
+    # Set tracks only now: restoring objects re-syncs camera tracks, and a sync
+    # that runs before the camera objects exist drops their cam_<id> keys.
+    wp.extra_tracks = loaded_tracks
     if hasattr(wp, "sync_camera_tracks"):
         wp.sync_camera_tracks()
     if bake.import_raw_json:

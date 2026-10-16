@@ -1004,6 +1004,9 @@ def restore_sim_cursor(rec):
 
 
 def get_sim_cursor_pose():
+    if _pb["active"] and _cursor_sim is not None:
+        # Playback drives the cursor; a Track pin must not hold it (or its children) still.
+        return np.asarray(_cursor_sim.position, dtype=float).reshape(3), np.array(_sim_wxyz, dtype=float)
     if _sim_gizmo is not None:
         pos = np.asarray(_sim_gizmo.position, dtype=float).reshape(3)
         return pos, np.array(_sim_wxyz, dtype=float)
@@ -1040,7 +1043,7 @@ def apply_gizmo_space(mode="local"):
 
 def hide_sim_gizmo():
     global _sim_gizmo, _sim_selected, _sim_rot0
-    if _track.get("on"):
+    if _track.get("on") and not _pb["active"]:
         try:
             if _sim_gizmo is not None:
                 _track["pin_pos"] = np.asarray(_sim_gizmo.position, dtype=float).reshape(3).copy()
@@ -2375,12 +2378,14 @@ def exit_simulation_mode():
             robot_sim.angle_vector(q)
             _last_good_q = q.copy()
         if _pb["saved_pos"] is not None:
-            _set_sim_heading(_pb["saved_wxyz"] if _pb["saved_wxyz"] is not None else _sim_wxyz)
+            # Force, not keep: playback overwrote the heading with the EE's.
+            _force_sim_heading(_pb["saved_wxyz"] if _pb["saved_wxyz"] is not None else _sim_wxyz)
             if _cursor_sim is not None:
                 _cursor_sim.position = tuple(float(v) for v in _pb["saved_pos"])
             _draw_sim_dir(_pb["saved_pos"])
-            # Bring the gizmo back only if the cursor was selected before play.
-            if _pb.get("had_gizmo") and wp.server is not None:
+            # Bring the gizmo back if the cursor was selected before or during play.
+            sim_picked = any(k == "sim" for k, _ in (getattr(wp, "_selection", None) or []))
+            if (_pb.get("had_gizmo") or sim_picked) and wp.server is not None:
                 _make_sim_gizmo(wp.server, _pb["saved_pos"], _sim_wxyz)
             try:
                 if hasattr(wp, "_propagate_children"):
@@ -2427,6 +2432,10 @@ def set_sim_time(t):
     _pb["t"] = t
     _apply_q_at_t(t)
     _snap_sim_cursor_to_ee()
+    try:
+        wp._propagate_children("sim_cursor")
+    except Exception:
+        pass
     return t
 
 
@@ -2462,24 +2471,31 @@ def tick_simulation(dt=None):
         _pb["origin_t"] = float(_pb.get("t") or 0.0)
     t0 = _pb["samples"][0]["t"] if _pb["samples"] else 0.0
     _pb["t"] = min(_pb["t_end"], float(_pb["origin_t"]) + (now - float(_pb["origin_wall"])))
+    moved = False
     if now - _last_vis >= 0.07:
         _last_vis = now
+        moved = True
         if _pb["t"] < t0:
             _apply_q_at_t(t0)
         else:
             _apply_q_at_t(_pb["t"])
     if _cursor_sim is not None and robot_sim is not None:
         try:
-            pos, _ = _cursor_pose_from_ee(robot_sim, "sim")
+            pos, ee_wxyz = _cursor_pose_from_ee(robot_sim, "sim")
             _cursor_sim.position = tuple(float(v) for v in pos)
+            # Children of the cursor follow the EE rotation too; exit restores the heading.
+            _force_sim_heading(ee_wxyz)
             try:
                 if hasattr(wp, "_propagate_children"):
                     wp._propagate_children("sim_cursor")
             except Exception:
                 pass
-            q_now = _flat(robot_sim.angle_vector(), 6)
-            _note_motion("sim", q_now, pos, t=_pb.get("t"))
-            _pb["lin_mps"] = float(_motion["sim"]["lin_mps"])
+            # Only score speed on ticks that moved the arm; the ticks between
+            # see no motion and read 0, which flattened the speed graph.
+            if moved:
+                q_now = _flat(robot_sim.angle_vector(), 6)
+                _note_motion("sim", q_now, pos, t=_pb.get("t"))
+                _pb["lin_mps"] = float(_motion["sim"]["lin_mps"])
         except Exception:
             pass
     try:
@@ -2588,6 +2604,7 @@ def request_halt():
     _rp_gen += 1
     _rp["active"] = False
     _rp["paused"] = False
+    _rp["armed"] = False
     _rp["finish_at"] = None
     _rp["wall"] = None
     _pb["active"] = False

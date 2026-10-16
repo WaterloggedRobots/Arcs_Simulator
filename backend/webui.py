@@ -425,10 +425,18 @@ def api_clock():
             t = rr.playhead_now()
     except Exception:
         t = None
+    # The speed graph plots these; without them both lines sat at 0.
+    try:
+        lin_sim = float(rr._motion["sim"]["lin_mps"] or 0.0)
+        lin_real = float(rr._motion["real"]["lin_mps"] or 0.0)
+    except Exception:
+        lin_sim = lin_real = 0.0
     return jsonify({
         "ok": True,
         "t": t,
         "playhead": t,
+        "lin_sim": lin_sim,
+        "lin_real": lin_real,
         "sim": rr.sim_status() if hasattr(rr, "sim_status") else {},
         "real": rr.real_path_status() if hasattr(rr, "real_path_status") else {},
     })
@@ -739,9 +747,8 @@ def api_simulate():
 
 @app.route("/api/sim/pause", methods=["POST"])
 def api_sim_pause():
-    if hasattr(rr, "pause_simulation"):
-        rr.pause_simulation()
-    return jsonify({"ok": True})
+    paused = rr.toggle_sim_pause()
+    return jsonify({"ok": True, "paused": bool(paused), "sim": rr.sim_status()})
 
 
 @app.route("/api/real/upload", methods=["POST"])
@@ -794,10 +801,9 @@ def api_real_pause():
 
 @app.route("/api/real/stop", methods=["POST"])
 def api_real_stop():
-    if hasattr(rr, "abort_path_buffer"):
-        rr.abort_path_buffer()
-    viewer_main.real_requests.append(("stop", None))
-    return jsonify({"ok": True})
+    # Stop here, not on the viewer queue: a busy viewer loop must not delay it.
+    rr.stop_real_path()
+    return jsonify({"ok": True, "real": rr.real_path_status()})
 
 
 @app.route("/api/robot_model", methods=["POST"])
@@ -840,9 +846,8 @@ def api_snap_sim_to_real():
 
 @app.route("/api/halt", methods=["POST"])
 def api_halt():
-    if hasattr(rr, "abort_path_buffer"):
-        rr.abort_path_buffer()
-    return jsonify({"ok": True})
+    rr.request_halt()
+    return jsonify({"ok": True, "sim": rr.sim_status(), "real": rr.real_path_status()})
 
 
 @app.route("/api/file/new", methods=["POST"])
