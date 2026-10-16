@@ -2,6 +2,7 @@
 import copy
 import json
 import time
+import threading
 import numpy as np
 
 
@@ -25,6 +26,7 @@ selected_obj_ids = []
 selected_wp_idxs = []
 selected_pose_ids = []
 selection_kind = None
+grid_spacing = 0.01
 _select_ctrl = False
 _select_shift = False
 _selection = []  # ("sim", None) | ("obj", id) | ("wp", idx)
@@ -80,6 +82,47 @@ _suspend_gizmo_cb = False
 def init(viser_server):
     global server
     server = viser_server
+    _bind_empty_click(viser_server)
+
+
+# Click on empty space in the world view deselects everything. Viser fires
+# the scene-wide click after any per-node on_click, so a node pick inside
+# the same click window means the click hit something.
+_last_pick_ts = 0.0
+EMPTY_CLICK_WINDOW_S = 0.35
+
+
+def note_scene_pick():
+    global _last_pick_ts
+    _last_pick_ts = time.time()
+
+
+def _bind_empty_click(srv):
+    scene = getattr(srv, "scene", None)
+    on_click = getattr(scene, "on_click", None)
+    if not callable(on_click):
+        return  # older viser: no scene-wide click event
+
+    def _on_scene_click(_event=None):
+        t_click = time.time()
+
+        def _later():
+            time.sleep(EMPTY_CLICK_WINDOW_S)
+            if _last_pick_ts >= t_click - EMPTY_CLICK_WINDOW_S:
+                return
+            if _select_ctrl or _select_shift:
+                return
+            try:
+                deselect_all()
+            except Exception as e:
+                print("empty-click deselect failed:", e)
+
+        threading.Thread(target=_later, daemon=True).start()
+
+    try:
+        on_click()(_on_scene_click)
+    except Exception as e:
+        print("scene click bind failed:", e)
 
 
 def _try_set_space(handle, space):
@@ -182,7 +225,7 @@ def _bind_waypoint_gizmo(idx):
         except Exception:
             pass
     display = _gizmo_display_wxyz(wp.get("wxyz", WORLD_WXYZ))
-    name = f"/wp_{idx}/gizmo_{gizmo_space}"
+    name = f"{_wp_node(wp)}/gizmo_{gizmo_space}"
     gizmo = _new_transform_gizmo(name, wp["pos"], display, 0.18, False, vis)
     wp["gizmo"] = gizmo
 
@@ -262,7 +305,7 @@ def _bind_ctrl_gizmo(idx, which):
         return
     _drop_ctrl_gizmo(ctrl)
     pos = wp.get(f"{which}_ctrl_pos", wp["pos"])
-    name = f"/wp_{idx}/{which}_ctrl/gizmo_{gizmo_space}"
+    name = f"{_wp_node(wp)}/{which}_ctrl/gizmo_{gizmo_space}"
     gizmo = _new_transform_gizmo(name, pos, WORLD_WXYZ, 0.10, True, True)
 
     @gizmo.on_update
@@ -816,13 +859,44 @@ _path_win_r = 1.0
 _path_win_t = None
 
 
+def in_path_window(t):
+    """True when time t falls inside the path window, i.e. is hidden in 3D."""
+    if _path_window is None or t is None:
+        return False
+    try:
+        t = float(t)
+    except Exception:
+        return False
+    return _path_window[0] <= t <= _path_window[1]
+
+
+def _wp_mesh_shown(item):
+    return item.get("visible", True) is not False and not in_path_window(item.get("t"))
+
+
+def _apply_path_window_wps():
+    for item in waypoints:
+        shown = _wp_mesh_shown(item)
+        for key in ("sphere", "arrow", "side"):
+            h = item.get(key)
+            if h is None:
+                continue
+            try:
+                h.visible = shown
+            except Exception:
+                pass
+
+
 def set_path_window(t0=None, t1=None):
+    """Visual only: hide path, samples and waypoints within the window around
+    the playhead. Bake, timeline and the path itself are untouched."""
     global _path_window
     if t0 is None or t1 is None:
         _path_window = None
     else:
         _path_window = (float(min(t0, t1)), float(max(t0, t1)))
     draw_path()
+    _apply_path_window_wps()
     try:
         import path_bake as bake
         bake._draw_sample_dots()
@@ -875,13 +949,9 @@ def draw_path():
     segs = []
     cols = []
     for i in range(len(waypoints) - 1):
-        if _path_window is not None:
-            ta = waypoints[i].get("t")
-            tb = waypoints[i + 1].get("t")
-            if ta is not None and tb is not None:
-                lo, hi = _path_window
-                if max(float(ta), float(tb)) < lo or min(float(ta), float(tb)) > hi:
-                    continue
+        # Path window hides a segment once both its ends are inside it.
+        if in_path_window(waypoints[i].get("t")) and in_path_window(waypoints[i + 1].get("t")):
+            continue
         poly = _segment_polyline(i)
         color = _bake_call("segment_color", i) or (255, 160, 40)
         for k in range(len(poly) - 1):
@@ -1073,7 +1143,7 @@ def ensure_ctrl(idx, which):
     if wp.get(key) is not None:
         return
 
-    name = f"/wp_{idx}/{which}_ctrl"
+    name = f"{_wp_node(wp)}/{which}_ctrl"
     pos = np.asarray(wp["pos"], dtype=np.float32).reshape(3)
     if wp.get(key_pos) is not None and not _ctrl_is_stub(pos, wp.get(key_pos)):
         ctrl_pos = np.asarray(wp[key_pos], dtype=np.float32).reshape(3)
@@ -1690,6 +1760,7 @@ def load_global_stored_points(rows):
 
 
 def select_pose(pid, mode="replace"):
+    note_scene_pick()
     return select_item("pose", pid, mode=mode)
 
 
@@ -2098,6 +2169,48 @@ def _index_of(item):
     return None
 
 
+_wp_node_seq = 0
+
+
+def _new_wp_node():
+    global _wp_node_seq
+    _wp_node_seq += 1
+    return f"/wp_n{_wp_node_seq}"
+
+
+def _wp_node(item):
+    """Viser scene path for one waypoint; stable across reorder/delete."""
+    node = item.get("node")
+    if not node:
+        node = _new_wp_node()
+        item["node"] = node
+    return node
+
+
+def _next_wp_label():
+    used = {str(w.get("name") or "") for w in waypoints}
+    n = len(waypoints)
+    while ("Waypoint %d" % n) in used:
+        n += 1
+    return "Waypoint %d" % n
+
+
+def _snap_new_t(t):
+    """New keyframe time: timeline grid when Snap is on, else 0.01 s.
+
+    Undo/redo and file load restore exact times (_suspend_history), so only
+    a user add is snapped to the grid.
+    """
+    t = float(t)
+    if snap_to_grid and not _suspend_history:
+        try:
+            g = max(0.001, float(grid_spacing))
+        except Exception:
+            g = 0.01
+        t = round(t / g) * g
+    return max(0.0, round(t / 0.01) * 0.01)
+
+
 def _snap_t(t):
     return max(0.0, round(float(t) / 0.01) * 0.01)
 
@@ -2223,7 +2336,7 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
     if t is None:
         t = 0.0 if not waypoints else None
     if t is not None:
-        t = round(float(t) / 0.01) * 0.01
+        t = _snap_new_t(t)
         hit = None
         if not _suspend_history and not allow_multiple_waypoints_per_keyframe:
             hit = find_waypoint_at_time(t)
@@ -2250,7 +2363,11 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
         pos = next_waypoint_offset(waypoints[-1]["pos"])
 
     idx = len(waypoints)
-    name = f"/wp_{idx}"
+    # Scene node and label must be unique, not the list index: after a delete
+    # or an out-of-order insert, len(waypoints) can equal an existing
+    # waypoint's old index, and Viser would replace that waypoint's sphere.
+    name = _new_wp_node()
+    label = _next_wp_label()
 
     sphere = server.scene.add_icosphere(
         name=f"{name}/sphere",
@@ -2289,7 +2406,7 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
             t = (0.0 if prev_t is None else float(prev_t)) + 1.0
         else:
             t = 0.0
-    t = round(float(t) / 0.01) * 0.01
+    t = _snap_new_t(t)
     if q is None:
         q = _capture_current_q()
     if q is not None:
@@ -2299,7 +2416,8 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
         "pos": pos,
         "wxyz": wxyz,
         "mode": mode,
-        "name": "Waypoint %d" % idx,
+        "name": label,
+        "node": name,
         "added_at": time.time(),
         "t": t,
         "q": q,
@@ -2610,7 +2728,7 @@ def _show_wp_halo(idx):
     if h is None:
         try:
             h = server.scene.add_icosphere(
-                name=f"/wp_{idx}/halo",
+                name=f"{_wp_node(item)}/halo",
                 radius=0.034,
                 color=(255, 140, 30),
                 position=pos,
@@ -2638,6 +2756,7 @@ def _show_wp_halo(idx):
 
 def select_waypoint(idx, mode="replace"):
     global selected_idx, selected_ctrl, _drag_checkpointed, selected_obj_id, selected_obj_ids, selection_kind, _pending_rebuild_idx
+    note_scene_pick()
     if _recent_gizmo_drag() and selected_ctrl is not None:
         _release_gizmo_drag()
         if _pending_rebuild_idx is not None:
@@ -2721,7 +2840,7 @@ def hide_unselected_handles():
     if selected_idx is not None:
         sel.add(selected_idx)
     for i, item in enumerate(waypoints):
-        show_mesh = item.get("visible", True) is not False
+        show_mesh = _wp_mesh_shown(item)
         for key in ("sphere", "arrow", "side"):
             h = item.get(key)
             if h is None:
@@ -2749,6 +2868,7 @@ def hide_unselected_handles():
 
 def select_control(idx, which):
     global selected_ctrl, selected_idx
+    note_scene_pick()
     if idx < 0 or idx >= len(waypoints):
         return
     if selected_idx != idx:
@@ -2772,6 +2892,8 @@ def deselect_all():
     selected_obj_ids = []
     selected_wp_idxs = []
     _selection = []
+    # Also clears selection_kind, so the panel falls back to the actual robot.
+    _sync_selection_globals()
     simulatorview._clear_measure_line()
     clear_dotted_lines()
     simulatorview._hide_all_object_gizmos()
@@ -2833,6 +2955,15 @@ def _remove_wp_handles(wp):
                     ctrl._gizmo.remove()
                 except Exception:
                     pass
+    # Node paths are unique per waypoint now, so drop the empty parent frame
+    # too instead of leaving one behind per deleted waypoint.
+    node = wp.get("node")
+    remove_by_name = getattr(getattr(server, "scene", None), "remove_by_name", None)
+    if node and callable(remove_by_name):
+        try:
+            remove_by_name(node)
+        except Exception:
+            pass
 
 
 def _clear_scene_only():
@@ -3225,7 +3356,8 @@ def _apply_selection_viz():
         elif kind == "sim":
             try:
                 import robot_runtime as rr
-                if rr._sim_gizmo is None and wp_server_ready():
+                # No cursor gizmo while a sim plays; playback owns the cursor.
+                if rr._sim_gizmo is None and wp_server_ready() and not rr._pb["active"]:
                     p, w = rr.get_sim_cursor_pose()
                     rr._make_sim_gizmo(server, p, w)
             except Exception:
@@ -3239,6 +3371,7 @@ def wp_server_ready():
 
 def select_item(kind, key=None, mode="replace"):
     global _selection
+    note_scene_pick()
     mode = str(mode or "replace")
     token = (str(kind), key if kind != "wp" else int(key))
     if mode == "add":

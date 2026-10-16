@@ -714,6 +714,7 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
 
 
 def select_scene_object(oid, mode="replace"):
+    wp.note_scene_pick()
     import time as _t
     wp._obj_select_hold = _t.time() + 1.5
     if str(oid) == "sim_cursor":
@@ -1380,9 +1381,8 @@ def _tick_sony_cameras():
         if blob:
             _cam_frame_jpeg[oid] = blob
             cam["error"] = ""
-        else:
-            _cam_frame_jpeg.pop(oid, None)
-            cam["error"] = "Sony not connected"
+            # Record the decoded frame (was under the no-frame branch, so it
+            # decoded an empty buffer and good frames never reached the file).
             if want:
                 try:
                     import cv2
@@ -1393,6 +1393,9 @@ def _tick_sony_cameras():
                         _record_bgr(oid, cam, frame)
                 except Exception:
                     pass
+        else:
+            _cam_frame_jpeg.pop(oid, None)
+            cam["error"] = "Sony not connected"
 
 
 def _resolve_cv_script(cam):

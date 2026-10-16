@@ -265,7 +265,9 @@ class RobotArcs:
         if int(code) != 0:
             return None
         q = [float(v) for v in q]
-        if len(q) != 6 or np.allclose(q[:3], pose[:3], atol=1e-4):
+        # Reject only an echo of the input pose (all six values), not a real
+        # solution whose first three radians happen to match x, y, z metres.
+        if len(q) != 6 or (len(pose) >= 6 and np.allclose(q, pose[:6], atol=1e-6)):
             return None
         return q
 
@@ -346,7 +348,7 @@ class RobotArcs:
         """Load joint waypoints into a controller pathBuffer. Does NOT execute.
 
         Matches Aubo demo: cubic_spline + ~10 ms samples.
-        pathBufferEval -5 = invalid args (do not wait on Valid).
+        pathBufferEval -5 = invalid args; any non-zero return fails the upload.
         """
         raw = self._unwrap_traj(self._as_joint_list(points))
         if len(raw) < 2:
@@ -418,13 +420,13 @@ class RobotArcs:
                 chunk_pts = [list(map(float, q)) for q in traj[i:i + chunk]]
                 self.mc.pathBufferAppend(name, chunk_pts)
                 i += chunk
-            # Empty limits first (keep sample timing). If firmware rejects
-            # that (-5) or never goes Valid, eval with joint vmax/amax.
-            ev = self.mc.pathBufferEval(name, [], [], dt)
+            # Firmware rejects empty limit arrays (-5 = invalid args), so pass
+            # the joint vmax/amax directly. Any non-zero return is a failed
+            # upload; never treat a rejected eval as success.
+            ev = self.mc.pathBufferEval(name, vmax, amax, dt)
             print("pathBufferEval", name, "type", path_type, "n", n, "dt", dt, "ret", ev)
-            if ev == -5:
-                ev = self.mc.pathBufferEval(name, vmax, amax, dt)
-                print("pathBufferEval retry limits", "ret", ev)
+            if ev not in (0, None):
+                raise RuntimeError("pathBufferEval rejected %s (ret=%s)" % (name, ev))
             t0 = time.time()
             while not self.mc.pathBufferValid(name):
                 if time.time() - t0 > wait_s:

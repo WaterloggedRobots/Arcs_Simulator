@@ -10,6 +10,7 @@ Future motion fields (unused now, reserved):
 """
 import json
 import math
+import threading
 from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -543,17 +544,42 @@ def clear_bake():
     return {"ok": True, "segments": len(segments), "bake": status_dict()}
 
 
+# Dots are redrawn from the viewer thread (path window follow) and from
+# request threads (bake, edits). Unlocked, two redraws could each clear the
+# other's list and leave dots in the scene that no list owns.
+_dots_lock = threading.RLock()
+_dots_high = 0
+
+
 def clear_sample_dots():
     global sample_handles
-    for h in sample_handles:
-        try:
-            h.remove()
-        except Exception:
-            pass
-    sample_handles = []
+    with _dots_lock:
+        for h in sample_handles:
+            try:
+                h.remove()
+            except Exception:
+                pass
+        sample_handles = []
 
 
 def _draw_sample_dots():
+    global _dots_high
+    with _dots_lock:
+        _draw_sample_dots_locked()
+        n = len(sample_handles)
+        srv = getattr(wp, "server", None)
+        if srv is not None:
+            # Names below n were just redrawn (a name replaces its node); drop
+            # any higher name an earlier draw left behind.
+            for k in range(n, _dots_high):
+                try:
+                    srv.scene.remove_by_name(f"/bake_pt/{k}")
+                except Exception:
+                    pass
+        _dots_high = n
+
+
+def _draw_sample_dots_locked():
     """Dots only on calculated segments: green if solved, red if IK failed.
     Pending (not yet baked) segments stay empty. Need 2+ waypoints."""
     clear_sample_dots()
@@ -571,10 +597,8 @@ def _draw_sample_dots():
         for si, sm in enumerate(samples):
             if si == 0 or si == len(samples) - 1:
                 continue
-            win = getattr(wp, "_path_window", None)
-            if win is not None and sm.get("t") is not None:
-                if float(sm["t"]) < win[0] or float(sm["t"]) > win[1]:
-                    continue
+            if wp.in_path_window(sm.get("t")):
+                continue
             if fail_i is not None and si == fail_i:
                 continue
             if st == "ok" or sm.get("q") is not None:
@@ -699,7 +723,7 @@ def set_spacing(value):
     value = max(0.005, min(1.0, value))
     if abs(value - spacing) > 1e-9:
         spacing = value
-        invalidate_from(0, drop_all=True)
+        invalidate_from(0, drop_all=True, keep_times=True)
     return spacing
 
 
@@ -720,8 +744,14 @@ def _segment_sig_matches(j):
     return segments[j].get("sig") == (_wp_sig(j), _wp_sig(j + 1))
 
 
-def invalidate_from(idx, drop_all=False):
-    """idx = waypoint index that changed. Dirties segment idx-1 and all after."""
+def invalidate_from(idx, drop_all=False, keep_times=None):
+    """idx = waypoint index that changed. Dirties segment idx-1 and all after.
+
+    keep_times (default: not drop_all) carries existing sample frames into the
+    rebuilt spans. New-document resets pass drop_all and start clean.
+    """
+    if keep_times is None:
+        keep_times = not drop_all
     global baked_hops, baked_points, _bake_generation, _tl_cache, _speed_valid
     start = 0 if drop_all else max(0, idx - 1)
     if not drop_all and segments:
@@ -747,6 +777,7 @@ def invalidate_from(idx, drop_all=False):
     baked_hops = []
     baked_points = []
     _speed_valid = False
+    old_segs = {j: dict(segments[j]) for j in range(start, len(segments))} if keep_times else {}
     for j in range(start, len(segments)):
         segments[j]["status"] = "pending"
         segments[j]["samples"] = []
@@ -757,6 +788,8 @@ def invalidate_from(idx, drop_all=False):
     _sync_segment_count()
     for j in range(start, len(segments)):
         segments[j] = _build_segment(j)
+        if j in old_segs:
+            _carry_sample_times(old_segs[j], segments[j], j)
     _draw_sample_dots()
     if hasattr(wp, "draw_path"):
         wp.draw_path()
@@ -789,13 +822,63 @@ def rebuild_preview():
     for i in range(len(segments)):
         sig = (_wp_sig(i), _wp_sig(i + 1))
         if segments[i].get("sig") != sig or not segments[i].get("samples") or segments[i].get("spacing") != spacing:
-            old_tr = segments[i].get("transition")
+            old = segments[i]
+            old_tr = old.get("transition")
             segments[i] = _build_segment(i)
             if old_tr:
                 segments[i]["transition"] = old_tr
+            _carry_sample_times(old, segments[i], i)
     _draw_sample_dots()
     if hasattr(wp, "draw_path"):
         wp.draw_path()
+
+
+def _carry_sample_times(old, new, i):
+    """Keep the sample frames a span already had; only new samples get times.
+
+    Frames are matched by index and kept while they stay in order inside the
+    span. assign_sample_times spaces the samples left without one.
+    """
+    olds = (old or {}).get("samples") or []
+    news = new.get("samples") or []
+    if len(olds) < 3 or len(news) < 3 or i + 1 >= len(wp.waypoints):
+        return
+    t0 = float(wp.waypoints[i].get("t") or 0.0)
+    t1 = float(wp.waypoints[i + 1].get("t") or t0)
+    # Same span only: after an insert or delete, index i is a different span.
+    ta, tb = olds[0].get("t"), olds[-1].get("t")
+    if ta is None or tb is None or abs(float(ta) - t0) > 1e-6 or abs(float(tb) - t1) > 1e-6:
+        return
+    last = t0
+    for k in range(1, len(news) - 1):
+        if k >= len(olds) - 1:
+            break
+        t = olds[k].get("t")
+        if t is None or not (last < float(t) < t1):
+            break
+        news[k]["t"] = float(t)
+        if olds[k].get("t_lock") is not None:
+            news[k]["t_lock"] = olds[k]["t_lock"]
+        last = float(t)
+
+
+def _fill_missing_times(samples):
+    """Equal spacing for interior samples with no time, between their timed neighbours."""
+    k = 1
+    n = len(samples)
+    while k < n - 1:
+        if samples[k].get("t") is not None:
+            k += 1
+            continue
+        a = k - 1
+        b = k
+        while b < n - 1 and samples[b].get("t") is None:
+            b += 1
+        ta = float(samples[a]["t"])
+        tb = float(samples[b]["t"])
+        for j in range(a + 1, b):
+            samples[j]["t"] = ta + (tb - ta) * float(j - a) / float(b - a)
+        k = b
 
 
 def bake_seed_q():
@@ -1590,6 +1673,27 @@ def _match_end_hop_times(seg, t0, t1):
     sms[-2]["t"] = max(t_last, lo) if lo < t1 else t_last
 
 
+def _arc_fracs(samples):
+    """Distance-along-path fraction (0..1) for each sample, or None.
+
+    Ease / custom profiles map progress to time; progress must be distance,
+    not the Bezier parameter u, or a span can be fast mid-curve.
+    """
+    try:
+        pts = [np.asarray(sm.get("pos"), dtype=float).reshape(-1)[:3] for sm in samples]
+    except Exception:
+        return None
+    if len(pts) < 2 or any(p.shape != (3,) for p in pts):
+        return None
+    cum = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        cum.append(cum[-1] + float(np.linalg.norm(b - a)))
+    total = cum[-1]
+    if total < 1e-6:
+        return None
+    return [c / total for c in cum]
+
+
 def _apply_seg_time_profile(seg, t0, t1):
     samples = seg.get("samples") or []
     if len(samples) < 2:
@@ -1606,13 +1710,14 @@ def _apply_seg_time_profile(seg, t0, t1):
         sm.pop("t_lock", None)
     if seg.get("dwell") or n < 2:
         return
+    arc = _arc_fracs(samples)
     if mode == "custom":
         rec = timeline.get_custom_curve(int(seg.get("i0") or 0))
         c1, c2 = rec["c1"], rec["c2"]
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
                 continue
-            u = sm.get("u")
+            u = arc[k] if arc else sm.get("u")
             if u is None:
                 u = float(k) / float(n)
             s = timeline._s_for_progress(c1, c2, float(u))
@@ -1625,7 +1730,7 @@ def _apply_seg_time_profile(seg, t0, t1):
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
                 continue
-            u = sm.get("u")
+            u = arc[k] if arc else sm.get("u")
             if u is None:
                 u = float(k) / float(n)
             sm["t"] = t0 + span * timeline._ease_time_frac(mode, float(u))
@@ -1646,15 +1751,18 @@ def assign_sample_times():
         samples = seg.get("samples") or []
         if len(samples) < 2:
             continue
-        missing = any(
-            k not in (0, len(samples) - 1) and samples[k].get("t") is None
-            for k in range(len(samples))
-        )
-        if missing:
+        missing = [
+            k for k in range(1, len(samples) - 1) if samples[k].get("t") is None
+        ]
+        if missing and len(missing) == len(samples) - 2:
+            # A span with no frames yet takes its transition profile.
             _apply_seg_time_profile(seg, t0, t1)
         else:
             samples[0]["t"] = t0
             samples[-1]["t"] = t1
+            if missing:
+                # Keep the frames that exist; space only the new ones.
+                _fill_missing_times(samples)
 
 
 def path_distance():
@@ -1684,6 +1792,9 @@ def joint_angle_deltas(q0, q1):
 
 
 ACC_WINDOW_S = 0.12
+# Per-hop speed check margins (fraction of the joint limit).
+HOP_VEL_SLOP = 1.10
+HOP_ACC_SLOP = 1.50
 
 
 def _unwrap_q_series(qs):
@@ -1889,27 +2000,83 @@ def _timing_points():
     return pts
 
 
-def evaluate_timing(force=False):
-    """Score every hop for display. Limit pass/fail is keyframe-to-keyframe only.
+def _signed_rates(a, b):
+    """Signed joint rates (rad/s) over one hop and its dt."""
+    dt = float(b.get("t") or 0.0) - float(a.get("t") or 0.0)
+    qa = np.asarray(a["q"], dtype=float).reshape(-1)[:6]
+    qb = np.asarray(b["q"], dtype=float).reshape(-1)[:6]
+    d = (qb - qa + math.pi) % (2.0 * math.pi) - math.pi
+    if dt <= 1e-6:
+        return None, dt
+    return d / dt, dt
 
-    A yellow span does not block later spans. Sim / run still allowed.
+
+def _hop_accels(wmax):
+    """Joint acceleration at every sample, from the rate change between the
+    hops on either side: |w_k - w_(k-1)| / mean(dt). Each sample's
+    acceleration is blamed on the faster of its two hops, so a fault stays on
+    the hop that causes it instead of leaking onto a neighbour.
+
+    Returns {(seg, k): [acc per joint]} keyed by the hop's start sample index.
+    """
+    chain = []
+    for i, seg in enumerate(segments):
+        if seg.get("status") != "ok":
+            break
+        sms = [sm for sm in (seg.get("samples") or []) if sm.get("q") is not None]
+        for k, (a, b) in enumerate(zip(sms, sms[1:])):
+            w, dt = _signed_rates(a, b)
+            if w is None:
+                continue
+            chain.append({"key": (i, k), "w": w, "dt": dt})
+    out = {c["key"]: [0.0] * 6 for c in chain}
+    zero = np.zeros(6)
+
+    def _blame(acc, prev, cur):
+        pick = cur
+        if prev is not None and cur is not None:
+            rp = max(abs(prev["w"][j]) / max(wmax[j], 1e-6) for j in range(6))
+            rc = max(abs(cur["w"][j]) / max(wmax[j], 1e-6) for j in range(6))
+            pick = prev if rp > rc else cur
+        elif cur is None:
+            pick = prev
+        rec = out[pick["key"]]
+        for j in range(6):
+            rec[j] = max(rec[j], float(acc[j]))
+
+    for n in range(len(chain) + 1):
+        prev = chain[n - 1] if n > 0 else None
+        cur = chain[n] if n < len(chain) else None
+        if prev is None and cur is None:
+            continue
+        # The arm starts and ends the path at rest.
+        w0 = prev["w"] if prev is not None else zero
+        w1 = cur["w"] if cur is not None else zero
+        if prev is not None and cur is not None:
+            span = 0.5 * (prev["dt"] + cur["dt"])
+        else:
+            span = (cur or prev)["dt"]
+        acc = np.abs(w1 - w0) / max(span, 1e-6)
+        _blame(acc, prev, cur)
+    return out
+
+
+def evaluate_timing(force=False):
+    """Score every hop and fail a span when any hop in it is over the limits.
+
+    A hop fails on its own joint rate (dq/dt above limit * HOP_VEL_SLOP)
+    or on the windowed joint acceleration (above limit * HOP_ACC_SLOP).
+    A too-fast span does not block scoring of later spans.
     """
     if not force and not _speed_valid:
         return False
     timeline.pin_key_times()
     wmax, amax = _joint_wmax()
     any_fast = False
-    blocked = False
     prev_speeds = None
     series = _timing_points()
+    acc_by_hop = _hop_accels(wmax)
     for i, seg in enumerate(segments):
-        if blocked:
-            if seg.get("status") == "ok":
-                seg["timing"] = "uncalc"
-                for sm in (seg.get("samples") or []):
-                    if sm.get("timing") != "too_fast":
-                        sm["timing"] = "uncalc"
-            continue
         if seg.get("status") != "ok":
             if seg.get("status") == "fail":
                 seg["timing"] = "fail"
@@ -1922,9 +2089,12 @@ def evaluate_timing(force=False):
         if len(samples) < 2:
             seg["timing"] = "uncalc"
             continue
-        for a, b in zip(samples, samples[1:]):
+        for k, (a, b) in enumerate(zip(samples, samples[1:])):
             mid = 0.5 * (float(a.get("t") or 0.0) + float(b.get("t") or 0.0))
-            kin_w, kin_a = _joint_kin_at(series, mid)
+            kin_w, _ = _joint_kin_at(series, mid)
+            # Per-sample rate change, not a windowed fit: the fit smoothed a
+            # short fast hop away and smeared its fault onto the hop before.
+            kin_a = acc_by_hop.get((i, k), [0.0] * 6)
             rec = _hop_metrics(
                 a, b, wmax, amax,
                 prev_speeds=prev_speeds,
@@ -1932,15 +2102,28 @@ def evaluate_timing(force=False):
                 kin_speeds=kin_w,
             )
             prev_speeds = rec.get("speeds")
-            # Per-sample numbers only — do not fail the hop.
-            rec["over"] = False
-            rec["status"] = "ok"
-            rec["over_vel"] = False
-            rec["over_acc"] = False
+            # Hop pass/fail: raw dq/dt per joint (what the arm actually has to
+            # do between these two samples) and the windowed acceleration fit.
+            # Margins keep the 0.01 s time snap and fit noise from false-flagging.
+            hop_dt = max(1e-6, float(b.get("t") or 0.0) - float(a.get("t") or 0.0))
+            raw_w = [d / hop_dt for d in rec.get("deltas") or []]
+            fault_vel = [j for j, v in enumerate(raw_w) if v > wmax[j] * HOP_VEL_SLOP]
+            fault_acc = [] if rec.get("dwell") else [
+                j for j, v in enumerate(kin_a or []) if v > amax[j] * HOP_ACC_SLOP
+            ]
+            rec["hop_w"] = raw_w
+            rec["over_vel"] = bool(fault_vel)
+            rec["over_acc"] = bool(fault_acc)
             rec["over_time"] = False
+            rec["fault_vel"] = fault_vel
+            rec["fault_acc"] = fault_acc
+            rec["over"] = bool(fault_vel or fault_acc)
+            rec["status"] = "too_fast" if rec["over"] else "ok"
             seg["micro"].append(rec)
-            a["timing"] = "ok"
-            b["timing"] = "ok"
+            if a is samples[0]:
+                a["timing"] = "ok"
+            # Orange goes on the failing hop and the frame it arrives at only.
+            b["timing"] = rec["status"]
             b["speed"] = rec["speed"]
             b["accel"] = rec["acc"]
             b["limit"] = rec["limit"]
@@ -1970,18 +2153,24 @@ def evaluate_timing(force=False):
         if lin < 0.002 and max(deltas) < 0.02:
             span["over_vel"] = False
             span["over_time"] = False
-        span["over"] = bool(span["over_vel"] or span["over_time"])
+        hop_vel = any(h.get("over_vel") for h in seg["micro"])
+        hop_acc = any(h.get("over_acc") for h in seg["micro"])
+        span["over_vel"] = bool(span["over_vel"] or hop_vel)
+        span["over_acc"] = bool(hop_acc)
+        span["over"] = bool(span["over_vel"] or span["over_acc"] or span["over_time"])
         if span.get("over"):
             seg["timing"] = "too_fast"
             any_fast = True
-            for sm in samples:
-                sm["timing"] = "too_fast"
-            for hop in seg["micro"]:
-                hop["over"] = True
-                hop["status"] = "too_fast"
-                hop["over_vel"] = span.get("over_vel")
-                hop["over_acc"] = span.get("over_acc")
-                hop["over_time"] = span.get("over_time")
+            # A hop fault already marked its own two samples above; only a
+            # failed keyframe-to-keyframe mean marks the whole span.
+            if not (hop_vel or hop_acc):
+                for sm in samples:
+                    sm["timing"] = "too_fast"
+                for hop in seg["micro"]:
+                    hop["over"] = True
+                    hop["status"] = "too_fast"
+                    hop["over_vel"] = span.get("over_vel")
+                    hop["over_time"] = span.get("over_time")
         elif _seg_force_fk(i) or seg.get("force_fk"):
             span["status"] = "fk"
             for hop in seg["micro"]:
@@ -1999,12 +2188,10 @@ def write_overspeed_report(path=None):
     wmax, amax = _joint_wmax()
     names = _JOINT_NAMES
     rows = []
+    # Same records evaluate_timing scored, so the report agrees with the
+    # span colors (an all-ok bake writes 0 rows).
     for si, seg in enumerate(segments):
-        samples = [sm for sm in (seg.get("samples") or []) if sm.get("q") is not None]
-        prev = None
-        for k, (a, b) in enumerate(zip(samples, samples[1:])):
-            rec = _hop_metrics(a, b, wmax, amax, prev_speeds=prev)
-            prev = rec.get("speeds")
+        for k, rec in enumerate(seg.get("micro") or []):
             if not rec.get("over"):
                 continue
             fv = rec.get("fault_vel") or []
@@ -2023,7 +2210,7 @@ def write_overspeed_report(path=None):
                 "over_acc": rec.get("over_acc"),
                 "over_time": rec.get("over_time"),
                 "fault_vel_joints": ",".join(names[j] for j in fv),
-                "fault_vel_rad_s": ",".join("%.4f" % rec["speeds"][j] for j in fv),
+                "fault_vel_rad_s": ",".join("%.4f" % (rec.get("hop_w") or rec["speeds"])[j] for j in fv),
                 "max_vel_rad_s": ",".join("%.4f" % (wmax[j] if j < len(wmax) else wmax[-1]) for j in fv),
                 "fault_acc_joints": ",".join(names[j] for j in fa),
                 "fault_acc_rad_s2": ",".join("%.4f" % rec["accs"][j] for j in fa),
@@ -2058,6 +2245,11 @@ def write_overspeed_report(path=None):
         xlsx_path = None
     print("overspeed report", csv_path, "rows", len(rows))
     return {"ok": True, "csv": str(csv_path), "xlsx": str(xlsx_path) if xlsx_path else None, "rows": len(rows)}
+
+
+def export_overspeed():
+    """/api/speed_export: rewrite the report from the current scored bake."""
+    return write_overspeed_report()
 
 
 def _first_overspeed_t():

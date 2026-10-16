@@ -357,6 +357,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
         doc["saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         doc["spacing"] = bake.spacing
         doc["cursor"] = _sim_cursor_record()
+        doc["sim_track"] = _sim_track_record()
         src_tracks = tracks
         if src_tracks is None:
             if hasattr(wp, "sync_camera_tracks"):
@@ -697,7 +698,6 @@ def apply_loaded_doc(data):
                 loaded_tracks.append(rec)
             else:
                 loaded_tracks.append({"name": str(tr)})
-    wp.extra_tracks = loaded_tracks
     _load_sim_poses(data.get("sim_poses"))
     if isinstance(data.get("saved_paths"), list):
         wp.saved_paths = [dict(p) for p in data.get("saved_paths") if isinstance(p, dict)]
@@ -726,16 +726,17 @@ def apply_loaded_doc(data):
                 pass
     else:
         wp.sim_camera = None
+    # Set tracks only now: restoring objects re-syncs camera tracks, and a sync
+    # that runs before the camera objects exist drops their cam_<id> keys.
+    wp.extra_tracks = loaded_tracks
     if hasattr(wp, "sync_camera_tracks"):
         wp.sync_camera_tracks()
     if bake.import_raw_json:
         for w in getattr(wp, "waypoints", []) or []:
             w["force_fk"] = False
-        try:
-            import webui
-            webui.save_settings({"snap_to_grid": False})
-        except Exception as e:
-            print("json import snap off failed", e)
+        # Raw JSON times are off-grid: turn snap off for this session only.
+        # Do not write it to settings.json, which is the user's preference.
+        wp.snap_to_grid = False
     if hasattr(wp, "draw_path"):
         wp.draw_path()
     baked = data.get("bake")
@@ -765,7 +766,38 @@ def apply_loaded_doc(data):
             rr.restore_sim_cursor(cur)
         except Exception as e:
             print("restore cursor failed:", e)
+    # After objects and cursor: the Track target must exist and the pin is the cursor.
+    _restore_sim_track(data.get("sim_track"))
     return {"ok": True, "waypoints": len(wp.waypoints), "points": len(pts)}
+
+
+def _sim_track_record():
+    """The sim cursor's Track component; waypoints keep their own track_object."""
+    tr = getattr(rr, "_track", None) or {}
+    if not tr.get("added") and not tr.get("on"):
+        return None
+    return {
+        "on": bool(tr.get("on")),
+        "name": str(tr.get("name") or ""),
+        "added": bool(tr.get("added")),
+        "offset": [float(v) for v in list(tr.get("offset") or [0.0, 0.0, 0.0])[:3]],
+    }
+
+
+def _restore_sim_track(rec):
+    try:
+        if isinstance(rec, dict):
+            rr.set_track_object(
+                on=bool(rec.get("on")),
+                name=str(rec.get("name") or ""),
+                pick=False,
+                added=bool(rec.get("added", True)),
+                offset=rec.get("offset"),
+            )
+        else:
+            rr.set_track_object(on=False, name="", pick=False, added=False)
+    except Exception as e:
+        print("restore track failed:", e)
 
 
 def pick_save_path(title=None, default=None):
@@ -924,11 +956,28 @@ def load_from_path(path, recovered=False):
 
 
 def new_project():
-    if hasattr(wp, "clear_waypoints"):
-        wp.clear_waypoints()
-    if hasattr(wp, "clear_scene_objects"):
-        wp.clear_scene_objects()
+    # One full reset, on this thread only. /api/file/new used to also queue
+    # reset_document on the viewer thread, so both cleared the same lists at
+    # once and a swallowed error could leave objects in the scene.
     wp.sim_camera = None
+    if hasattr(wp, "reset_document"):
+        wp.reset_document()
+    else:
+        if hasattr(wp, "clear_waypoints"):
+            wp.clear_waypoints()
+        if hasattr(wp, "clear_scene_objects"):
+            wp.clear_scene_objects()
+    try:
+        import robot_runtime as rr
+        if hasattr(rr, "set_track_object"):
+            rr.set_track_object(on=False, name="", pick=False, added=False)
+    except Exception as e:
+        print("new: track reset failed", e)
+    if hasattr(wp, "refresh_sim_camera_viz"):
+        try:
+            wp.refresh_sim_camera_viz()
+        except Exception:
+            pass
     wp.extra_tracks = []
     if hasattr(bake, "invalidate_from"):
         bake.invalidate_from(0, drop_all=True)

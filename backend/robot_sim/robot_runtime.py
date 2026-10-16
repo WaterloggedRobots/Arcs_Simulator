@@ -167,6 +167,9 @@ def reload_robot_models():
 
 SIM_OPACITY = 255*0.6  # 0.40 — Viser ignores URDF rgba A; set on mesh handles
 SIM_RGB = (90, 150, 230)  # sim tint (blue)
+# Cursor colors follow the arm they belong to: sim = blue, real = orange.
+SIM_CURSOR_RGB = (80, 200, 255)
+REAL_CURSOR_RGB = (255, 180, 80)
 AUBO_I5_MAX_VEL_DEG = {
     "shoulder_joint": 223.0,
     "upperArm_joint": 223.0,
@@ -285,7 +288,13 @@ def robot_connected():
         if robot is None or not robot.hasConnected():
             return False
         q = robot.GetJoints()
-        return q is not None and len(list(q)) >= 6
+        if q is None or len(list(q)) < 6:
+            return False
+        # A powered-off controller still answers RPC but reports all-zero
+        # joints. Do not treat that as a live pose (the viewer would copy it).
+        if all(abs(float(v)) < 1e-9 for v in list(q)[:6]):
+            return False
+        return True
     except Exception:
         return False
 
@@ -720,6 +729,34 @@ def _snap_sim_cursor_to_ee():
         pass
 
 
+_JOINT_ORDER = (
+    "shoulder_joint", "upperArm_joint", "foreArm_joint",
+    "wrist1_joint", "wrist2_joint", "wrist3_joint",
+)
+
+
+def set_joint_limits(vel_deg=None, acc_deg=None):
+    """Preferences > Speed limits (deg/s, deg/s^2). The speed check reads these.
+
+    Returns True when a limit changed, so the caller can re-score timing.
+    """
+    changed = False
+    for table, vals in ((AUBO_I5_MAX_VEL_DEG, vel_deg), (AUBO_I5_MAX_ACCEL_DEG, acc_deg)):
+        if not vals:
+            continue
+        for name, v in zip(_JOINT_ORDER, list(vals)[:6]):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v <= 0:
+                continue
+            if abs(table.get(name, 0.0) - v) > 1e-9:
+                table[name] = v
+                changed = True
+    return changed
+
+
 def apply_aubo_i5_joint_limits(model):
     for joint in model.joint_list:
         name = getattr(joint, "name", None)
@@ -995,6 +1032,9 @@ def restore_sim_cursor(rec):
 
 
 def get_sim_cursor_pose():
+    if _pb["active"] and _cursor_sim is not None:
+        # Playback drives the cursor; a Track pin must not hold it (or its children) still.
+        return np.asarray(_cursor_sim.position, dtype=float).reshape(3), np.array(_sim_wxyz, dtype=float)
     if _sim_gizmo is not None:
         pos = np.asarray(_sim_gizmo.position, dtype=float).reshape(3)
         return pos, np.array(_sim_wxyz, dtype=float)
@@ -1010,7 +1050,7 @@ def _make_real_cursor(server):
     sph = server.scene.add_icosphere(
         name="/cursor_real/sphere",
         radius=CURSOR_R,
-        color=(80, 200, 255),
+        color=REAL_CURSOR_RGB,
         position=(0.35, 0.0, 0.35),
     )
     try:
@@ -1031,7 +1071,7 @@ def apply_gizmo_space(mode="local"):
 
 def hide_sim_gizmo():
     global _sim_gizmo, _sim_selected, _sim_rot0
-    if _track.get("on"):
+    if _track.get("on") and not _pb["active"]:
         try:
             if _sim_gizmo is not None:
                 _track["pin_pos"] = np.asarray(_sim_gizmo.position, dtype=float).reshape(3).copy()
@@ -1125,6 +1165,7 @@ def _track_target_pos(name):
 
 
 def set_track_object(on=None, name=None, pick=None, added=None, offset=None):
+    _track["_ik_key"] = None
     if on is not None:
         _track["on"] = on is True or str(on).lower() in ("1", "true", "on")
     if name is not None:
@@ -1228,6 +1269,12 @@ def tick_track_object():
     n = float(np.linalg.norm(wxyz)) or 1.0
     global _sim_wxyz
     _sim_wxyz = wxyz / n
+    # Re-solve only when the pin or the look-at changed. Backup IK costs
+    # ~0.1 s per attempt, and this runs every viewer tick.
+    key = tuple(np.round(frozen, 4)) + tuple(np.round(_sim_wxyz, 4))
+    if key == _track.get("_ik_key"):
+        return
+    _track["_ik_key"] = key
     try:
         wp._suspend_gizmo_cb = True
         pin = (float(frozen[0]), float(frozen[1]), float(frozen[2]))
@@ -1367,7 +1414,7 @@ def init_cursors(server):
         _cursor_sim = server.scene.add_icosphere(
             name="/cursor_sim/sphere",
             radius=CURSOR_R,
-            color=(255, 180, 80),
+            color=SIM_CURSOR_RGB,
             position=xyz,
         )
         try:
@@ -1471,9 +1518,9 @@ def _draw_sim_dir(pos=None):
         except Exception:
             pass
     with _dir_lock:
-        _arrow_sim = _set_line(_arrow_sim, "/cursor_sim/dir", pos, _sim_wxyz, (255, 180, 80))
+        _arrow_sim = _set_line(_arrow_sim, "/cursor_sim/dir", pos, _sim_wxyz, SIM_CURSOR_RGB)
         _arrow_sim_side = _set_line(
-            _arrow_sim_side, "/cursor_sim/dir_side", pos, _sim_wxyz, (255, 180, 80),
+            _arrow_sim_side, "/cursor_sim/dir_side", pos, _sim_wxyz, SIM_CURSOR_RGB,
             axis="right", scale=0.70,
         )
 
@@ -1491,9 +1538,9 @@ def update_cursors():
         back_r = _dir_from_wxyz(wxyz_r)
         _cursor_real.position = (float(pos_r[0]), float(pos_r[1]), float(pos_r[2]))
         with _dir_lock:
-            _arrow_real = _set_line(_arrow_real, "/cursor_real/dir", pos_r, wxyz_r, (80, 200, 255))
+            _arrow_real = _set_line(_arrow_real, "/cursor_real/dir", pos_r, wxyz_r, REAL_CURSOR_RGB)
             _arrow_real_side = _set_line(
-                _arrow_real_side, "/cursor_real/dir_side", pos_r, wxyz_r, (80, 200, 255),
+                _arrow_real_side, "/cursor_real/dir_side", pos_r, wxyz_r, REAL_CURSOR_RGB,
                 axis="right", scale=0.70,
             )
 
@@ -1796,13 +1843,18 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
         if err > max(float(IK_POS_TOL), 0.04):
             print("backup IK far", tag, "err", round(err, 4))
             return None
+        if aerr > IK_ANG_TOL:
+            print("backup IK off-axis", tag, "ang", round(aerr, 4))
+            return None
         return qq
 
     with _ik_lock:
         try:
-            q = _try(seed, "live")
+            q = _try(seed, "seed" if seed_q is not None else "live")
             if q is not None:
                 return q
+            if np.allclose(seed, home, atol=1e-6):
+                return None
             q = _try(home, "home")
             if q is not None:
                 print("backup IK used home seed")
@@ -1814,6 +1866,11 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
 
 def sim_ik(pos, wxyz, seed=None, strict=True, iters=40, ori=False):
     return solve_backup_ik(pos, wxyz, seed)
+
+
+IK6_ROT_WEIGHT = 0.5
+# Backup IK result is rejected above this orientation error (rad).
+IK_ANG_TOL = 0.1
 
 
 def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28):
@@ -1835,12 +1892,18 @@ def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28):
             e_r = np.zeros(3)
         return np.concatenate([e_p, e_r]), float(np.linalg.norm(e_p)), float(np.linalg.norm(e_r))
 
+    # The step and the accept test must minimise the same weighted error.
+    # Solving unweighted (rotation-dominated) steps but accepting on
+    # dp + 0.15*da rejected the first step of any large re-orientation
+    # (e.g. Track look-at), so backup IK failed where the pose was reachable.
+    W = np.array([1.0, 1.0, 1.0, IK6_ROT_WEIGHT, IK6_ROT_WEIGHT, IK6_ROT_WEIGHT])
     try:
         e, dp, da = _err_at(q)
     except Exception:
         return None
     best_q = q.copy()
-    best = dp + 0.15 * da
+    best = float(np.linalg.norm(W * e))
+    best_dp, best_da = dp, da
     for _ in range(max(8, int(iters))):
         if dp <= 0.002 and da <= 0.05:
             break
@@ -1857,24 +1920,32 @@ def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28):
             J[:, j] = (ej - e) / eps
         if not ok:
             break
-        lam = 0.12 + 1.5 * min(dp + 0.2 * da, 0.5)
+        Jw = W[:, None] * J
+        lam = 0.02 + 0.5 * min(best, 0.5)
         try:
-            dq = -np.linalg.solve(J.T.dot(J) + lam * np.eye(6), J.T.dot(e))
+            dq = -np.linalg.solve(Jw.T.dot(Jw) + lam * np.eye(6), Jw.T.dot(W * e))
         except Exception:
             break
-        qn = q + np.clip(dq, -0.18, 0.18)
-        try:
-            en, dpn, dan = _err_at(qn)
-        except Exception:
+        step = np.clip(dq, -0.18, 0.18)
+        moved = False
+        for _ls in range(5):
+            qn = q + step
+            try:
+                en, dpn, dan = _err_at(qn)
+            except Exception:
+                break
+            cost = float(np.linalg.norm(W * en))
+            if cost < best - 1e-7:
+                q, e, dp, da = qn, en, dpn, dan
+                best = cost
+                best_q = q.copy()
+                best_dp, best_da = dp, da
+                moved = True
+                break
+            step = step * 0.5
+        if not moved:
             break
-        cost = dpn + 0.15 * dan
-        if cost < best - 1e-6:
-            q, e, dp, da = qn, en, dpn, dan
-            best = cost
-            best_q = q.copy()
-        else:
-            break
-    if best > 0.12:
+    if best_dp + 0.15 * best_da > 0.12:
         return None
     return best_q
 
@@ -2108,7 +2179,9 @@ def real_robot_updater():
                 miss += 1
                 if miss >= 8:
                     miss = 0
-                    if robot is not None and robot.reconnect():
+                    # robot_connected() also needs a non-zero (powered) pose,
+                    # so a live RPC link alone is not a reconnect.
+                    if robot is not None and robot.reconnect() and robot_connected():
                         print("robot reconnected")
                         set_hide_real_robot(False)
                         if not _start_snap_done:
@@ -2270,6 +2343,7 @@ def enter_simulation_mode(loops=0, delay=0.0):
         print("simulate: need IK-baked samples")
         return False
     # Sim plays baked q(t) as-is. Joint vel limits do not block it.
+    _pb["had_gizmo"] = _sim_gizmo is not None
     hide_sim_gizmo()
     pos, wxyz = get_sim_cursor_pose()
     _pb["saved_q"] = _flat(robot_sim.angle_vector(), 6) if robot_sim is not None else None
@@ -2326,22 +2400,29 @@ def exit_simulation_mode():
     with mode_lock:
         sim_mode = SimMode.FOLLOW
         sim_path = None
-    if _pb["saved_q"] is not None and robot_sim is not None:
-        q = np.array(_pb["saved_q"], dtype=float)
-        robot_sim.angle_vector(q)
-        _last_good_q = q.copy()
-    if _pb["saved_pos"] is not None:
-        _set_sim_heading(_pb["saved_wxyz"] if _pb["saved_wxyz"] is not None else _sim_wxyz)
-        if _cursor_sim is not None:
-            _cursor_sim.position = tuple(float(v) for v in _pb["saved_pos"])
-        _draw_sim_dir(_pb["saved_pos"])
-        if wp.server is not None:
-            _make_sim_gizmo(wp.server, _pb["saved_pos"], _sim_wxyz)
-        try:
-            if hasattr(wp, "_propagate_children"):
-                wp._propagate_children("sim_cursor")
-        except Exception:
-            pass
+    try:
+        if _pb["saved_q"] is not None and robot_sim is not None:
+            q = np.array(_pb["saved_q"], dtype=float)
+            robot_sim.angle_vector(q)
+            _last_good_q = q.copy()
+        if _pb["saved_pos"] is not None:
+            # Force, not keep: playback overwrote the heading with the EE's.
+            _force_sim_heading(_pb["saved_wxyz"] if _pb["saved_wxyz"] is not None else _sim_wxyz)
+            if _cursor_sim is not None:
+                _cursor_sim.position = tuple(float(v) for v in _pb["saved_pos"])
+            _draw_sim_dir(_pb["saved_pos"])
+            # Bring the gizmo back if the cursor was selected before or during play.
+            sim_picked = any(k == "sim" for k, _ in (getattr(wp, "_selection", None) or []))
+            if (_pb.get("had_gizmo") or sim_picked) and wp.server is not None:
+                _make_sim_gizmo(wp.server, _pb["saved_pos"], _sim_wxyz)
+            try:
+                if hasattr(wp, "_propagate_children"):
+                    wp._propagate_children("sim_cursor")
+            except Exception:
+                pass
+    except Exception as e:
+        # Sim mode is already off above; a restore error must not leave it on.
+        print("sim exit restore failed:", e)
     _hold_sim = 8
     _sim_ik_pending = False
     _pb["saved_q"] = None
@@ -2379,6 +2460,10 @@ def set_sim_time(t):
     _pb["t"] = t
     _apply_q_at_t(t)
     _snap_sim_cursor_to_ee()
+    try:
+        wp._propagate_children("sim_cursor")
+    except Exception:
+        pass
     return t
 
 
@@ -2414,24 +2499,31 @@ def tick_simulation(dt=None):
         _pb["origin_t"] = float(_pb.get("t") or 0.0)
     t0 = _pb["samples"][0]["t"] if _pb["samples"] else 0.0
     _pb["t"] = min(_pb["t_end"], float(_pb["origin_t"]) + (now - float(_pb["origin_wall"])))
+    moved = False
     if now - _last_vis >= 0.07:
         _last_vis = now
+        moved = True
         if _pb["t"] < t0:
             _apply_q_at_t(t0)
         else:
             _apply_q_at_t(_pb["t"])
     if _cursor_sim is not None and robot_sim is not None:
         try:
-            pos, _ = _cursor_pose_from_ee(robot_sim, "sim")
+            pos, ee_wxyz = _cursor_pose_from_ee(robot_sim, "sim")
             _cursor_sim.position = tuple(float(v) for v in pos)
+            # Children of the cursor follow the EE rotation too; exit restores the heading.
+            _force_sim_heading(ee_wxyz)
             try:
                 if hasattr(wp, "_propagate_children"):
                     wp._propagate_children("sim_cursor")
             except Exception:
                 pass
-            q_now = _flat(robot_sim.angle_vector(), 6)
-            _note_motion("sim", q_now, pos, t=_pb.get("t"))
-            _pb["lin_mps"] = float(_motion["sim"]["lin_mps"])
+            # Only score speed on ticks that moved the arm; the ticks between
+            # see no motion and read 0, which flattened the speed graph.
+            if moved:
+                q_now = _flat(robot_sim.angle_vector(), 6)
+                _note_motion("sim", q_now, pos, t=_pb.get("t"))
+                _pb["lin_mps"] = float(_motion["sim"]["lin_mps"])
         except Exception:
             pass
     try:
@@ -2467,6 +2559,23 @@ def tick_simulation(dt=None):
                 pass
             exit_simulation_mode()
             print("sim path finished")
+
+
+def seek_playhead(t):
+    """Idle timeline scrub. The viewer loop centres the path window on its
+    playhead_t; without this it kept the last play time and fought the UI."""
+    if _pb["active"] or _rp.get("active"):
+        return False
+    try:
+        t = max(0.0, float(t))
+    except (TypeError, ValueError):
+        return False
+    try:
+        import robot_sim_run as viewer_main
+        viewer_main.playhead_t = t
+    except Exception:
+        return False
+    return True
 
 
 def sim_status():
@@ -2540,6 +2649,7 @@ def request_halt():
     _rp_gen += 1
     _rp["active"] = False
     _rp["paused"] = False
+    _rp["armed"] = False
     _rp["finish_at"] = None
     _rp["wall"] = None
     _pb["active"] = False
@@ -2849,7 +2959,9 @@ def pause_real_path():
                 exec_id = -1
             if exec_id == -1:
                 import path_bake as bake
-                t = _rp["t"]
+                # _rp["t"] runs from the camera preroll; sample times start at
+                # 0 when motion starts, so cut the tail on path time.
+                t = max(0.0, float(_rp["t"]) - float(_rp.get("preroll") or 0.0))
                 rest = [s for s in _rp["samples"] if s["t"] >= t - 1e-6]
                 if len(rest) < 2:
                     rest = (_rp["samples"] or [])[-2:]
@@ -3029,7 +3141,16 @@ def _ee_lerp_samples(recs, t):
 
 
 def real_path_status():
-    at = real_at_start()
+    # Polled by /api/clock during play; a failure here would leave the page
+    # stuck in run mode, so never raise.
+    try:
+        at = real_at_start()
+    except Exception:
+        at = False
+    try:
+        start_q = _first_path_q()
+    except Exception:
+        start_q = None
     return {
         "active": bool(_rp["active"]),
         "paused": bool(_rp["paused"]),
@@ -3041,7 +3162,7 @@ def real_path_status():
         "t_end": float(_rp["t_end"]),
         "at_start": bool(at),
         "locked": edits_locked(),
-        "start_q": _first_path_q(),
+        "start_q": start_q,
         "speed": HOLD_MOVE_SPEED,
         "connected": robot_connected(),
         "ik_pref": IK_PREF,

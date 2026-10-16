@@ -21,6 +21,12 @@ for _p in (_CAMERAS, _SIM, _ROOT, _PARENT):
     if _p.is_dir() and s not in sys.path:
         sys.path.insert(0, s)
 
+# Started as `python backend/webui.py`, this module is __main__. Register it
+# as "webui" too, so `import webui` elsewhere (file open, New, settings)
+# reuses the running module instead of loading and running webui.py again.
+if __name__ == "__main__":
+    sys.modules.setdefault("webui", sys.modules[__name__])
+
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.serving import WSGIRequestHandler
 
@@ -139,9 +145,13 @@ def apply_settings(data):
             pass
     if hasattr(rr, "set_joint_limits"):
         try:
-            rr.set_joint_limits(data.get("joint_vel_deg"), data.get("joint_acc_deg"))
-        except Exception:
-            pass
+            if rr.set_joint_limits(data.get("joint_vel_deg"), data.get("joint_acc_deg")):
+                # New limits: re-score the bake (IK stays) so colours match them.
+                bake.evaluate_timing(force=True)
+                if hasattr(bake, "bump_timeline_cache"):
+                    bake.bump_timeline_cache()
+        except Exception as e:
+            print("joint limits failed", e)
     if "hold_lin_mps" in data and hasattr(rr, "set_hold_lin_mps"):
         try:
             rr.set_hold_lin_mps(data.get("hold_lin_mps"))
@@ -155,6 +165,11 @@ def apply_settings(data):
     if "snap_to_grid" in data:
         try:
             wp.snap_to_grid = bool(data.get("snap_to_grid"))
+        except Exception:
+            pass
+    if "grid_spacing" in data:
+        try:
+            wp.grid_spacing = max(0.001, float(data.get("grid_spacing")))
         except Exception:
             pass
     if hasattr(wp, "load_global_saved_paths"):
@@ -306,8 +321,18 @@ def _build_status_heavy():
     return st
 
 
+_status_last_req = 0.0
+# Set by timeline edits so the next status build runs at once, not on the
+# 0.25 s cadence; a stale build made dropped frames jump back.
+_status_dirty = threading.Event()
+# The page polls /api/status every 1.2 s; rebuilding the heavy payload
+# (is_runnable, timeline, padded samples) 8x a second re-scored the same bake.
+STATUS_REBUILD_S = 0.25
+
+
 def _status_loop():
     global _status_heavy
+    last_build = 0.0
     while True:
         try:
             if hasattr(wp, "flush_idle_path_rebuild"):
@@ -316,12 +341,18 @@ def _status_loop():
                 wp.snap_global_gizmos_idle()
             if hasattr(wp, "tick_cameras"):
                 wp.tick_cameras()
-            heavy = _build_status_heavy()
-            with _status_lock:
-                _status_heavy = heavy
+            now = time.time()
+            polled = now - _status_last_req < 3.0
+            dirty = _status_dirty.is_set()
+            if dirty or ((polled or not _status_heavy) and now - last_build >= STATUS_REBUILD_S):
+                _status_dirty.clear()
+                heavy = _build_status_heavy()
+                last_build = time.time()
+                with _status_lock:
+                    _status_heavy = heavy
         except Exception:
             traceback.print_exc()
-        time.sleep(0.12)
+        _status_dirty.wait(0.12)
 
 
 def _ensure_status_worker():
@@ -340,6 +371,8 @@ def index():
 
 @app.route("/api/status")
 def api_status():
+    global _status_last_req
+    _status_last_req = time.time()
     _ensure_status_worker()
     with _status_lock:
         heavy = dict(_status_heavy or {})
@@ -401,10 +434,18 @@ def api_clock():
             t = rr.playhead_now()
     except Exception:
         t = None
+    # The speed graph plots these; without them both lines sat at 0.
+    try:
+        lin_sim = float(rr._motion["sim"]["lin_mps"] or 0.0)
+        lin_real = float(rr._motion["real"]["lin_mps"] or 0.0)
+    except Exception:
+        lin_sim = lin_real = 0.0
     return jsonify({
         "ok": True,
         "t": t,
         "playhead": t,
+        "lin_sim": lin_sim,
+        "lin_real": lin_real,
         "sim": rr.sim_status() if hasattr(rr, "sim_status") else {},
         "real": rr.real_path_status() if hasattr(rr, "real_path_status") else {},
     })
@@ -554,13 +595,20 @@ def api_select_object():
     data = request.get_json(silent=True) or {}
     if hasattr(wp, "select_scene_object"):
         wp.select_scene_object(data.get("id"), mode=data.get("mode") or "replace")
+    _status_dirty.set()
     return jsonify({"ok": True})
 
 
 @app.route("/api/select_waypoint", methods=["POST"])
 def api_select_waypoint():
     data = request.get_json(silent=True) or {}
+    if data.get("index") is None:
+        # The page sends index null when the user clicks empty space.
+        wp.deselect_all()
+        _status_dirty.set()
+        return jsonify({"ok": True})
     wp.select_waypoint(data.get("index"), mode=data.get("mode") or "replace")
+    _status_dirty.set()
     return jsonify({"ok": True})
 
 
@@ -646,6 +694,7 @@ def api_keyframe_time():
             released=released,
             stretch=stretch,
         )
+        _status_dirty.set()
         return jsonify({"ok": True, "moves": rows})
     t = wp.set_keyframe_time(int(data.get("index")), float(data.get("t")), released=released)
     return jsonify({"ok": True, "t": t})
@@ -657,6 +706,7 @@ def api_sample_time():
     applied = []
     if hasattr(bake, "set_sample_times"):
         applied = bake.set_sample_times(data.get("moves") or []) or []
+    _status_dirty.set()
     return jsonify({"ok": True, "moves": applied})
 
 
@@ -711,9 +761,8 @@ def api_simulate():
 
 @app.route("/api/sim/pause", methods=["POST"])
 def api_sim_pause():
-    if hasattr(rr, "pause_simulation"):
-        rr.pause_simulation()
-    return jsonify({"ok": True})
+    paused = rr.toggle_sim_pause()
+    return jsonify({"ok": True, "paused": bool(paused), "sim": rr.sim_status()})
 
 
 @app.route("/api/real/upload", methods=["POST"])
@@ -722,7 +771,8 @@ def api_real_upload():
     ok = False
     if hasattr(rr, "upload_real_path"):
         ok = bool(rr.upload_real_path(
-            loops=data.get("loops") or 0,
+            # The UI sends "repeat" (same field Simulate reads).
+            loops=data.get("loops", data.get("repeat")) or 0,
             delay=data.get("delay") or 0.0,
         ))
     elif hasattr(rr, "plan_joint_path"):
@@ -765,10 +815,9 @@ def api_real_pause():
 
 @app.route("/api/real/stop", methods=["POST"])
 def api_real_stop():
-    if hasattr(rr, "abort_path_buffer"):
-        rr.abort_path_buffer()
-    viewer_main.real_requests.append(("stop", None))
-    return jsonify({"ok": True})
+    # Stop here, not on the viewer queue: a busy viewer loop must not delay it.
+    rr.stop_real_path()
+    return jsonify({"ok": True, "real": rr.real_path_status()})
 
 
 @app.route("/api/robot_model", methods=["POST"])
@@ -811,9 +860,8 @@ def api_snap_sim_to_real():
 
 @app.route("/api/halt", methods=["POST"])
 def api_halt():
-    if hasattr(rr, "abort_path_buffer"):
-        rr.abort_path_buffer()
-    return jsonify({"ok": True})
+    rr.request_halt()
+    return jsonify({"ok": True, "sim": rr.sim_status(), "real": rr.real_path_status()})
 
 
 @app.route("/api/file/new", methods=["POST"])
@@ -821,8 +869,6 @@ def api_file_new():
     data = request.get_json(silent=True) or {}
     if not data.get("force") and not fman.scene_is_empty():
         return jsonify({"ok": False, "needs_confirm": True})
-    if hasattr(viewer_main, "file_requests"):
-        viewer_main.file_requests.append(("new", None))
     out = fman.new_project()
     return jsonify({**out, "session": fman.session_info()})
 
@@ -1183,7 +1229,21 @@ def api_track_object():
 @app.route("/api/path_window", methods=["POST"])
 def api_path_window():
     data = request.get_json(silent=True) or {}
-    save_settings({"path_window_on": data.get("on"), "path_window_radius": data.get("radius")})
+    on = bool(data.get("on"))
+    radius = data.get("radius")
+    try:
+        radius = max(0.0, float(radius))
+    except (TypeError, ValueError):
+        radius = 1.0
+    save_settings({"path_window_on": on, "path_window_radius": radius})
+    # Apply to the 3D path too; saving the setting alone never clipped it.
+    if hasattr(wp, "configure_path_window"):
+        t = data.get("t")
+        try:
+            t = float(t) if t is not None else None
+        except (TypeError, ValueError):
+            t = None
+        wp.configure_path_window(on, radius=radius, t=t)
     return jsonify({"ok": True})
 
 
@@ -1297,13 +1357,16 @@ def api_optomise():
 
 @app.route("/api/speed_export")
 def api_speed_export():
+    # write_overspeed_report writes to the same EXPORTS_DIR file.
+    path = app_paths.EXPORTS_DIR / "bake_overspeed.csv"
     if request.args.get("download"):
-        path = app_paths.EXPORTS_DIR / "bake_overspeed.csv"
         if path.is_file():
             return send_file(str(path), as_attachment=True)
+        return jsonify({"ok": False, "error": "no overspeed report yet; bake first"}), 404
+    res = {"ok": True}
     if hasattr(bake, "export_overspeed"):
-        bake.export_overspeed()
-    return jsonify({"ok": True})
+        res = bake.export_overspeed() or res
+    return jsonify(res)
 
 
 def _open_ui():
