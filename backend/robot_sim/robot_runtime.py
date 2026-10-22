@@ -51,7 +51,7 @@ _sim_gizmo = None
 _gizmo_serial = 0
 _sim_ik_pending = False
 _ik_lock = threading.Lock()
-_track = {"on": False, "name": "", "pick": False, "valid": False, "added": False, "offset": [0.0, 0.0, 0.0], "pin_pos": None}
+_track = {"on": False, "name": "", "pick": False, "valid": False, "added": False, "offset": [0.0, 0.0, 0.0], "use_offset": False, "pin_pos": None}
 _hold_sim = 0
 _start_snap_done = False
 _rpc_probe_ready = False
@@ -1110,11 +1110,34 @@ def _look_at_wxyz(eye, target, up=(0.0, 0.0, 1.0)):
     return np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]], dtype=float)
 
 
-def look_at_wxyz_offset(pos, name, offset=None):
-    tgt = _track_target_pos(name)
-    if tgt is None or pos is None:
-        return None
-    wxyz = _look_at_wxyz(np.asarray(pos, dtype=float).reshape(3), tgt)
+def _aim_wxyz(pos, tgt, offset=None, use_offset=False, offset_rec=None):
+    """Look At heading for a cursor at pos.
+
+    Manual mode: look-at, then the rx/ry/rz rot offset.
+    Offset mode: the owner's Offset frame (local pos + wxyz) is what looks at
+    the target; the manual rot offset is ignored. A missing or disabled
+    Offset component falls back to a plain look-at.
+    """
+    pos = np.asarray(pos, dtype=float).reshape(3)
+    tgt = np.asarray(tgt, dtype=float).reshape(3)
+    if use_offset:
+        rec = offset_rec if (offset_rec and offset_rec.get("enabled", True)) else None
+        if rec is None:
+            return _look_at_wxyz(pos, tgt)
+        lp = np.asarray(rec.get("pos") or [0, 0, 0], dtype=float).reshape(3)
+        lq = np.asarray(rec.get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4)
+        r_off = R.from_quat([lq[1], lq[2], lq[3], lq[0]])
+        r_obj = None
+        eye = pos
+        # The eye moves with the heading; a few passes settle it.
+        for _ in range(6):
+            look = _look_at_wxyz(eye, tgt)
+            r_obj = R.from_quat([look[1], look[2], look[3], look[0]]) * r_off.inv()
+            eye = pos + r_obj.apply(lp)
+        q = r_obj.as_quat()
+        wxyz = np.array([q[3], q[0], q[1], q[2]], dtype=float)
+        return wxyz / (float(np.linalg.norm(wxyz)) or 1.0)
+    wxyz = _look_at_wxyz(pos, tgt)
     off = list(offset or [0.0, 0.0, 0.0])
     while len(off) < 3:
         off.append(0.0)
@@ -1127,6 +1150,20 @@ def look_at_wxyz_offset(pos, name, offset=None):
         pass
     n = float(np.linalg.norm(wxyz)) or 1.0
     return wxyz / n
+
+
+def look_at_wxyz_offset(pos, name, offset=None, use_offset=False, offset_rec=None):
+    tgt = _track_target_pos(name)
+    if tgt is None or pos is None:
+        return None
+    return _aim_wxyz(pos, tgt, offset, use_offset, offset_rec)
+
+
+def _offset_state(rec):
+    """'ok' | 'disabled' | 'missing' for the Look At warning label."""
+    if not rec:
+        return "missing"
+    return "ok" if rec.get("enabled", True) else "disabled"
 
 
 def _track_target_pos(name):
@@ -1164,8 +1201,10 @@ def _track_target_pos(name):
     return None
 
 
-def set_track_object(on=None, name=None, pick=None, added=None, offset=None):
+def set_track_object(on=None, name=None, pick=None, added=None, offset=None, use_offset=None):
     _track["_ik_key"] = None
+    if use_offset is not None:
+        _track["use_offset"] = use_offset is True or str(use_offset).lower() in ("1", "true", "on")
     if on is not None:
         _track["on"] = on is True or str(on).lower() in ("1", "true", "on")
     if name is not None:
@@ -1231,6 +1270,8 @@ def track_status():
         "error": bool(_track.get("on") and (_track.get("name") or "") and not _track.get("valid")),
         "pos": pos,
         "offset": [float(off[0]), float(off[1]), float(off[2])],
+        "use_offset": bool(_track.get("use_offset")),
+        "offset_state": _offset_state(getattr(wp, "sim_offset", None)),
     }
 
 
@@ -1255,17 +1296,8 @@ def tick_track_object():
         return
     frozen = np.asarray(pos, dtype=float).reshape(3).copy()
     _track["pin_pos"] = frozen.copy()
-    wxyz = _look_at_wxyz(frozen, tgt)
-    off = list(_track.get("offset") or [0.0, 0.0, 0.0])
-    while len(off) < 3:
-        off.append(0.0)
-    try:
-        q_off = R.from_euler("xyz", off).as_quat()
-        q_look = np.array([wxyz[1], wxyz[2], wxyz[3], wxyz[0]], dtype=float)
-        q_f = (R.from_quat(q_look) * R.from_quat(q_off)).as_quat()
-        wxyz = np.array([q_f[3], q_f[0], q_f[1], q_f[2]], dtype=float)
-    except Exception:
-        pass
+    wxyz = _aim_wxyz(frozen, tgt, _track.get("offset"),
+                     _track.get("use_offset"), getattr(wp, "sim_offset", None))
     n = float(np.linalg.norm(wxyz)) or 1.0
     global _sim_wxyz
     _sim_wxyz = wxyz / n
@@ -3328,6 +3360,8 @@ def get_selected_props():
             tr["valid"] = tgt is not None
             tr["pos"] = None if tgt is None else [float(tgt[0]), float(tgt[1]), float(tgt[2])]
             tr["added"] = True
+        # A waypoint keeps the sim cursor's Offset as it was when the point was added.
+        tr["offset_state"] = _offset_state(tr.get("offset_xform"))
         return out
     if kind == "sim" or ((kind is None) and (_sim_gizmo is not None or _sim_selected) and not getattr(wp, "selected_obj_id", None)):
         pos, wxyz = get_sim_cursor_pose()
@@ -3345,6 +3379,7 @@ def get_selected_props():
             "qdot": [float(v) for v in _motion["sim"]["qdot"]],
             "track": track_status(),
             "camera": dict(getattr(wp, "sim_camera", None) or {}) if getattr(wp, "sim_camera", None) else None,
+            "offset": wp.offsets.offset_status("sim") if hasattr(wp, "offsets") else {"added": False},
         })
         return out
     if hasattr(wp, "selected_object_props"):

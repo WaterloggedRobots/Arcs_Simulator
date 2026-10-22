@@ -706,6 +706,13 @@
     .track-row { display: grid; grid-template-columns: 1fr 28px 28px; gap: 4px; position: relative; }
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
     .track-err { color: #e05555; font-size: 12px; margin-top: 4px; }
+    .use-offset-btn { width: 100%; margin: 6px 0 0; background: #3a3b44; }
+    #trackRotRow input:disabled { opacity: 0.45; }
+    .use-offset-btn.on { background: #3d6ebd; color: #fff; }
+    #offsetWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #offsetWrap.advanced .mode-advanced { color: #ffd228 !important; }
+    #offsetEnable { background: #8a8a92 !important; }
+    #offsetEnable.advanced { background: #c9a21f !important; }
     .track-xyz input { font-size: 14px; }
     #trackName { background: #1c1d21; color: var(--text); border: 1px solid #111; border-radius: 6px; padding: 6px 8px; width: 100%; }
     #moveRobotPose { margin-bottom: 28px; }
@@ -1990,9 +1997,9 @@
           </div>
           <div id="trackComp" class="track-comp" hidden>
             <div class="track-head">
-              <span>Track Object</span>
+              <span>Look At</span>
               <div class="track-head-right">
-                <div class="tl-mode simple" id="trackWrap" title="Enable tracking">
+                <div class="tl-mode simple" id="trackWrap" title="Enable Look At">
                   <span class="mode-simple">Off</span>
                   <button type="button" class="slide" id="trackToggle"></button>
                   <span class="mode-advanced">On</span>
@@ -2000,7 +2007,7 @@
                 <button type="button" id="trackTrash" class="track-trash" title="Remove component">🗑</button>
               </div>
             </div>
-            <label class="field tight">Track Target:</label>
+            <label class="field tight">Look At Target:</label>
             <div class="track-row">
               <input id="trackName" type="text" placeholder="object name">
               <button type="button" id="trackPickBtn" title="Pick in viewer">○</button>
@@ -2013,16 +2020,45 @@
               <label>z</label><input id="trackZ" type="number" step="0.001" readonly>
             </div>
             <label class="field tight">Rot offset</label>
-            <div class="row triple">
+            <div class="row triple" id="trackRotRow">
               <label>rx</label><input id="trackRx" type="number" step="0.001" value="0">
               <label>ry</label><input id="trackRy" type="number" step="0.001" value="0">
               <label>rz</label><input id="trackRz" type="number" step="0.001" value="0">
             </div>
+            <button type="button" id="trackUseOffset" class="use-offset-btn" title="Aim from this object's Offset component; the manual rot offset is ignored">Use Offset component</button>
+            <div id="trackOffErr" class="track-err" hidden></div>
+          </div>
+          <hr id="offsetSep" hidden>
+          <div id="offsetComp" class="track-comp" hidden>
+            <div class="track-head">
+              <span>Offset</span>
+              <div class="track-head-right">
+                <div class="tl-mode advanced" id="offsetWrap" title="Enable offset">
+                  <span class="mode-simple">Off</span>
+                  <button type="button" class="slide advanced" id="offsetEnable"></button>
+                  <span class="mode-advanced">On</span>
+                </div>
+                <button type="button" id="offsetTrash" class="track-trash" title="Remove component">🗑</button>
+              </div>
+            </div>
+            <label class="field tight">Local position</label>
+            <div class="row triple">
+              <label>x</label><input id="offX" type="number" step="0.001" value="0">
+              <label>y</label><input id="offY" type="number" step="0.001" value="0">
+              <label>z</label><input id="offZ" type="number" step="0.001" value="0">
+            </div>
+            <label class="field tight">Local rotation <span id="offRotUnit">(rad)</span></label>
+            <div class="row triple">
+              <label>rx</label><input id="offRx" type="number" step="0.001" value="0">
+              <label>ry</label><input id="offRy" type="number" step="0.001" value="0">
+              <label>rz</label><input id="offRz" type="number" step="0.001" value="0">
+            </div>
           </div>
           <button type="button" id="simExtraAdd" class="sim-extra-add" title="Add">+</button>
           <div id="compMenu" class="kf-menu" hidden>
-            <button type="button" data-comp="track">Track Object</button>
+            <button type="button" data-comp="track">Look At</button>
             <button type="button" data-comp="camera">Camera</button>
+            <button type="button" data-comp="offset">Offset</button>
           </div>
       </aside>
     </div>
@@ -4109,6 +4145,7 @@
         const ts0 = document.getElementById("trackSep");
         if (tc0) tc0.hidden = true;
         if (ts0) ts0.hidden = true;
+        renderOffsetComp(null);
         return;
       }
       window._propKind = obj.kind;
@@ -4220,6 +4257,7 @@
         }
         const camBoxP = document.getElementById("camProps");
         if (camBoxP) camBoxP.hidden = !(obj.camera && (obj.camera.type || obj.camera.enabled != null));
+        renderOffsetComp(obj);
         return;
       }
       if (primBody) primBody.hidden = true;
@@ -4314,14 +4352,28 @@
           el.value = (tp[i] == null || !isFinite(Number(tp[i]))) ? "" : Number(tp[i]).toFixed(4);
         });
         const off = track.offset || [0, 0, 0];
+        const useOff = !!track.use_offset;
         ["trackRx", "trackRy", "trackRz"].forEach((id, i) => {
           const el = document.getElementById(id);
-          if (!el || document.activeElement === el) return;
+          if (!el) return;
+          el.disabled = useOff;
+          if (document.activeElement === el) return;
           let v = Number(off[i] || 0);
           if (fkDeg) v = rad2deg(v);
           el.value = Number(v).toFixed(fkDeg ? 2 : 4);
         });
+        const ub = document.getElementById("trackUseOffset");
+        if (ub) ub.classList.toggle("on", useOff);
+        const oe = document.getElementById("trackOffErr");
+        if (oe) {
+          const st = track.offset_state || "missing";
+          oe.hidden = !(useOff && st !== "ok");
+          oe.textContent = st === "disabled"
+            ? "Offset component is not enabled on this object."
+            : "This object has no Offset component.";
+        }
       }
+      renderOffsetComp(obj);
       const armed = mismatch || holding;
       if (moveBtn) {
         moveBtn.classList.toggle("armed", armed);
@@ -4329,6 +4381,73 @@
         moveBtn.disabled = !realOn || !armed;
       }
     }
+    function renderOffsetComp(obj) {
+      const box = document.getElementById("offsetComp");
+      const sep = document.getElementById("offsetSep");
+      const off = (obj && obj.offset) || {};
+      const kinds = ["sim", "empty", "sphere", "cube", "camera", "mesh", "import"];
+      const show = !!(obj && kinds.indexOf(obj.kind) >= 0 && off.added);
+      if (box) box.hidden = !show;
+      if (sep) sep.hidden = !show;
+      if (!show) return;
+      const on = off.enabled !== false;
+      const en = document.getElementById("offsetEnable");
+      const wrap = document.getElementById("offsetWrap");
+      if (en) en.classList.toggle("advanced", on);
+      if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+      const p = off.pos || [0, 0, 0];
+      ["offX", "offY", "offZ"].forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = Number(p[i] || 0).toFixed(4);
+      });
+      const q = off.wxyz || [1, 0, 0, 0];
+      const eu = quatToEuler(Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3]));
+      ["offRx", "offRy", "offRz"].forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (!el || document.activeElement === el) return;
+        const v = fkDeg ? rad2deg(eu[i]) : eu[i];
+        el.value = Number(v).toFixed(fkDeg ? 2 : 4);
+      });
+      const unit = document.getElementById("offRotUnit");
+      if (unit) unit.textContent = fkDeg ? "(deg)" : "(rad)";
+    }
+    function postOffset(payload) {
+      const obj = window.__lastObject || {};
+      const body = Object.assign({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id }, payload || {});
+      return fetch("/api/offset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json()).then((d) => {
+        if (d && d.offset && window.__lastObject) window.__lastObject.offset = d.offset;
+        setTimeout(refresh, 80);
+        return d;
+      });
+    }
+    function sendOffset() {
+      const pos = ["offX", "offY", "offZ"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
+      const eu = ["offRx", "offRy", "offRz"].map((id) => {
+        const v = parseFloat((document.getElementById(id) || {}).value || "0");
+        return fkDeg ? deg2rad(v) : v;
+      });
+      postOffset({ act: "update", pos: pos, wxyz: eulerToQuat(eu[0], eu[1], eu[2]) });
+    }
+    ["offX", "offY", "offZ", "offRx", "offRy", "offRz"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("change", sendOffset);
+    });
+    const offsetEnable = document.getElementById("offsetEnable");
+    if (offsetEnable) {
+      offsetEnable.onclick = () => {
+        const on = !offsetEnable.classList.contains("advanced");
+        offsetEnable.classList.toggle("advanced", on);
+        const wrap = document.getElementById("offsetWrap");
+        if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+        postOffset({ act: "update", enabled: on });
+      };
+    }
+    const offsetTrash = document.getElementById("offsetTrash");
+    if (offsetTrash) offsetTrash.onclick = () => postOffset({ act: "remove" });
     function sendPrim() {
       let wxyz;
       if (primRotEuler) {
@@ -4494,10 +4613,11 @@
         const isSim = obj.kind === "sim";
         const hasCam = !!(obj.camera);
         const hasTrack = !!(obj.track && obj.track.added);
+        const hasOffset = !!(obj.offset && obj.offset.added);
         compMenu.querySelectorAll("[data-comp]").forEach((b) => {
           const k = b.getAttribute("data-comp");
-          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint");
-          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack);
+          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint") || (k === "offset" && obj.kind === "waypoint");
+          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset);
           b.disabled = !!taken;
           b.style.opacity = taken ? "0.4" : "";
           b.style.pointerEvents = taken ? "none" : "";
@@ -4524,6 +4644,9 @@
           window.__trackAdded = true;
           window.__lastObject.track = Object.assign({}, window.__lastObject.track || {}, { added: true });
           postTrack({ added: true }).catch(() => {});
+        }
+        if (btn.getAttribute("data-comp") === "offset") {
+          postOffset({ act: "add" }).catch(() => {});
         }
         if (btn.getAttribute("data-comp") === "camera") {
           const obj = window.__lastObject || {};
@@ -4585,6 +4708,13 @@
       if (!el) return;
       el.addEventListener("change", () => postTrack({ added: true, on: trackToggle && trackToggle.classList.contains("advanced") }));
     });
+    const trackUseOffset = document.getElementById("trackUseOffset");
+    if (trackUseOffset) trackUseOffset.onclick = (e) => {
+      e.preventDefault();
+      const on = !trackUseOffset.classList.contains("on");
+      trackUseOffset.classList.toggle("on", on);
+      postTrack({ added: true, use_offset: on });
+    };
     const trackTrash = document.getElementById("trackTrash");
     if (trackTrash) trackTrash.onclick = () => { window.__trackAdded = false; postTrack({ added: false, on: false }); };
     const holdLinEl = document.getElementById("holdLinMps");

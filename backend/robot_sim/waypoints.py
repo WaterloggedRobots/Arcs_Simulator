@@ -41,6 +41,7 @@ selected_path_id = None
 _pose_markers = {}
 show_pose_markers = True
 sim_camera = None
+sim_offset = None  # sim cursor Offset component (see offsets.py)
 list_vis = {"obj": True, "wp": True, "pose": True, "track": True}
 snap_to_grid = False
 point_order = []
@@ -473,6 +474,7 @@ def apply_gizmo_space(space=None):
                 rr.apply_gizmo_space(gizmo_space)
         except Exception:
             pass
+        offsets.rebuild_offset_gizmos()
     finally:
         _suspend_gizmo_cb = False
     print("gizmo space applied", gizmo_space)
@@ -524,6 +526,7 @@ def _snapshot():
             "local_pos": np.array(o.get("local_pos", o.get("pos", [0, 0, 0])), copy=True),
             "local_wxyz": np.array(o.get("local_wxyz", o.get("wxyz", [1, 0, 0, 0])), copy=True),
             "camera": None if not o.get("camera") else dict(o.get("camera")),
+            "offset": offsets.clean_offset(o.get("offset")),
             "mesh_path": o.get("mesh_path"),
         })
     return {
@@ -590,6 +593,9 @@ def _restore_objects_snapshot(doc):
     want_ids = [str(o.get("id")) for o in want]
     if have == want_ids and len(have) == len(want):
         selected_obj_id = doc.get("selected_obj_id")
+        for o, rec in zip(scene_objects, want):
+            o["offset"] = offsets.clean_offset(rec.get("offset"))
+        offsets.refresh_offset_viz()
         return
     try:
         simulatorview.clear_scene_objects()
@@ -600,6 +606,7 @@ def _restore_objects_snapshot(doc):
             simulatorview.restore_scene_object(rec)
         except Exception as e:
             print("undo restore object failed", e)
+    offsets.refresh_offset_viz()
     sel = doc.get("selected_obj_id")
     if sel and simulatorview._find_object(sel) is not None:
         selected_obj_id = sel
@@ -2932,6 +2939,7 @@ def deselect_all():
             rr.hide_sim_gizmo()
     except Exception:
         pass
+    offsets.on_selection_changed()
 
 
 def _remove_wp_handles(wp):
@@ -3363,6 +3371,7 @@ def _apply_selection_viz():
             except Exception:
                 pass
     simulatorview._update_measure_line()
+    offsets.on_selection_changed()
 
 
 def wp_server_ready():
@@ -3504,3 +3513,4 @@ def set_item_visible(kind, oid, on=None):
 # Scene objects and cameras live in simulatorview.py; importing it exposes
 # its functions here as wp.<name>.
 import simulatorview  # noqa: E402,F401
+import offsets  # noqa: E402

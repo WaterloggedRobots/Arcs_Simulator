@@ -1222,8 +1222,38 @@ def api_track_object():
             pick=data.get("pick"),
             added=data.get("added"),
             offset=data.get("offset"),
+            use_offset=data.get("use_offset"),
         ) or {}
     return jsonify({"ok": True, "track": st})
+
+
+@app.route("/api/offset", methods=["POST"])
+def api_offset():
+    """Offset component on a scene object or the sim cursor (owner "sim")."""
+    data = request.get_json(silent=True) or {}
+    owner = data.get("id") or data.get("owner")
+    if data.get("kind") == "sim" or owner in ("sim", "sim_cursor"):
+        owner = "sim"
+    if not owner:
+        owner = getattr(wp, "selected_obj_id", None)
+    if not owner:
+        return jsonify({"ok": False, "error": "no owner"})
+    act = str(data.get("act") or "update").lower()
+    if act == "add":
+        st = wp.offsets.add_offset_component(owner)
+    else:
+        st = wp.offsets.update_offset(
+            owner,
+            enabled=data.get("enabled"),
+            pos=data.get("pos"),
+            wxyz=data.get("wxyz"),
+            remove=(act == "remove"),
+        )
+    if owner == "sim" and hasattr(rr, "set_track_object"):
+        # Look At in offset mode re-aims when the offset changes.
+        rr.set_track_object()
+    _status_dirty.set()
+    return jsonify({"ok": st is not None, "offset": st or {}})
 
 
 @app.route("/api/path_window", methods=["POST"])

@@ -241,6 +241,11 @@ def _hide_all_object_gizmos():
             pass
 
 
+def _offsets():
+    import offsets
+    return offsets
+
+
 def _find_object(oid):
     for obj in wp.scene_objects:
         if obj.get("id") == oid:
@@ -637,6 +642,7 @@ def restore_scene_object(rec):
         "handle": None,
         "gizmo": None,
         "camera": dict((rec or {}).get("camera") or {}) if ((rec or {}).get("camera") or kind == "camera") else None,
+        "offset": _offsets().clean_offset((rec or {}).get("offset")),
         "mesh_path": str((rec or {}).get("mesh_path") or "") if _is_mesh_kind(kind) else None,
         "mesh_error": None,
     }
@@ -684,6 +690,7 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
         "handle": None,
         "gizmo": None,
         "camera": None,
+        "offset": None,
         "mesh_path": str(mesh_path) if (_is_mesh_kind(kind) and mesh_path) else (str(mesh_path) if mesh_path else None),
         "mesh_error": None,
     }
@@ -901,6 +908,7 @@ def selected_object_props():
         "local_pos": [float(v) for v in np.asarray(obj.get("local_pos", obj["pos"])).reshape(3)],
         "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(4)],
         "camera": dict(obj.get("camera")) if obj.get("camera") else None,
+        "offset": _offsets().offset_status(obj.get("id")),
     }
 
 

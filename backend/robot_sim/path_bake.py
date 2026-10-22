@@ -363,7 +363,8 @@ def _aim_samples_at_track(i, samples):
     for sm in samples or []:
         if sm.get("pos") is None:
             continue
-        wxyz = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"))
+        wxyz = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"),
+                                      spec.get("use_offset"), spec.get("offset_xform"))
         if wxyz is not None:
             sm["wxyz"] = np.asarray(wxyz, dtype=float).reshape(4)
 

@@ -252,6 +252,8 @@ def start_viewer():
                                     "added": True,
                                     "name": st.get("name") or "",
                                     "offset": list(st.get("offset") or [0.0, 0.0, 0.0]),
+                                    "use_offset": bool(st.get("use_offset")),
+                                    "offset_xform": wp.offsets.clean_offset(getattr(wp, "sim_offset", None)),
                                 }
                 except Exception as e:
                     print("add_waypoint failed:", e)
@@ -392,6 +394,10 @@ def start_viewer():
                     fn()
                 except Exception as e:
                     _report_tick_error(_tick, e)
+            try:
+                wp.offsets.tick_offsets()
+            except Exception as e:
+                _report_tick_error("tick_offsets", e)
             try:
                 t_win = playhead_t
                 st = rr.sim_status() if hasattr(rr, "sim_status") else {}
