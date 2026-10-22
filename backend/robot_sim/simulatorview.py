@@ -909,7 +909,37 @@ def selected_object_props():
         "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(4)],
         "camera": dict(obj.get("camera")) if obj.get("camera") else None,
         "offset": _offsets().offset_status(obj.get("id")),
+        "parent_offset": _parent_offset(obj) is not None,
     }
+
+
+def _parent_offset(obj):
+    """The parent's Offset record when it exists and is enabled, else None."""
+    pid = (obj or {}).get("parent_id")
+    if not pid:
+        return None
+    rec = _offsets().get_offset(pid)
+    if not rec or not rec.get("enabled", True):
+        return None
+    return rec
+
+
+def snap_to_parent_offset(oid):
+    """One-shot: put the object on its parent's Offset frame, space = local."""
+    obj = _find_object(oid)
+    rec = _parent_offset(obj)
+    if rec is None:
+        return False
+    wp._push_history()
+    obj["local_pos"] = np.asarray(rec.get("pos") or [0, 0, 0], dtype=float).reshape(3)
+    lq = np.asarray(rec.get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4)
+    obj["local_wxyz"] = lq / (float(np.linalg.norm(lq)) or 1.0)
+    obj["space"] = "local"
+    _set_world_from_local(obj)
+    _apply_object_xform(obj)
+    _refresh_camera_viz(obj)
+    _propagate_children(obj.get("id"))
+    return True
 
 
 _cam_track_handles = []

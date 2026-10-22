@@ -230,6 +230,8 @@ The properties panel shows the transform and other relevant data for whatever is
 
 **3D objects**
 - Name, position and rotation (in world space, or relative to a parent if one exists), and scale.
+- A reset button (↻) at the end of the position row and of the rotation row sets those values back to 0.
+- When the parent has an enabled Offset component, **snap object to parent offset** appears under the rotation row. It moves the object onto the offset once and switches it to Local; it does not keep following.
 
 **Waypoints and saved points**
 - Name, the EE position and rotation needed to reach the point, and joint poses.

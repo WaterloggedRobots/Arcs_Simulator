@@ -552,6 +552,10 @@ def api_object_props():
         if data.get("units") == "deg":
             q = [float(v) * math.pi / 180.0 for v in q]
         viewer_main.prop_requests.append(("q", q))
+    if data.get("snap_parent_offset") and hasattr(wp, "snap_to_parent_offset"):
+        ok = wp.snap_to_parent_offset(data.get("id") or getattr(wp, "selected_obj_id", None))
+        _status_dirty.set()
+        return jsonify({"ok": bool(ok)})
     if any(k in data for k in ("pos", "wxyz", "scale", "space", "name", "camera", "remove_camera")):
         oid = data.get("id") or getattr(wp, "selected_obj_id", None)
         if data.get("kind") == "sim" or oid == "sim":

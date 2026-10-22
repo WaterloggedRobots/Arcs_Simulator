@@ -445,6 +445,19 @@
       align-items: center;
     }
     .props .row.rot-line[hidden] { display: none !important; }
+    .props .row.triple.has-reset { grid-template-columns: 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr) 24px; }
+    .props .row.rot-line.triple.has-reset { grid-template-columns: 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr) 24px; }
+    .props .row.rot-line.quad.has-reset { grid-template-columns: 16px minmax(0,1fr) 16px minmax(0,1fr) 16px minmax(0,1fr) 16px minmax(0,1fr) 24px; }
+    .props .row.has-reset input { min-width: 0; width: 100%; }
+    .props .reset-btn {
+      width: 24px; min-width: 24px; height: 24px; margin: 0; padding: 4px;
+      background: #3a3b44; display: flex; align-items: center; justify-content: center;
+    }
+    .props .reset-btn svg { width: 14px; height: 14px; color: #d8d8dc; }
+    .props .reset-btn:hover { background: #4a4b55; }
+    .props .row.snap-row { grid-template-columns: 1fr; }
+    .props .row.snap-row[hidden] { display: none; }
+    #primSnapOffset { width: 100%; margin: 0; background: #3a3b44; }
     .props .row.rot-line input { min-width: 0; width: 100%; }
     #camOffline {
       position: absolute;
@@ -1888,10 +1901,11 @@
               <span class="mode-deg">Global</span>
             </div>
           </div>
-          <div class="row triple">
+          <div class="row triple has-reset">
             <label class="drag" data-k="ox">x</label><input id="ox" type="number" step="0.001">
             <label class="drag" data-k="oy">y</label><input id="oy" type="number" step="0.001">
             <label class="drag" data-k="oz">z</label><input id="oz" type="number" step="0.001">
+            <button type="button" class="reset-btn" id="primPosReset" title="Reset position to 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
           </div>
           <div class="row rot-tools">
             <div class="fk-units quat" id="primRotWrap">
@@ -1905,16 +1919,21 @@
               <span class="mode-deg">deg</span>
             </div>
           </div>
-          <div class="row quad rot-line" id="primQuatRow">
+          <div class="row quad rot-line has-reset" id="primQuatRow">
             <label class="drag" data-k="ow">w</label><input id="ow" type="number" step="0.001">
             <label class="drag" data-k="orx">x</label><input id="orx" type="number" step="0.001">
             <label class="drag" data-k="ory">y</label><input id="ory" type="number" step="0.001">
             <label class="drag" data-k="orz">z</label><input id="orz" type="number" step="0.001">
+            <button type="button" class="reset-btn" data-rot-reset title="Reset rotation to 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
           </div>
-          <div class="row triple rot-line" id="primEulerRow" hidden>
+          <div class="row triple rot-line has-reset" id="primEulerRow" hidden>
             <label class="drag" data-k="erx">rx</label><input id="erx" type="number" step="0.001">
             <label class="drag" data-k="ery">ry</label><input id="ery" type="number" step="0.001">
             <label class="drag" data-k="erz">rz</label><input id="erz" type="number" step="0.001">
+            <button type="button" class="reset-btn" data-rot-reset title="Reset rotation to 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+          </div>
+          <div class="row snap-row" id="primSnapRow" hidden>
+            <button type="button" id="primSnapOffset">snap object to parent offset</button>
           </div>
           <div class="sec space-gap" aria-hidden="true"></div>
           <div id="primScaleBlock">
@@ -4207,6 +4226,8 @@
             wrap.classList.toggle("rad", space === "local");
             wrap.classList.toggle("deg", space !== "local");
           }
+          const snapRow = document.getElementById("primSnapRow");
+          if (snapRow) snapRow.hidden = !obj.parent_offset;
           const scBlock = document.getElementById("primScaleBlock");
           if (scBlock) scBlock.hidden = false;
           if (obj.camera && (obj.camera.type || obj.camera.enabled != null)) {
@@ -4448,6 +4469,27 @@
     }
     const offsetTrash = document.getElementById("offsetTrash");
     if (offsetTrash) offsetTrash.onclick = () => postOffset({ act: "remove" });
+    const primPosReset = document.getElementById("primPosReset");
+    if (primPosReset) primPosReset.onclick = () => {
+      ["ox", "oy", "oz"].forEach((id) => { document.getElementById(id).value = "0"; });
+      sendPrim();
+    };
+    document.querySelectorAll("[data-rot-reset]").forEach((b) => {
+      b.onclick = () => {
+        ["ow", "orx", "ory", "orz"].forEach((id, i) => { document.getElementById(id).value = i === 0 ? "1" : "0"; });
+        ["erx", "ery", "erz"].forEach((id) => { document.getElementById(id).value = "0"; });
+        sendPrim();
+      };
+    });
+    const primSnapOffset = document.getElementById("primSnapOffset");
+    if (primSnapOffset) primSnapOffset.onclick = () => {
+      const obj = window.__lastObject || {};
+      fetch("/api/object_props", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: obj.id, snap_parent_offset: true }),
+      }).then(() => setTimeout(refresh, 80));
+    };
     function sendPrim() {
       let wxyz;
       if (primRotEuler) {

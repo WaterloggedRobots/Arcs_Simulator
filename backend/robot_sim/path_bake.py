@@ -835,10 +835,13 @@ def rebuild_preview():
 
 
 def _carry_sample_times(old, new, i):
-    """Keep the sample frames a span already had; only new samples get times.
+    """Keep the sample frames a span already had.
 
-    Frames are matched by index and kept while they stay in order inside the
-    span. assign_sample_times spaces the samples left without one.
+    Same sample count: frames are matched by index and kept (with any t_lock)
+    while they stay in order inside the span. Different count (the span got
+    longer or shorter): the old frames no longer line up by index, so the old
+    timing shape is resampled at the new samples' index fractions. Evenly
+    spaced frames stay evenly spaced; a hand-shaped span keeps its shape.
     """
     olds = (old or {}).get("samples") or []
     news = new.get("samples") or []
@@ -850,10 +853,21 @@ def _carry_sample_times(old, new, i):
     ta, tb = olds[0].get("t"), olds[-1].get("t")
     if ta is None or tb is None or abs(float(ta) - t0) > 1e-6 or abs(float(tb) - t1) > 1e-6:
         return
+    if len(olds) != len(news):
+        ts = [sm.get("t") for sm in olds]
+        if any(t is None for t in ts):
+            return
+        ts = [float(t) for t in ts]
+        if any(b <= a for a, b in zip(ts, ts[1:])):
+            return
+        fo = np.linspace(0.0, 1.0, len(ts))
+        fn = np.linspace(0.0, 1.0, len(news))
+        tn = np.interp(fn, fo, ts)
+        for k in range(1, len(news) - 1):
+            news[k]["t"] = float(tn[k])
+        return
     last = t0
     for k in range(1, len(news) - 1):
-        if k >= len(olds) - 1:
-            break
         t = olds[k].get("t")
         if t is None or not (last < float(t) < t1):
             break
