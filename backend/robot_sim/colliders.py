@@ -104,6 +104,7 @@ def clean_collider(rec):
     return {
         "enabled": bool(rec.get("enabled", True)),
         "stop": bool(rec.get("stop", False)),
+        "ignore_parent": bool(rec.get("ignore_parent", False)),
         "items": [clean_item(it) for it in (rec.get("items") or []) if isinstance(it, dict)],
     }
 
@@ -152,6 +153,8 @@ def collider_status(owner):
     out = clean_sim_collider(rec) if owner == "sim" else clean_collider(rec)
     out["added"] = True
     out["robot"] = owner == "sim"
+    obj = None if owner == "sim" else _sv()._find_object(owner)
+    out["has_parent"] = bool(obj is not None and obj.get("parent_id"))
     out["focused"] = _focus_owner == owner
     out["hit"] = owner in _status["hits"]
     return out
@@ -214,7 +217,8 @@ def _truthy(v):
 
 @_locked
 def update_collider(owner, act="update", enabled=None, stop=None, margin=None,
-                    index=None, shape=None, pos=None, wxyz=None, scale=None):
+                    index=None, shape=None, pos=None, wxyz=None, scale=None,
+                    ignore_parent=None):
     owner = _norm_owner(owner)
     rec = get_collider(owner)
     act = str(act or "update").lower()
@@ -236,6 +240,8 @@ def update_collider(owner, act="update", enabled=None, stop=None, margin=None,
         rec["enabled"] = _truthy(enabled)
     if stop is not None:
         rec["stop"] = _truthy(stop)
+    if ignore_parent is not None and owner != "sim":
+        rec["ignore_parent"] = _truthy(ignore_parent)
     if owner == "sim":
         # The robot collider's shape and size come from the URDF; only the margin changes.
         if margin is not None:
@@ -495,31 +501,36 @@ def _owners():
     return out
 
 
-def _ancestors(owner):
-    """Owners above this one in the hierarchy; the sim cursor is "sim"."""
-    out = set()
+def _ignored_parent(owner):
+    """With "ignore parent collider" ticked, the nearest owner above this one
+    that has a collider (the sim cursor's is the robot); else None."""
     obj = _sv()._find_object(owner) if owner != "sim" else None
+    if obj is None or not (obj.get("collider") or {}).get("ignore_parent"):
+        return None
+    seen = set()
     while obj is not None:
-        pid = str(obj.get("parent_id") or "")
-        if not pid or pid in out:
-            break
-        pid = _norm_owner(pid)
-        out.add(pid)
+        pid = _norm_owner(obj.get("parent_id"))
+        if not pid or pid in seen:
+            return None
+        seen.add(pid)
+        if get_collider(pid):
+            return pid
         obj = None if pid == "sim" else _sv()._find_object(pid)
-    return out
+    return None
 
 
 def find_contacts():
     """Pairs of owners whose colliders overlap. Boxes of the same owner never
-    count against each other, and neither do a parent and its children (a
-    tool mounted on the cursor would otherwise always touch the wrist)."""
+    count against each other. A child with "ignore parent collider" ticked
+    skips its parent; otherwise parent and child collide like any pair, since
+    the arm can hit its own end effector."""
     shapes = {o: _owner_shapes(o) for o in _owners()}
     owners = [o for o in shapes if shapes[o]]
-    above = {o: _ancestors(o) for o in owners}
+    skip = {o: _ignored_parent(o) for o in owners}
     pairs = set()
     for i, a in enumerate(owners):
         for b in owners[i + 1:]:
-            if a in above[b] or b in above[a]:
+            if skip[a] == b or skip[b] == a:
                 continue
             hit = False
             for sa in shapes[a]:

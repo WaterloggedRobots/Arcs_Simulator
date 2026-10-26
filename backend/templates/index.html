@@ -734,6 +734,7 @@
     #colliderEnable { background: #8a8a92 !important; }
     #colliderEnable.advanced { background: #2e9e48 !important; }
     .col-stop { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; font-size: 12px; cursor: pointer; }
+    .col-stop[hidden] { display: none; }
     .col-note { font-size: 12px; color: #9a9aa2; margin: 4px 0; }
     .col-entry { position: relative; border: 1px solid #3a3b44; border-radius: 6px; padding: 6px 8px 8px; margin-top: 8px; }
     .col-entry.hit { border-color: #e64a4a; }
@@ -2127,6 +2128,7 @@
               </div>
             </div>
             <label class="col-stop"><input id="colliderStop" type="checkbox"> stop simulation if collide</label>
+            <label class="col-stop" id="colIgnoreRow" hidden><input id="colliderIgnoreParent" type="checkbox"> ignore parent collider</label>
             <div id="colRobot" hidden>
               <div class="col-note">Covers the whole robot in the shape of its URDF.</div>
               <div class="row name-row"><label>Margin</label><input id="colMargin" type="number" step="0.001" min="0" value="0"></div>
@@ -4712,6 +4714,10 @@
       const stop = document.getElementById("colliderStop");
       if (stop) stop.checked = !!col.stop;
       const robot = !!col.robot;
+      const igRow = document.getElementById("colIgnoreRow");
+      if (igRow) igRow.hidden = robot || !col.has_parent;
+      const ig = document.getElementById("colliderIgnoreParent");
+      if (ig) ig.checked = !!col.ignore_parent;
       const rb = document.getElementById("colRobot");
       const ob = document.getElementById("colObj");
       if (rb) rb.hidden = !robot;
@@ -4821,6 +4827,8 @@
     });
     const colliderStop = document.getElementById("colliderStop");
     if (colliderStop) colliderStop.addEventListener("change", () => postCollider({ act: "update", stop: colliderStop.checked }));
+    const colliderIgnoreParent = document.getElementById("colliderIgnoreParent");
+    if (colliderIgnoreParent) colliderIgnoreParent.addEventListener("change", () => postCollider({ act: "update", ignore_parent: colliderIgnoreParent.checked }));
     const colliderEnable = document.getElementById("colliderEnable");
     if (colliderEnable) {
       colliderEnable.onclick = () => {

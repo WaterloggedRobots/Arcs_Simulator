@@ -1306,6 +1306,7 @@ def api_collider():
             pos=data.get("pos"),
             wxyz=data.get("wxyz"),
             scale=data.get("scale"),
+            ignore_parent=data.get("ignore_parent"),
         )
     _status_dirty.set()
     return jsonify({"ok": st is not None, "collider": st or {}})
