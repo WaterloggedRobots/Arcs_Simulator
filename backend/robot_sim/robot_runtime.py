@@ -1166,10 +1166,16 @@ def _offset_state(rec):
     return "ok" if rec.get("enabled", True) else "disabled"
 
 
+# Look At name that follows the camera script's primary target (red sphere).
+PRIMARY_TARGET_NAME = "Primary target"
+
+
 def _track_target_pos(name):
     key = str(name or "").strip().lower()
     if not key:
         return None
+    if key == PRIMARY_TARGET_NAME.lower() and hasattr(wp, "primary_target_pos"):
+        return wp.primary_target_pos()
     for obj in getattr(wp, "scene_objects", None) or []:
         if str(obj.get("name") or "").strip().lower() == key:
             return np.asarray(obj.get("pos"), dtype=float).reshape(3)
