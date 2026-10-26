@@ -664,6 +664,13 @@ def _add_waypoint_from(src, data):
     else:
         pos, wxyz = pose, None
     out = wp.add_waypoint(pos, mode="arc", wxyz=wxyz, q=q, t=t, replace=replace)
+    if isinstance(out, dict) and out.get("index") is not None:
+        # Keep the cursor's Look At on the new (or replaced) waypoint; the UI
+        # adds waypoints here, so without this no waypoint was ever aimed.
+        i = int(out["index"])
+        if 0 <= i < len(wp.waypoints):
+            rec = rr.waypoint_track_record() if (src == "sim" and hasattr(rr, "waypoint_track_record")) else None
+            wp.waypoints[i]["track_object"] = rec
     if isinstance(out, dict):
         if "ok" not in out:
             out["ok"] = not out.get("needs_confirm")

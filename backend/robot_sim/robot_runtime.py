@@ -1253,6 +1253,20 @@ def set_track_object(on=None, name=None, pick=None, added=None, offset=None, pos
     return track_status()
 
 
+def waypoint_track_record():
+    """Look At record a waypoint added from the sim cursor keeps, or None."""
+    st = track_status() or {}
+    if not (st.get("on") and st.get("added")):
+        return None
+    return {
+        "on": True,
+        "added": True,
+        "name": st.get("name") or "",
+        "offset": list(st.get("offset") or [0.0, 0.0, 0.0]),
+        "pos_offset": list(st.get("pos_offset") or [0.0, 0.0, 0.0]),
+    }
+
+
 def begin_track_pick():
     _track["pick"] = True
     _track["added"] = True

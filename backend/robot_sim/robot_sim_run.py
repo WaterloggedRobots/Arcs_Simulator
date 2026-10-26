@@ -244,16 +244,8 @@ def start_viewer():
                     if item is not None:
                         item["added_from"] = src
                         item["track_object"] = None
-                        if src == "sim" and hasattr(rr, "track_status"):
-                            st = rr.track_status() or {}
-                            if st.get("on") and st.get("added"):
-                                item["track_object"] = {
-                                    "on": True,
-                                    "added": True,
-                                    "name": st.get("name") or "",
-                                    "offset": list(st.get("offset") or [0.0, 0.0, 0.0]),
-                                    "pos_offset": list(st.get("pos_offset") or [0.0, 0.0, 0.0]),
-                                }
+                        if src == "sim" and hasattr(rr, "waypoint_track_record"):
+                            item["track_object"] = rr.waypoint_track_record()
                 except Exception as e:
                     print("add_waypoint failed:", e)
             while delete_requests:

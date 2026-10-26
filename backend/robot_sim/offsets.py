@@ -8,6 +8,9 @@ Data lives on the owner so undo snapshots and saves carry it:
   scene object -> obj["offset"]      sim cursor -> wp.sim_offset
   {"enabled": bool, "pos": [x, y, z], "wxyz": [w, x, y, z]}  (local frame)
 """
+import functools
+import threading
+
 import numpy as np
 
 import waypoints as wp
@@ -17,6 +20,18 @@ DEFAULT_POS = (0.0, 0.0, 0.1)
 
 _viz = {}          # owner -> {"sphere", "arrow", "side", "gizmo", "world", "rot0"}
 _edit_owner = None  # owner whose offset gizmo is showing (yellow sphere clicked)
+_viz_seq = 0
+# Request threads, the viewer tick and Viser callbacks all touch _viz; without
+# one lock two threads could build the same marker and use a removed handle.
+_lock = threading.RLock()
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def inner(*a, **k):
+        with _lock:
+            return fn(*a, **k)
+    return inner
 
 
 def _sv():
@@ -116,6 +131,7 @@ def offset_world(owner, require_enabled=True):
     return compose(pose[0], pose[1], rec)
 
 
+@_locked
 def add_offset_component(owner):
     owner = _norm_owner(owner)
     if get_offset(owner):
@@ -129,6 +145,7 @@ def add_offset_component(owner):
     return offset_status(owner)
 
 
+@_locked
 def update_offset(owner, enabled=None, pos=None, wxyz=None, remove=False):
     owner = _norm_owner(owner)
     rec = get_offset(owner)
@@ -184,6 +201,7 @@ def _drop_viz(owner):
                 pass
 
 
+@_locked
 def clear_offset_viz():
     for owner in list(_viz.keys()):
         _drop_viz(owner)
@@ -214,10 +232,14 @@ def _show_owner_gizmo(owner, on):
 
 
 def _make_viz(owner, pos, q):
+    global _viz_seq
     srv = wp.server
     if srv is None:
         return None
-    name = _node(owner)
+    # A fresh node name each time, so a new marker never replaces one that
+    # is still being removed.
+    _viz_seq += 1
+    name = "%s_%d" % (_node(owner), _viz_seq)
     sphere = srv.scene.add_icosphere(
         name=name + "/sphere",
         radius=0.016,
@@ -227,7 +249,8 @@ def _make_viz(owner, pos, q):
     )
     arrow = wp.add_forward_arrow(name, colors=OFFSET_RGB, pos=pos, wxyz=q)
     side = wp.add_side_arrow(name, colors=OFFSET_RGB, pos=pos, wxyz=q)
-    v = {"sphere": sphere, "arrow": arrow, "side": side, "gizmo": None, "world": None, "rot0": np.array(q, dtype=float)}
+    v = {"sphere": sphere, "arrow": arrow, "side": side, "gizmo": None, "world": None,
+         "rot0": np.array(q, dtype=float), "node": name}
     _viz[owner] = v
 
     @sphere.on_click
@@ -246,11 +269,12 @@ def _bind_gizmo(owner, v, pos, q):
         except Exception:
             pass
     giz = wp._new_transform_gizmo(
-        "%s/gizmo_%s" % (_node(owner), wp.gizmo_space), pos, wp._gizmo_display_wxyz(q), 0.18, False, True)
+        "%s/gizmo_%s" % (v.get("node") or _node(owner), wp.gizmo_space), pos, wp._gizmo_display_wxyz(q), 0.18, False, True)
     v["gizmo"] = giz
     v["rot0"] = np.array(q, dtype=float)
 
     @giz.on_update
+    @_locked
     def _(_):
         if wp._suspend_gizmo_cb:
             return
@@ -304,6 +328,7 @@ def _place(v, pos, q, gizmo=True):
             wp._suspend_gizmo_cb = False
 
 
+@_locked
 def begin_offset_edit(owner):
     """Yellow sphere clicked: show its gizmo, park the owner's."""
     global _edit_owner
@@ -322,6 +347,7 @@ def begin_offset_edit(owner):
     return True
 
 
+@_locked
 def end_offset_edit():
     global _edit_owner
     owner = _edit_owner
@@ -339,11 +365,13 @@ def end_offset_edit():
         _show_owner_gizmo(owner, True)
 
 
+@_locked
 def on_selection_changed():
     end_offset_edit()
     refresh_offset_viz()
 
 
+@_locked
 def rebuild_offset_gizmos():
     """Gizmo space changed (local / global)."""
     if _edit_owner and _edit_owner in _viz:
@@ -354,6 +382,7 @@ def rebuild_offset_gizmos():
             _show_owner_gizmo(owner, False)
 
 
+@_locked
 def refresh_offset_viz():
     """Draw markers for selected owners with an enabled offset; drop the rest."""
     if wp.server is None:
@@ -379,6 +408,7 @@ def refresh_offset_viz():
         _place(v, pos, q)
 
 
+@_locked
 def tick_offsets():
     """Viewer-loop tick: keep markers on their owners as those move."""
     if not _viz and not _selected_owners():
