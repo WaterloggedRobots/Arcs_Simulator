@@ -25,7 +25,8 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
 - [Object properties](#object-properties)
 - [Components](#components)
   - [Camera](#camera)
-  - [Tracker](#tracker)
+  - [Look At](#look-at)
+  - [Offset](#offset)
 - [Miscellaneous features](#miscellaneous-features)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
@@ -39,7 +40,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
 - **Check it before you shoot or run it.** Baking samples the path, verifies every sample point is a reachable pose, and flags speed problems — so a bad move is visible before the arm ever moves.
 - **Run it on the real robot.** Upload the baked path, move the arm to its init pose, and run. Simulate and Run are two separate steps by design.
 - **Reuse work.** Saved points and whole saved paths can be stored per project or globally, then dropped onto any timeline.
-- **Add cameras and targets.** Cameras can be simulated, USB/OpenCV or Sony, each with its own record track. A Tracker component keeps the arm aimed at a designated object along the path.
+- **Add cameras and targets.** Cameras can be simulated, USB/OpenCV or Sony, each with its own record track. A Look At component keeps the arm aimed at a designated object along the path.
 
 ---
 
@@ -229,6 +230,8 @@ The properties panel shows the transform and other relevant data for whatever is
 
 **3D objects**
 - Name, position and rotation (in world space, or relative to a parent if one exists), and scale.
+- A reset button (↻) at the end of the position row and of the rotation row sets those values back to 0.
+- When the parent has an enabled Offset component, **snap object to parent offset** appears under the rotation row. It moves the object onto the offset once and switches it to Local; it does not keep following.
 
 **Waypoints and saved points**
 - Name, the EE position and rotation needed to reach the point, and joint poses.
@@ -259,13 +262,25 @@ Camera recording controls:
 - A **manual override toggle** records or stops independently of the timeline keyframes.
 - Explicit **start record** and **stop record** buttons.
 
-### Tracker
+### Look At
 
-Given a target, the sim cursor keeps **looking at** a designated object — both while you drag it by hand and along the path segments it generates. Combined with an OpenCV camera, the arm can track and centre real targets as well as simulated ones *(in progress)*.
+*(Formerly "Tracker" / "Track Object".)* Given a target, the sim cursor keeps **looking at** a designated object — both while you drag it by hand and along the path segments it generates. Combined with an OpenCV camera, the arm can track and centre real targets as well as simulated ones *(in progress)*.
 
 Move the target object in the simulator and the arm's orientation follows it, so aiming does not depend on whether face detection succeeded on any given run.
 
 > Tracking is computed from the target's position **before** baking. The arm does not follow a moving target during a run yet — live tracking is in progress.
+
+The aiming point sits at the **Pos offset** (cursor-local) and the cursor is turned by the **Rot offset** after aiming. **copy offset component values** fills both fields once from the cursor's Offset component, so that the Offset frame is what aims at the target (for example a lens or tool tip mounted off-centre). It is a one-time copy: later Offset edits don't change Look At. A red warning appears, and the button is disabled, while the Offset component is missing or switched off. Waypoints added from the cursor keep the Look At values they were added with.
+
+Adding Look At also adds a **Look At** track to the timeline. On each bake it shows a bar, labelled with the target, over every stretch of the path that is aimed at a target (a span is aimed when either of its waypoints has Look At on). Stretches with no target stay empty. The bars only change when you bake.
+
+### Offset
+
+The **Offset component** can be added to any 3D object and to the sim cursor. It adds a yellow, waypoint-like frame fixed to its owner, shown only while the owner is selected. Click the yellow sphere, or click the Offset panel in Properties, to get its move/rotate gizmo (click the owner again to get the owner's gizmo back; deselecting hides it). It never joins the waypoint list or the path.
+
+The properties panel shows its **local** position and rotation relative to the owner's origin; edit them there or with the gizmo. New offsets start 10 cm along the owner's local z axis. Offsets are saved with the project and covered by undo for scene objects.
+
+Components in the properties panel are listed in the order they were added, newest at the bottom.
 
 ---
 

@@ -304,6 +304,7 @@ def _build_status_heavy():
         st["playhead_t"] = 0.0
     st["scene_objects"] = _scene_objects_payload()
     st["sim_camera"] = getattr(wp, "sim_camera", None)
+    st["look_bars"] = list(getattr(wp, "look_bars", None) or [])
     st["cam_view"] = _cam_view_payload()
     st["selected_obj_ids"] = list(getattr(wp, "selected_obj_ids", None) or [])
     st["selected_wp_idxs"] = list(getattr(wp, "selected_wp_idxs", None) or [])
@@ -404,6 +405,8 @@ def api_status():
         "playhead": heavy.get("playhead_t"),
         "scene_objects": _scene_objects_payload(),
         "sim_camera": getattr(wp, "sim_camera", None),
+        "look_bars": list(getattr(wp, "look_bars", None) or []),
+        "doc_title": fman.SESSION.get("title"),
         "cam_view": heavy.get("cam_view") or {},
         "selected_obj_ids": heavy.get("selected_obj_ids") or [],
         "selected_wp_idxs": heavy.get("selected_wp_idxs") or [],
@@ -552,6 +555,10 @@ def api_object_props():
         if data.get("units") == "deg":
             q = [float(v) * math.pi / 180.0 for v in q]
         viewer_main.prop_requests.append(("q", q))
+    if data.get("snap_parent_offset") and hasattr(wp, "snap_to_parent_offset"):
+        ok = wp.snap_to_parent_offset(data.get("id") or getattr(wp, "selected_obj_id", None))
+        _status_dirty.set()
+        return jsonify({"ok": bool(ok)})
     if any(k in data for k in ("pos", "wxyz", "scale", "space", "name", "camera", "remove_camera")):
         oid = data.get("id") or getattr(wp, "selected_obj_id", None)
         if data.get("kind") == "sim" or oid == "sim":
@@ -658,6 +665,13 @@ def _add_waypoint_from(src, data):
     else:
         pos, wxyz = pose, None
     out = wp.add_waypoint(pos, mode="arc", wxyz=wxyz, q=q, t=t, replace=replace)
+    if isinstance(out, dict) and out.get("index") is not None:
+        # Keep the cursor's Look At on the new (or replaced) waypoint; the UI
+        # adds waypoints here, so without this no waypoint was ever aimed.
+        i = int(out["index"])
+        if 0 <= i < len(wp.waypoints):
+            rec = rr.waypoint_track_record() if (src == "sim" and hasattr(rr, "waypoint_track_record")) else None
+            wp.waypoints[i]["track_object"] = rec
     if isinstance(out, dict):
         if "ok" not in out:
             out["ok"] = not out.get("needs_confirm")
@@ -990,6 +1004,9 @@ def api_tracks():
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         wp.extra_tracks = data.get("tracks") or []
+        # Camera and Look At tracks follow their components, not the client list.
+        if hasattr(wp, "sync_camera_tracks"):
+            wp.sync_camera_tracks()
     return jsonify({"ok": True, "tracks": list(getattr(wp, "extra_tracks", None) or [])})
 
 
@@ -1222,8 +1239,40 @@ def api_track_object():
             pick=data.get("pick"),
             added=data.get("added"),
             offset=data.get("offset"),
+            pos_offset=data.get("pos_offset"),
+            copy_offset=data.get("copy_offset"),
         ) or {}
     return jsonify({"ok": True, "track": st})
+
+
+@app.route("/api/offset", methods=["POST"])
+def api_offset():
+    """Offset component on a scene object or the sim cursor (owner "sim")."""
+    data = request.get_json(silent=True) or {}
+    owner = data.get("id") or data.get("owner")
+    if data.get("kind") == "sim" or owner in ("sim", "sim_cursor"):
+        owner = "sim"
+    if not owner:
+        owner = getattr(wp, "selected_obj_id", None)
+    if not owner:
+        return jsonify({"ok": False, "error": "no owner"})
+    act = str(data.get("act") or "update").lower()
+    if act == "add":
+        st = wp.offsets.add_offset_component(owner)
+    elif act == "edit":
+        # Offset panel clicked: same as clicking the yellow marker.
+        wp.offsets.begin_offset_edit(owner)
+        st = wp.offsets.offset_status(owner)
+    else:
+        st = wp.offsets.update_offset(
+            owner,
+            enabled=data.get("enabled"),
+            pos=data.get("pos"),
+            wxyz=data.get("wxyz"),
+            remove=(act == "remove"),
+        )
+    _status_dirty.set()
+    return jsonify({"ok": st is not None, "offset": st or {}})
 
 
 @app.route("/api/path_window", methods=["POST"])

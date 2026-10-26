@@ -66,10 +66,74 @@ def _qrot(q, v):
     ])
 
 
+# Sim Bot: robot-base parent of the sim cursor ("Sim EE"). Designed and wired
+# (hierarchy row, blue marker, read-only props, parenting) but switched off for
+# now; set True here and SIM_BOT_ENABLED in templates/index.html to bring it back.
+SIM_BOT_ENABLED = False
+SIM_CURSOR_NAME = "Sim EE" if SIM_BOT_ENABLED else "Sim cursor"
+SIM_BOT_ID = "sim_bot"
+SIM_BOT_RGB = (60, 130, 255)
+_sim_bot_viz = {}
+
+
+def sim_bot_pose():
+    """Sim Bot is the robot base: fixed at the world origin for now."""
+    return np.zeros(3, dtype=float), np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+
+def ensure_sim_bot_marker():
+    """Large blue waypoint-style marker for Sim Bot (built in, never removed)."""
+    if not SIM_BOT_ENABLED or wp.server is None or _sim_bot_viz.get("sphere") is not None:
+        return
+    pos, q = sim_bot_pose()
+    name = "/sim_bot"
+    try:
+        sphere = wp.server.scene.add_icosphere(
+            name=name + "/sphere", radius=0.035, color=SIM_BOT_RGB,
+            position=tuple(float(v) for v in pos), wxyz=tuple(float(v) for v in q))
+    except Exception as e:
+        print("sim bot marker failed", e)
+        return
+    _sim_bot_viz["sphere"] = sphere
+    _sim_bot_viz["arrow"] = wp.add_forward_arrow(name, length=0.16, colors=SIM_BOT_RGB, pos=pos, wxyz=q)
+    _sim_bot_viz["side"] = wp.add_side_arrow(name, length=0.07, colors=SIM_BOT_RGB, pos=pos, wxyz=q)
+
+    @sphere.on_click
+    def _(_e=None):
+        mode = "add" if wp._select_ctrl else "replace"
+        select_scene_object(SIM_BOT_ID, mode=mode)
+
+
+def set_sim_bot_visible(on):
+    for h in _sim_bot_viz.values():
+        try:
+            h.visible = bool(on)
+        except Exception:
+            pass
+
+
+def sim_bot_props():
+    pos, q = sim_bot_pose()
+    return {
+        "kind": "bot",
+        "id": SIM_BOT_ID,
+        "name": "Sim Bot",
+        "editable": False,
+        "pos": [float(v) for v in pos],
+        "wxyz": [float(v) for v in q],
+        "scale": [1.0, 1.0, 1.0],
+        "parent_id": None,
+        "space": "world",
+    }
+
+
 def _obj_parent(obj):
     pid = (obj or {}).get("parent_id")
     if not pid:
         return None
+    if str(pid) == SIM_BOT_ID:
+        pos, q = sim_bot_pose()
+        return {"id": SIM_BOT_ID, "pos": pos, "wxyz": q, "parent_id": None}
     if str(pid) == "sim_cursor":
         try:
             import robot_runtime as rr
@@ -153,6 +217,8 @@ def reparent_object(oid, parent_id=None):
 
 
 def _item_pos(kind, key):
+    if kind == "bot":
+        return sim_bot_pose()[0]
     if kind == "sim":
         try:
             import robot_runtime as rr
@@ -239,6 +305,33 @@ def _hide_all_object_gizmos():
             giz.visible = False
         except Exception:
             pass
+
+
+def note_component(owner, key):
+    """Record that a component was added: the props panel lists components
+    oldest first, so a re-added one moves to the bottom."""
+    owner = str(owner or "")
+    if owner in ("sim", "sim_cursor"):
+        order = [k for k in (getattr(wp, "sim_comp_order", None) or []) if k != key]
+        wp.sim_comp_order = order + [key]
+        return
+    obj = _find_object(owner)
+    if obj is None:
+        return
+    obj["comp_order"] = [k for k in (obj.get("comp_order") or []) if k != key] + [key]
+
+
+def comp_order(owner):
+    owner = str(owner or "")
+    if owner in ("sim", "sim_cursor"):
+        return list(getattr(wp, "sim_comp_order", None) or [])
+    obj = _find_object(owner)
+    return [] if obj is None else list(obj.get("comp_order") or [])
+
+
+def _offsets():
+    import offsets
+    return offsets
 
 
 def _find_object(oid):
@@ -570,11 +663,14 @@ def _camera_track_name(obj):
     return raw + " camera"
 
 
+LOOK_TRACK_ID = "look_sim"
+
+
 def sync_camera_tracks():
     """One extra timeline track per camera component; id cam_<oid>."""
     cams = [o for o in wp.scene_objects if o.get("camera")]
     if wp.sim_camera:
-        cams = [{"id": "sim", "name": "Sim cursor", "camera": wp.sim_camera}] + list(cams)
+        cams = [{"id": "sim", "name": SIM_CURSOR_NAME, "camera": wp.sim_camera}] + list(cams)
     ids = {str(o.get("id")) for o in cams}
     kept = []
     seen = set()
@@ -603,6 +699,15 @@ def sync_camera_tracks():
             "name": _camera_track_name(obj),
             "keys": [],
         })
+    # One Look At track while the sim cursor has the Look At component.
+    try:
+        import robot_runtime as rr
+        look_on = bool(rr._track.get("added"))
+    except Exception:
+        look_on = False
+    kept = [t for t in kept if not (isinstance(t, dict) and t.get("id") == LOOK_TRACK_ID)]
+    if look_on:
+        kept.append({"id": LOOK_TRACK_ID, "name": "Look At", "keys": []})
     wp.extra_tracks = kept
     return wp.extra_tracks
 
@@ -637,6 +742,8 @@ def restore_scene_object(rec):
         "handle": None,
         "gizmo": None,
         "camera": dict((rec or {}).get("camera") or {}) if ((rec or {}).get("camera") or kind == "camera") else None,
+        "offset": _offsets().clean_offset((rec or {}).get("offset")),
+        "comp_order": [str(k) for k in ((rec or {}).get("comp_order") or [])],
         "mesh_path": str((rec or {}).get("mesh_path") or "") if _is_mesh_kind(kind) else None,
         "mesh_error": None,
     }
@@ -684,6 +791,8 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
         "handle": None,
         "gizmo": None,
         "camera": None,
+        "offset": None,
+        "comp_order": [],
         "mesh_path": str(mesh_path) if (_is_mesh_kind(kind) and mesh_path) else (str(mesh_path) if mesh_path else None),
         "mesh_error": None,
     }
@@ -719,6 +828,10 @@ def select_scene_object(oid, mode="replace"):
     wp._obj_select_hold = _t.time() + 1.5
     if str(oid) == "sim_cursor":
         return wp.select_item("sim", None, mode=mode)
+    if str(oid) == SIM_BOT_ID:
+        if not SIM_BOT_ENABLED:
+            return False
+        return wp.select_item("bot", None, mode=mode)
     obj = _find_object(oid)
     if obj is None:
         return False
@@ -827,6 +940,7 @@ def add_camera_component(oid=None):
     if oid in (None, "", "sim") or str(oid) == "sim":
         if wp.sim_camera:
             return {"id": "sim", "kind": "sim", "camera": dict(wp.sim_camera)}
+        note_component("sim", "camera")
         if not wp.sim_camera:
             wp.sim_camera = dict(cam)
         else:
@@ -854,6 +968,7 @@ def add_camera_component(oid=None):
     if obj.get("camera"):
         return selected_object_props()
     existing = obj.get("camera") if isinstance(obj.get("camera"), dict) else {}
+    note_component(obj.get("id"), "camera")
     merged = dict(cam)
     merged.update(existing or {})
     merged["enabled"] = True
@@ -901,7 +1016,39 @@ def selected_object_props():
         "local_pos": [float(v) for v in np.asarray(obj.get("local_pos", obj["pos"])).reshape(3)],
         "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(4)],
         "camera": dict(obj.get("camera")) if obj.get("camera") else None,
+        "offset": _offsets().offset_status(obj.get("id")),
+        "parent_offset": _parent_offset(obj) is not None,
+        "comp_order": list(obj.get("comp_order") or []),
     }
+
+
+def _parent_offset(obj):
+    """The parent's Offset record when it exists and is enabled, else None."""
+    pid = (obj or {}).get("parent_id")
+    if not pid:
+        return None
+    rec = _offsets().get_offset(pid)
+    if not rec or not rec.get("enabled", True):
+        return None
+    return rec
+
+
+def snap_to_parent_offset(oid):
+    """One-shot: put the object on its parent's Offset frame, space = local."""
+    obj = _find_object(oid)
+    rec = _parent_offset(obj)
+    if rec is None:
+        return False
+    wp._push_history()
+    obj["local_pos"] = np.asarray(rec.get("pos") or [0, 0, 0], dtype=float).reshape(3)
+    lq = np.asarray(rec.get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4)
+    obj["local_wxyz"] = lq / (float(np.linalg.norm(lq)) or 1.0)
+    obj["space"] = "local"
+    _set_world_from_local(obj)
+    _apply_object_xform(obj)
+    _refresh_camera_viz(obj)
+    _propagate_children(obj.get("id"))
+    return True
 
 
 _cam_track_handles = []
@@ -1534,7 +1681,7 @@ def set_camera_click(oid, u, v):
 def camera_status():
     cams = [o for o in wp.scene_objects if o.get("camera") and (o.get("camera") or {}).get("enabled", True)]
     if wp.sim_camera and wp.sim_camera.get("enabled", True):
-        cams = [{"id": "sim", "name": "Sim cursor", "camera": wp.sim_camera}] + cams
+        cams = [{"id": "sim", "name": SIM_CURSOR_NAME, "camera": wp.sim_camera}] + cams
     if not cams:
         return {"active": False}
     obj = None
@@ -1579,3 +1726,6 @@ def camera_status():
 for _name, _obj in list(globals().items()):
     if callable(_obj) and getattr(_obj, "__module__", None) == __name__:
         setattr(wp, _name, _obj)
+
+# Not a function, so set it on waypoints by hand.
+wp.SIM_CURSOR_NAME = SIM_CURSOR_NAME

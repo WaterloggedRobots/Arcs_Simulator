@@ -346,14 +346,93 @@ def _segment_curve_pts(i):
     return _dense_cubic(p1, p2, c1, c2)
 
 
+def _track_on(rec):
+    return bool(rec and rec.get("on") and rec.get("name"))
+
+
+def _same_track(a, b):
+    if str(a.get("name") or "").strip().lower() != str(b.get("name") or "").strip().lower():
+        return False
+    for key in ("offset", "pos_offset"):
+        va = np.asarray(a.get(key) or [0.0, 0.0, 0.0], dtype=float).reshape(-1)[:3]
+        vb = np.asarray(b.get(key) or [0.0, 0.0, 0.0], dtype=float).reshape(-1)[:3]
+        if not np.allclose(va, vb, atol=1e-6):
+            return False
+    return True
+
+
 def _track_spec_for_seg(i):
+    """Look At for span i, only when both of its waypoints aim at the same
+    target with the same offsets; any other span keeps its normal rotation."""
     wps = wp.waypoints
-    for j in (i, i + 1):
-        if 0 <= j < len(wps):
-            rec = wps[j].get("track_object") or {}
-            if rec.get("on") and rec.get("name"):
-                return rec
+    if not (0 <= i and i + 1 < len(wps)):
+        return None
+    a = wps[i].get("track_object") or {}
+    b = wps[i + 1].get("track_object") or {}
+    if _track_on(a) and _track_on(b) and _same_track(a, b):
+        return a
     return None
+
+
+def _quat_angle(q1, q2):
+    q1 = np.asarray(q1, dtype=float).reshape(4)
+    q2 = np.asarray(q2, dtype=float).reshape(4)
+    n = np.linalg.norm(q1) * np.linalg.norm(q2)
+    if n < 1e-12:
+        return np.pi
+    return 2.0 * np.arccos(min(1.0, abs(float(np.dot(q1, q2))) / n))
+
+
+_INFER_TOL = np.radians(1.0)
+
+
+def _infer_track(w, offsets):
+    """Target name whose Look At reproduces the waypoint's saved rotation."""
+    if w.get("pos") is None or w.get("wxyz") is None:
+        return None
+    best = None
+    for obj in getattr(wp, "scene_objects", None) or []:
+        name = obj.get("name")
+        if not name:
+            continue
+        for off, pos_off in offsets:
+            aim = rr.look_at_wxyz_offset(w["pos"], name, off, pos_off)
+            if aim is None:
+                continue
+            ang = _quat_angle(aim, w["wxyz"])
+            if ang < _INFER_TOL and (best is None or ang < best[0]):
+                best = (ang, name, off, pos_off)
+    return best
+
+
+def _fill_missing_track_records():
+    """Rebuild Look At for waypoints that never saved it (added before it was
+    stored per waypoint) from their own rotation: a waypoint whose rotation
+    is exactly the Look At aim at some object gets that object as its target.
+    Records that point at the wrong object for the saved rotation, while it
+    matches another object exactly, are corrected the same way."""
+    if not hasattr(rr, "look_at_wxyz_offset"):
+        return
+    cur = rr.track_status() if hasattr(rr, "track_status") else {}
+    cur_off = (list((cur or {}).get("offset") or [0.0, 0.0, 0.0]),
+               list((cur or {}).get("pos_offset") or [0.0, 0.0, 0.0]))
+    for w in wp.waypoints:
+        rec = w.get("track_object")
+        if rec is not None and not _track_on(rec):
+            continue
+        offsets = [cur_off]
+        if rec:
+            own = (list(rec.get("offset") or [0.0, 0.0, 0.0]), list(rec.get("pos_offset") or [0.0, 0.0, 0.0]))
+            aim = rr.look_at_wxyz_offset(w.get("pos"), rec.get("name"), own[0], own[1]) if w.get("pos") is not None else None
+            if aim is not None and w.get("wxyz") is not None and _quat_angle(aim, w["wxyz"]) < _INFER_TOL:
+                continue
+            offsets = [own, cur_off]
+        hit = _infer_track(w, offsets)
+        if hit is None:
+            continue
+        _, name, off, pos_off = hit
+        w["track_object"] = {"on": True, "added": True, "name": name,
+                             "offset": list(off), "pos_offset": list(pos_off)}
 
 
 def _aim_samples_at_track(i, samples):
@@ -363,9 +442,31 @@ def _aim_samples_at_track(i, samples):
     for sm in samples or []:
         if sm.get("pos") is None:
             continue
-        wxyz = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"))
+        wxyz = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"), spec.get("pos_offset"))
         if wxyz is not None:
             sm["wxyz"] = np.asarray(wxyz, dtype=float).reshape(4)
+
+
+def update_look_bars():
+    """Look At timeline bars, rebuilt on bake only: one bar per run of spans
+    aimed at the same target (same rule the bake uses to aim samples)."""
+    bars = []
+    wps = wp.waypoints
+    for i in range(max(0, len(wps) - 1)):
+        spec = _track_spec_for_seg(i)
+        if not spec:
+            continue
+        t0, t1 = wps[i].get("t"), wps[i + 1].get("t")
+        if t0 is None or t1 is None:
+            continue
+        name = str(spec.get("name") or "")
+        t0, t1 = float(min(t0, t1)), float(max(t0, t1))
+        if bars and bars[-1]["name"] == name and abs(bars[-1]["t1"] - t0) < 1e-6:
+            bars[-1]["t1"] = t1
+        else:
+            bars.append({"t0": t0, "t1": t1, "name": name})
+    wp.look_bars = bars
+    return bars
 
 
 def _empty_sample(pos, wxyz, u, s_abs):
@@ -834,10 +935,13 @@ def rebuild_preview():
 
 
 def _carry_sample_times(old, new, i):
-    """Keep the sample frames a span already had; only new samples get times.
+    """Keep the sample frames a span already had.
 
-    Frames are matched by index and kept while they stay in order inside the
-    span. assign_sample_times spaces the samples left without one.
+    Same sample count: frames are matched by index and kept (with any t_lock)
+    while they stay in order inside the span. Different count (the span got
+    longer or shorter): the old frames no longer line up by index, so the old
+    timing shape is resampled at the new samples' index fractions. Evenly
+    spaced frames stay evenly spaced; a hand-shaped span keeps its shape.
     """
     olds = (old or {}).get("samples") or []
     news = new.get("samples") or []
@@ -849,10 +953,21 @@ def _carry_sample_times(old, new, i):
     ta, tb = olds[0].get("t"), olds[-1].get("t")
     if ta is None or tb is None or abs(float(ta) - t0) > 1e-6 or abs(float(tb) - t1) > 1e-6:
         return
+    if len(olds) != len(news):
+        ts = [sm.get("t") for sm in olds]
+        if any(t is None for t in ts):
+            return
+        ts = [float(t) for t in ts]
+        if any(b <= a for a, b in zip(ts, ts[1:])):
+            return
+        fo = np.linspace(0.0, 1.0, len(ts))
+        fn = np.linspace(0.0, 1.0, len(news))
+        tn = np.interp(fn, fo, ts)
+        for k in range(1, len(news) - 1):
+            news[k]["t"] = float(tn[k])
+        return
     last = t0
     for k in range(1, len(news) - 1):
-        if k >= len(olds) - 1:
-            break
         t = olds[k].get("t")
         if t is None or not (last < float(t) < t1):
             break
@@ -1048,6 +1163,7 @@ def _run_bake_body(spacing_m=None):
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
 
+    _fill_missing_track_records()
     rebuild_preview()
     seed = None
     if rr.robot_sim is not None:
@@ -1200,6 +1316,7 @@ def _run_bake_body(spacing_m=None):
     evaluate_timing(force=True)
     _speed_valid = True
     store_bake_motion()
+    update_look_bars()
     print(
         "bake done",
         "ok", baked, "/", len(segments),
@@ -1257,6 +1374,7 @@ def _finish_bake(baked, failed_at):
     evaluate_timing(force=True)
     _speed_valid = True
     store_bake_motion()
+    update_look_bars()
     print(
         "bake done",
         "ok", baked, "/", len(segments),
@@ -1301,6 +1419,7 @@ def _run_optomise_body(spacing_m=None):
         set_spacing(spacing_m)
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
+    _fill_missing_track_records()
     rebuild_preview()
     seed = _bake_seed()
     baked = 0

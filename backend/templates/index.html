@@ -445,6 +445,23 @@
       align-items: center;
     }
     .props .row.rot-line[hidden] { display: none !important; }
+    .props .row.triple.has-reset { grid-template-columns: 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr) 24px; }
+    .props .row.rot-line.triple.has-reset { grid-template-columns: 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr) 24px; }
+    .props .row.rot-line.quad.has-reset { grid-template-columns: 16px minmax(0,1fr) 16px minmax(0,1fr) 16px minmax(0,1fr) 16px minmax(0,1fr) 24px; }
+    .props .row.has-reset input { min-width: 0; width: 100%; }
+    .props .reset-btn {
+      width: 24px; min-width: 24px; height: 24px; margin: 0; padding: 4px;
+      background: #3a3b44; display: flex; align-items: center; justify-content: center;
+    }
+    .props .reset-btn svg { width: 14px; height: 14px; color: #d8d8dc; }
+    .props .reset-btn:hover { background: #4a4b55; }
+    .props .row.snap-row { grid-template-columns: 1fr; }
+    .props.is-bot .reset-btn,
+    .props.is-bot #primScaleBlock,
+    .props.is-bot #objSpaceWrap,
+    .props.is-bot #primSnapRow { display: none !important; }
+    .props .row.snap-row[hidden] { display: none; }
+    #primSnapOffset { width: 100%; margin: 0; background: #3a3b44; }
     .props .row.rot-line input { min-width: 0; width: 100%; }
     #camOffline {
       position: absolute;
@@ -706,6 +723,12 @@
     .track-row { display: grid; grid-template-columns: 1fr 28px 28px; gap: 4px; position: relative; }
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
     .track-err { color: #e05555; font-size: 12px; margin-top: 4px; }
+    .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
+    .use-offset-btn:disabled { opacity: 0.45; cursor: default; }
+    #offsetWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #offsetWrap.advanced .mode-advanced { color: #4aa3ff !important; }
+    #offsetEnable { background: #8a8a92 !important; }
+    #offsetEnable.advanced { background: #4aa3ff !important; }
     .track-xyz input { font-size: 14px; }
     #trackName { background: #1c1d21; color: var(--text); border: 1px solid #111; border-radius: 6px; padding: 6px 8px; width: 100%; }
     #moveRobotPose { margin-bottom: 28px; }
@@ -1881,10 +1904,11 @@
               <span class="mode-deg">Global</span>
             </div>
           </div>
-          <div class="row triple">
+          <div class="row triple has-reset">
             <label class="drag" data-k="ox">x</label><input id="ox" type="number" step="0.001">
             <label class="drag" data-k="oy">y</label><input id="oy" type="number" step="0.001">
             <label class="drag" data-k="oz">z</label><input id="oz" type="number" step="0.001">
+            <button type="button" class="reset-btn" id="primPosReset" title="Reset position to 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
           </div>
           <div class="row rot-tools">
             <div class="fk-units quat" id="primRotWrap">
@@ -1898,16 +1922,21 @@
               <span class="mode-deg">deg</span>
             </div>
           </div>
-          <div class="row quad rot-line" id="primQuatRow">
+          <div class="row quad rot-line has-reset" id="primQuatRow">
             <label class="drag" data-k="ow">w</label><input id="ow" type="number" step="0.001">
             <label class="drag" data-k="orx">x</label><input id="orx" type="number" step="0.001">
             <label class="drag" data-k="ory">y</label><input id="ory" type="number" step="0.001">
             <label class="drag" data-k="orz">z</label><input id="orz" type="number" step="0.001">
+            <button type="button" class="reset-btn" data-rot-reset title="Reset rotation to 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
           </div>
-          <div class="row triple rot-line" id="primEulerRow" hidden>
+          <div class="row triple rot-line has-reset" id="primEulerRow" hidden>
             <label class="drag" data-k="erx">rx</label><input id="erx" type="number" step="0.001">
             <label class="drag" data-k="ery">ry</label><input id="ery" type="number" step="0.001">
             <label class="drag" data-k="erz">rz</label><input id="erz" type="number" step="0.001">
+            <button type="button" class="reset-btn" data-rot-reset title="Reset rotation to 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+          </div>
+          <div class="row snap-row" id="primSnapRow" hidden>
+            <button type="button" id="primSnapOffset">snap object to parent offset</button>
           </div>
           <div class="sec space-gap" aria-hidden="true"></div>
           <div id="primScaleBlock">
@@ -1990,9 +2019,9 @@
           </div>
           <div id="trackComp" class="track-comp" hidden>
             <div class="track-head">
-              <span>Track Object</span>
+              <span>Look At</span>
               <div class="track-head-right">
-                <div class="tl-mode simple" id="trackWrap" title="Enable tracking">
+                <div class="tl-mode simple" id="trackWrap" title="Enable Look At">
                   <span class="mode-simple">Off</span>
                   <button type="button" class="slide" id="trackToggle"></button>
                   <span class="mode-advanced">On</span>
@@ -2000,7 +2029,7 @@
                 <button type="button" id="trackTrash" class="track-trash" title="Remove component">🗑</button>
               </div>
             </div>
-            <label class="field tight">Track Target:</label>
+            <label class="field tight">Look At Target:</label>
             <div class="track-row">
               <input id="trackName" type="text" placeholder="object name">
               <button type="button" id="trackPickBtn" title="Pick in viewer">○</button>
@@ -2012,17 +2041,70 @@
               <label>y</label><input id="trackY" type="number" step="0.001" readonly>
               <label>z</label><input id="trackZ" type="number" step="0.001" readonly>
             </div>
+            <label class="field tight">Pos offset</label>
+            <div class="row triple" id="trackPosRow">
+              <label>x</label><input id="trackPx" type="number" step="0.001" value="0">
+              <label>y</label><input id="trackPy" type="number" step="0.001" value="0">
+              <label>z</label><input id="trackPz" type="number" step="0.001" value="0">
+            </div>
             <label class="field tight">Rot offset</label>
-            <div class="row triple">
+            <div class="row triple" id="trackRotRow">
               <label>rx</label><input id="trackRx" type="number" step="0.001" value="0">
               <label>ry</label><input id="trackRy" type="number" step="0.001" value="0">
               <label>rz</label><input id="trackRz" type="number" step="0.001" value="0">
             </div>
+            <button type="button" id="trackUseOffset" class="use-offset-btn" title="Copy this object's Offset component into the pos and rot offset fields">copy offset component values</button>
+            <div id="trackOffErr" class="track-err" hidden></div>
+          </div>
+          <hr id="offsetSep" hidden>
+          <div id="offsetComp" class="track-comp" hidden>
+            <div class="track-head">
+              <span>Offset</span>
+              <div class="track-head-right">
+                <div class="tl-mode advanced" id="offsetWrap" title="Enable offset">
+                  <span class="mode-simple">Off</span>
+                  <button type="button" class="slide advanced" id="offsetEnable"></button>
+                  <span class="mode-advanced">On</span>
+                </div>
+                <button type="button" id="offsetTrash" class="track-trash" title="Remove component">🗑</button>
+              </div>
+            </div>
+            <label class="field tight">Local position</label>
+            <div class="row triple">
+              <label>x</label><input id="offX" type="number" step="0.001" value="0">
+              <label>y</label><input id="offY" type="number" step="0.001" value="0">
+              <label>z</label><input id="offZ" type="number" step="0.001" value="0">
+            </div>
+            <label class="field tight">Local rotation</label>
+            <div class="row rot-tools">
+              <div class="fk-units euler deg" id="offRotWrap">
+                <span class="mode-rad">Quat</span>
+                <button type="button" class="slide advanced" id="offRotMode" title="Quaternion / Euler"></button>
+                <span class="mode-deg">Euler</span>
+              </div>
+              <div class="fk-units rad" id="offUnitWrap">
+                <span class="mode-rad">rad</span>
+                <button type="button" class="slide" id="offUnits" title="rad / deg"></button>
+                <span class="mode-deg">deg</span>
+              </div>
+            </div>
+            <div class="row quad rot-line" id="offQuatRow" hidden>
+              <label>w</label><input id="offQw" type="number" step="0.001" value="1">
+              <label>x</label><input id="offQx" type="number" step="0.001" value="0">
+              <label>y</label><input id="offQy" type="number" step="0.001" value="0">
+              <label>z</label><input id="offQz" type="number" step="0.001" value="0">
+            </div>
+            <div class="row triple rot-line" id="offEulerRow">
+              <label>rx</label><input id="offRx" type="number" step="0.001" value="0">
+              <label>ry</label><input id="offRy" type="number" step="0.001" value="0">
+              <label>rz</label><input id="offRz" type="number" step="0.001" value="0">
+            </div>
           </div>
           <button type="button" id="simExtraAdd" class="sim-extra-add" title="Add">+</button>
           <div id="compMenu" class="kf-menu" hidden>
-            <button type="button" data-comp="track">Track Object</button>
+            <button type="button" data-comp="track">Look At</button>
             <button type="button" data-comp="camera">Camera</button>
+            <button type="button" data-comp="offset">Offset</button>
           </div>
       </aside>
     </div>
@@ -2059,6 +2141,8 @@
     </div>
   </div>
   <script>
+    // Sim Bot / Sim EE hierarchy is built but off for now (see simulatorview.SIM_BOT_ENABLED).
+    var SIM_BOT_ENABLED = false;
     const CORE_TRACKS = [
       { id: "arm", name: "Arm", simple: true },
       { id: "dio00", name: "T_DI/O_00", simple: false },
@@ -2599,7 +2683,8 @@
         nm.className = "tl-label-name";
         nm.textContent = vis[i].name;
         d.appendChild(nm);
-        if (vis[i].custom) {
+        // The Look At track follows its component; remove the component instead.
+        if (vis[i].custom && vis[i].id !== "look_sim") {
           const del = document.createElement("button");
           del.type = "button";
           del.className = "tl-del-track";
@@ -2904,6 +2989,43 @@
           }
         });
       }
+
+      vis.forEach((tr, row) => {
+        if (tr.id !== "look_sim") return;
+        // Look At bars (rebuilt on bake): one per run of spans aimed at the same target.
+        const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+        (window.__lookBars || []).forEach((bar) => {
+          if (bar.t0 == null || bar.t1 == null) return;
+          const x0 = timeToX(Number(bar.t0));
+          const x1 = timeToX(Number(bar.t1));
+          const bx = Math.min(x0, x1);
+          const bw = Math.max(18, Math.abs(x1 - x0));
+          const by = cy - 11;
+          const bh = 22;
+          const rad = 6;
+          ctx.fillStyle = "#7aa2ff";
+          ctx.globalAlpha = 0.55;
+          ctx.beginPath();
+          ctx.moveTo(bx + rad, by);
+          ctx.arcTo(bx + bw, by, bx + bw, by + bh, rad);
+          ctx.arcTo(bx + bw, by + bh, bx, by + bh, rad);
+          ctx.arcTo(bx, by + bh, bx, by, rad);
+          ctx.arcTo(bx, by, bx + bw, by, rad);
+          ctx.closePath();
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(bx, by, bw, bh);
+          ctx.clip();
+          ctx.fillStyle = "#f2f2f2";
+          ctx.font = "10px Segoe UI, sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          ctx.fillText(bar.name || "target", bx + 6, cy);
+          ctx.restore();
+        });
+      });
 
       vis.forEach((tr, row) => {
         if (!tr.custom || !tr.keys || !tr.keys.length) return;
@@ -4090,7 +4212,9 @@
       const primBody = document.getElementById("primBody");
       const name = document.getElementById("propName");
       const panel = document.getElementById("propsPanel");
-      const isPrim = !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import"));
+      const isBot = !!(obj && obj.kind === "bot");
+      panel.classList.toggle("is-bot", isBot);
+      const isPrim = isBot || !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import"));
       const moveBtn = document.getElementById("moveRobotPose");
       const extraAdd = document.getElementById("simExtraAdd");
       const isSim = !!(obj && obj.kind === "sim");
@@ -4109,6 +4233,7 @@
         const ts0 = document.getElementById("trackSep");
         if (tc0) tc0.hidden = true;
         if (ts0) ts0.hidden = true;
+        renderOffsetComp(null);
         return;
       }
       window._propKind = obj.kind;
@@ -4117,7 +4242,7 @@
       if (isPrim) {
         body.hidden = true;
         if (primBody) primBody.hidden = false;
-        if (extraAdd) extraAdd.classList.add("show");
+        if (extraAdd) extraAdd.classList.toggle("show", !isBot);
         const tcP = document.getElementById("trackComp");
         const tsP = document.getElementById("trackSep");
         if (tcP) tcP.hidden = true;
@@ -4170,6 +4295,8 @@
             wrap.classList.toggle("rad", space === "local");
             wrap.classList.toggle("deg", space !== "local");
           }
+          const snapRow = document.getElementById("primSnapRow");
+          if (snapRow) snapRow.hidden = !obj.parent_offset;
           const scBlock = document.getElementById("primScaleBlock");
           if (scBlock) scBlock.hidden = false;
           if (obj.camera && (obj.camera.type || obj.camera.enabled != null)) {
@@ -4220,6 +4347,7 @@
         }
         const camBoxP = document.getElementById("camProps");
         if (camBoxP) camBoxP.hidden = !(obj.camera && (obj.camera.type || obj.camera.enabled != null));
+        renderOffsetComp(obj);
         return;
       }
       if (primBody) primBody.hidden = true;
@@ -4321,7 +4449,24 @@
           if (fkDeg) v = rad2deg(v);
           el.value = Number(v).toFixed(fkDeg ? 2 : 4);
         });
+        const poff = track.pos_offset || [0, 0, 0];
+        ["trackPx", "trackPy", "trackPz"].forEach((id, i) => {
+          const el = document.getElementById(id);
+          if (el && document.activeElement !== el) el.value = Number(poff[i] || 0).toFixed(4);
+        });
+        const offOk = (track.offset_state || "missing") === "ok";
+        const ub = document.getElementById("trackUseOffset");
+        if (ub) ub.disabled = !offOk;
+        const oe = document.getElementById("trackOffErr");
+        if (oe) {
+          const st = track.offset_state || "missing";
+          oe.hidden = st === "ok";
+          oe.textContent = st === "disabled"
+            ? "Offset component is not enabled on this object."
+            : "This object has no Offset component.";
+        }
       }
+      renderOffsetComp(obj);
       const armed = mismatch || holding;
       if (moveBtn) {
         moveBtn.classList.toggle("armed", armed);
@@ -4329,6 +4474,153 @@
         moveBtn.disabled = !realOn || !armed;
       }
     }
+    function orderComps(obj) {
+      // Components stack oldest first: re-append them before the + button.
+      const anchor = document.getElementById("simExtraAdd");
+      if (!anchor || !anchor.parentNode) return;
+      const groups = {
+        camera: ["camProps"],
+        track: ["trackSep", "trackComp"],
+        offset: ["offsetSep", "offsetComp"],
+      };
+      const seen = [];
+      ((obj && obj.comp_order) || []).concat(["camera", "track", "offset"]).forEach((k) => {
+        if (groups[k] && seen.indexOf(k) < 0) seen.push(k);
+      });
+      const want = [];
+      seen.forEach((k) => groups[k].forEach((id) => { const el = document.getElementById(id); if (el) want.push(el); }));
+      const have = Array.from(anchor.parentNode.children).filter((el) => want.indexOf(el) >= 0);
+      // Moving a node blurs a focused input, so only move when the order changed.
+      if (have.length === want.length && have.every((el, i) => el === want[i])) return;
+      want.forEach((el) => anchor.parentNode.insertBefore(el, anchor));
+    }
+    function renderOffsetComp(obj) {
+      orderComps(obj);
+      const box = document.getElementById("offsetComp");
+      const sep = document.getElementById("offsetSep");
+      const off = (obj && obj.offset) || {};
+      const kinds = ["sim", "empty", "sphere", "cube", "camera", "mesh", "import"];
+      const show = !!(obj && kinds.indexOf(obj.kind) >= 0 && off.added);
+      if (box) box.hidden = !show;
+      if (sep) sep.hidden = !show;
+      if (!show) return;
+      const on = off.enabled !== false;
+      const en = document.getElementById("offsetEnable");
+      const wrap = document.getElementById("offsetWrap");
+      if (en) en.classList.toggle("advanced", on);
+      if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+      const p = off.pos || [0, 0, 0];
+      ["offX", "offY", "offZ"].forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = Number(p[i] || 0).toFixed(4);
+      });
+      const q = off.wxyz || [1, 0, 0, 0];
+      ["offQw", "offQx", "offQy", "offQz"].forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = Number(q[i] || 0).toFixed(4);
+      });
+      const eu = quatToEuler(Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3]));
+      ["offRx", "offRy", "offRz"].forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (!el || document.activeElement === el) return;
+        const v = fkDeg ? rad2deg(eu[i]) : eu[i];
+        el.value = Number(v).toFixed(fkDeg ? 2 : 4);
+      });
+      const qRow = document.getElementById("offQuatRow");
+      const eRow = document.getElementById("offEulerRow");
+      if (qRow) qRow.hidden = !!offRotEuler;
+      if (eRow) eRow.hidden = !offRotEuler;
+      const rm = document.getElementById("offRotMode");
+      const rw = document.getElementById("offRotWrap");
+      if (rm) rm.classList.toggle("advanced", !!offRotEuler);
+      if (rw) {
+        rw.classList.toggle("deg", !!offRotEuler);
+        rw.classList.toggle("rad", !offRotEuler);
+      }
+      const ou = document.getElementById("offUnits");
+      const uw = document.getElementById("offUnitWrap");
+      if (ou) { ou.classList.toggle("deg", fkDeg); ou.classList.toggle("advanced", fkDeg); }
+      if (uw) { uw.classList.toggle("deg", fkDeg); uw.classList.toggle("rad", !fkDeg); }
+    }
+    let offRotEuler = true;
+    function postOffset(payload) {
+      const obj = window.__lastObject || {};
+      const body = Object.assign({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id }, payload || {});
+      return fetch("/api/offset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json()).then((d) => {
+        if (d && d.offset && window.__lastObject) window.__lastObject.offset = d.offset;
+        setTimeout(refresh, 80);
+        return d;
+      });
+    }
+    function sendOffset() {
+      const pos = ["offX", "offY", "offZ"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
+      let wxyz;
+      if (offRotEuler) {
+        const eu = ["offRx", "offRy", "offRz"].map((id) => {
+          const v = parseFloat((document.getElementById(id) || {}).value || "0");
+          return fkDeg ? deg2rad(v) : v;
+        });
+        wxyz = eulerToQuat(eu[0], eu[1], eu[2]);
+      } else {
+        wxyz = ["offQw", "offQx", "offQy", "offQz"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
+      }
+      postOffset({ act: "update", pos: pos, wxyz: wxyz });
+    }
+    const offRotModeBtn = document.getElementById("offRotMode");
+    if (offRotModeBtn) offRotModeBtn.onclick = () => { offRotEuler = !offRotEuler; refresh(); };
+    const offUnitsBtn = document.getElementById("offUnits");
+    if (offUnitsBtn) offUnitsBtn.onclick = () => { fkDeg = !fkDeg; refresh(); };
+    ["offX", "offY", "offZ", "offRx", "offRy", "offRz", "offQw", "offQx", "offQy", "offQz"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("change", sendOffset);
+    });
+    const offsetEnable = document.getElementById("offsetEnable");
+    if (offsetEnable) {
+      offsetEnable.onclick = () => {
+        const on = !offsetEnable.classList.contains("advanced");
+        offsetEnable.classList.toggle("advanced", on);
+        const wrap = document.getElementById("offsetWrap");
+        if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+        postOffset({ act: "update", enabled: on });
+      };
+    }
+    const offsetCompEl = document.getElementById("offsetComp");
+    if (offsetCompEl) offsetCompEl.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#offsetWrap") || e.target.closest("#offsetTrash")) return;
+      const obj = window.__lastObject || {};
+      fetch("/api/offset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id, act: "edit" }),
+      });
+    });
+    const offsetTrash = document.getElementById("offsetTrash");
+    if (offsetTrash) offsetTrash.onclick = () => postOffset({ act: "remove" });
+    const primPosReset = document.getElementById("primPosReset");
+    if (primPosReset) primPosReset.onclick = () => {
+      ["ox", "oy", "oz"].forEach((id) => { document.getElementById(id).value = "0"; });
+      sendPrim();
+    };
+    document.querySelectorAll("[data-rot-reset]").forEach((b) => {
+      b.onclick = () => {
+        ["ow", "orx", "ory", "orz"].forEach((id, i) => { document.getElementById(id).value = i === 0 ? "1" : "0"; });
+        ["erx", "ery", "erz"].forEach((id) => { document.getElementById(id).value = "0"; });
+        sendPrim();
+      };
+    });
+    const primSnapOffset = document.getElementById("primSnapOffset");
+    if (primSnapOffset) primSnapOffset.onclick = () => {
+      const obj = window.__lastObject || {};
+      fetch("/api/object_props", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: obj.id, snap_parent_offset: true }),
+      }).then(() => setTimeout(refresh, 80));
+    };
     function sendPrim() {
       let wxyz;
       if (primRotEuler) {
@@ -4466,8 +4758,11 @@
         return fkDeg ? deg2rad(v) : v;
       });
     }
+    function trackPosOffset() {
+      return ["trackPx", "trackPy", "trackPz"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
+    }
     function postTrack(payload, opts) {
-      payload = Object.assign({ offset: trackOffsetRad() }, payload || {});
+      payload = Object.assign({ offset: trackOffsetRad(), pos_offset: trackPosOffset() }, payload || {});
       if (window._propKind === "waypoint" && window._propIndex != null) payload.index = window._propIndex;
       return fetch("/api/track_object", {
         method: "POST",
@@ -4494,10 +4789,11 @@
         const isSim = obj.kind === "sim";
         const hasCam = !!(obj.camera);
         const hasTrack = !!(obj.track && obj.track.added);
+        const hasOffset = !!(obj.offset && obj.offset.added);
         compMenu.querySelectorAll("[data-comp]").forEach((b) => {
           const k = b.getAttribute("data-comp");
-          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint");
-          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack);
+          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint") || (k === "offset" && obj.kind === "waypoint");
+          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset);
           b.disabled = !!taken;
           b.style.opacity = taken ? "0.4" : "";
           b.style.pointerEvents = taken ? "none" : "";
@@ -4524,6 +4820,9 @@
           window.__trackAdded = true;
           window.__lastObject.track = Object.assign({}, window.__lastObject.track || {}, { added: true });
           postTrack({ added: true }).catch(() => {});
+        }
+        if (btn.getAttribute("data-comp") === "offset") {
+          postOffset({ act: "add" }).catch(() => {});
         }
         if (btn.getAttribute("data-comp") === "camera") {
           const obj = window.__lastObject || {};
@@ -4580,11 +4879,17 @@
     if (trackNameEl) trackNameEl.addEventListener("change", () => {
       postTrack({ name: trackNameEl.value, added: true });
     });
-    ["trackRx", "trackRy", "trackRz"].forEach((id) => {
+    ["trackRx", "trackRy", "trackRz", "trackPx", "trackPy", "trackPz"].forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
       el.addEventListener("change", () => postTrack({ added: true, on: trackToggle && trackToggle.classList.contains("advanced") }));
     });
+    const trackUseOffset = document.getElementById("trackUseOffset");
+    if (trackUseOffset) trackUseOffset.onclick = (e) => {
+      e.preventDefault();
+      if (trackUseOffset.disabled) return;
+      postTrack({ added: true, copy_offset: true });
+    };
     const trackTrash = document.getElementById("trackTrash");
     if (trackTrash) trackTrash.onclick = () => { window.__trackAdded = false; postTrack({ added: false, on: false }); };
     const holdLinEl = document.getElementById("holdLinMps");
@@ -4793,7 +5098,11 @@
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
       const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
-      const objRows = [{ id: "sim_cursor", name: "Sim cursor" }].concat(d.scene_objects || []);
+      // Built-ins. With SIM_BOT_ENABLED: Sim Bot (robot base) with Sim EE (the sim cursor) under it.
+      const objRows = (SIM_BOT_ENABLED
+        ? [{ id: "sim_bot", name: "Sim Bot" }, { id: "sim_cursor", name: "Sim EE", parent_id: "sim_bot" }]
+        : [{ id: "sim_cursor", name: "Sim cursor" }]).concat(d.scene_objects || []);
+      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot";
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
       function eyeOn(kind, id) {
@@ -4815,7 +5124,7 @@
       });
       const byParent = {};
       objRows.forEach((o) => {
-        const p = o.id === "sim_cursor" ? "" : (o.parent_id || "");
+        const p = (o.id === "sim_bot" || (o.id === "sim_cursor" && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
         if (!byParent[p]) byParent[p] = [];
         byParent[p].push(o);
       });
@@ -4823,7 +5132,7 @@
         return (byParent[pid] || []).map((o) => {
           const pad = 8 + depth * 14;
           const mark = (o.parent_id ? "↳ " : "");
-          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (o.id !== "sim_cursor" ? "true" : "false") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
+          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
         }).join("");
       }
       let tree = walk("", 0);
@@ -4889,7 +5198,7 @@
       const row = e.target.closest("[data-oid]");
       if (!row) return;
       const oid = row.getAttribute("data-oid");
-      if (!oid || oid === "sim_cursor") return;
+      if (!oid || oid === "sim_cursor" || oid === "sim_bot") return;
       e.preventDefault();
       e.stopPropagation();
       const label = row.querySelector(".hier-label") || row.querySelector("span:not(.hier-eye)");
@@ -4954,7 +5263,7 @@
       let dragId = null;
       list.addEventListener("dragstart", (e) => {
         const row = e.target.closest("[data-oid]");
-        if (!row || row.getAttribute("data-oid") === "sim_cursor") { e.preventDefault(); return; }
+        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot") { e.preventDefault(); return; }
         dragId = row.getAttribute("data-oid");
         e.dataTransfer.setData("text/plain", dragId);
       });
@@ -5323,6 +5632,14 @@
           if (!cur || cur.indexOf(":" + d.viser_port) < 0) ifr.src = url;
         }
       }
+      // The page can load before the backend has its project; pick the name
+      // up from polling, but only when the backend's name changes so a local
+      // rename is not overwritten.
+      if (d.doc_title && d.doc_title !== window.__lastDocTitle) {
+        window.__lastDocTitle = d.doc_title;
+        const el = document.getElementById("docTitle");
+        if (el && !el.classList.contains("editing")) setDocTitle(d.doc_title);
+      }
       if (Array.isArray(d.tracks) && tracksSyncing === 0) {
         const same = d.tracks.length === extraTracks.length &&
           d.tracks.every((tr, i) => extraTracks[i] &&
@@ -5415,6 +5732,7 @@
         if (realBtn2) realBtn2.disabled = true;
       }
       window.__lastObject = d.object || {};
+      if (Array.isArray(d.look_bars)) window.__lookBars = d.look_bars;
       if (Array.isArray(d.sim_poses)) applySimPoses(d.sim_poses);
       else if (Array.isArray(d.pose_markers) && d.pose_markers.length) applySimPoses(d.pose_markers);
       fillHierarchy(d);
@@ -5427,7 +5745,7 @@
         allCams.unshift({
           id: "sim",
           kind: "sim",
-          name: "Sim cursor",
+          name: SIM_BOT_ENABLED ? "Sim EE" : "Sim cursor",
           camera: simCam,
           cam_type: simCam.type || "sim",
         });

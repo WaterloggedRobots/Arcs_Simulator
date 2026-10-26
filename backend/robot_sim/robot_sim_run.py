@@ -244,15 +244,8 @@ def start_viewer():
                     if item is not None:
                         item["added_from"] = src
                         item["track_object"] = None
-                        if src == "sim" and hasattr(rr, "track_status"):
-                            st = rr.track_status() or {}
-                            if st.get("on") and st.get("added"):
-                                item["track_object"] = {
-                                    "on": True,
-                                    "added": True,
-                                    "name": st.get("name") or "",
-                                    "offset": list(st.get("offset") or [0.0, 0.0, 0.0]),
-                                }
+                        if src == "sim" and hasattr(rr, "waypoint_track_record"):
+                            item["track_object"] = rr.waypoint_track_record()
                 except Exception as e:
                     print("add_waypoint failed:", e)
             while delete_requests:
@@ -392,6 +385,11 @@ def start_viewer():
                     fn()
                 except Exception as e:
                     _report_tick_error(_tick, e)
+            try:
+                wp.offsets.tick_offsets()
+                wp.ensure_sim_bot_marker()
+            except Exception as e:
+                _report_tick_error("tick_offsets", e)
             try:
                 t_win = playhead_t
                 st = rr.sim_status() if hasattr(rr, "sim_status") else {}
