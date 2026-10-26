@@ -356,6 +356,18 @@ def _track_spec_for_seg(i):
     return None
 
 
+def _fill_missing_track_records():
+    """Waypoints that never recorded Look At (added before it was saved per
+    waypoint) take the cursor's current Look At, so a rebake aims them and
+    draws their bars. Waypoints with any record, even off, are left alone."""
+    rec = rr.waypoint_track_record() if hasattr(rr, "waypoint_track_record") else None
+    if not rec or not rec.get("on"):
+        return
+    for w in wp.waypoints:
+        if w.get("track_object") is None:
+            w["track_object"] = dict(rec)
+
+
 def _aim_samples_at_track(i, samples):
     spec = _track_spec_for_seg(i)
     if not spec or not hasattr(rr, "look_at_wxyz_offset"):
@@ -1084,6 +1096,7 @@ def _run_bake_body(spacing_m=None):
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
 
+    _fill_missing_track_records()
     rebuild_preview()
     seed = None
     if rr.robot_sim is not None:
@@ -1339,6 +1352,7 @@ def _run_optomise_body(spacing_m=None):
         set_spacing(spacing_m)
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
+    _fill_missing_track_records()
     rebuild_preview()
     seed = _bake_seed()
     baked = 0

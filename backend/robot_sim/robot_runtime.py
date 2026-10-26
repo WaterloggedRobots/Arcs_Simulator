@@ -1254,10 +1254,15 @@ def set_track_object(on=None, name=None, pick=None, added=None, offset=None, pos
 
 
 def waypoint_track_record():
-    """Look At record a waypoint added from the sim cursor keeps, or None."""
+    """Look At record a waypoint added from the sim cursor keeps.
+
+    Look At off still gives an explicit off record, so bake can tell these
+    waypoints apart from older ones that never recorded anything (None).
+    """
     st = track_status() or {}
-    if not (st.get("on") and st.get("added")):
-        return None
+    if not (st.get("on") and st.get("added") and st.get("name")):
+        return {"on": False, "added": False, "name": "",
+                "offset": [0.0, 0.0, 0.0], "pos_offset": [0.0, 0.0, 0.0]}
     return {
         "on": True,
         "added": True,
