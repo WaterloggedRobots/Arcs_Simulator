@@ -43,6 +43,7 @@ show_pose_markers = True
 sim_camera = None
 sim_offset = None  # sim cursor Offset component (see offsets.py)
 sim_comp_order = []  # sim cursor components, oldest first
+look_bars = []  # Look At timeline bars [{t0, t1, name}], rebuilt on bake
 list_vis = {"obj": True, "wp": True, "pose": True, "track": True}
 snap_to_grid = False
 point_order = []

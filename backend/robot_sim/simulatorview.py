@@ -66,6 +66,11 @@ def _qrot(q, v):
     ])
 
 
+# Sim Bot: robot-base parent of the sim cursor ("Sim EE"). Designed and wired
+# (hierarchy row, blue marker, read-only props, parenting) but switched off for
+# now; set True here and SIM_BOT_ENABLED in templates/index.html to bring it back.
+SIM_BOT_ENABLED = False
+SIM_CURSOR_NAME = "Sim EE" if SIM_BOT_ENABLED else "Sim cursor"
 SIM_BOT_ID = "sim_bot"
 SIM_BOT_RGB = (60, 130, 255)
 _sim_bot_viz = {}
@@ -78,7 +83,7 @@ def sim_bot_pose():
 
 def ensure_sim_bot_marker():
     """Large blue waypoint-style marker for Sim Bot (built in, never removed)."""
-    if wp.server is None or _sim_bot_viz.get("sphere") is not None:
+    if not SIM_BOT_ENABLED or wp.server is None or _sim_bot_viz.get("sphere") is not None:
         return
     pos, q = sim_bot_pose()
     name = "/sim_bot"
@@ -658,11 +663,14 @@ def _camera_track_name(obj):
     return raw + " camera"
 
 
+LOOK_TRACK_ID = "look_sim"
+
+
 def sync_camera_tracks():
     """One extra timeline track per camera component; id cam_<oid>."""
     cams = [o for o in wp.scene_objects if o.get("camera")]
     if wp.sim_camera:
-        cams = [{"id": "sim", "name": "Sim EE", "camera": wp.sim_camera}] + list(cams)
+        cams = [{"id": "sim", "name": SIM_CURSOR_NAME, "camera": wp.sim_camera}] + list(cams)
     ids = {str(o.get("id")) for o in cams}
     kept = []
     seen = set()
@@ -691,6 +699,15 @@ def sync_camera_tracks():
             "name": _camera_track_name(obj),
             "keys": [],
         })
+    # One Look At track while the sim cursor has the Look At component.
+    try:
+        import robot_runtime as rr
+        look_on = bool(rr._track.get("added"))
+    except Exception:
+        look_on = False
+    kept = [t for t in kept if not (isinstance(t, dict) and t.get("id") == LOOK_TRACK_ID)]
+    if look_on:
+        kept.append({"id": LOOK_TRACK_ID, "name": "Look At", "keys": []})
     wp.extra_tracks = kept
     return wp.extra_tracks
 
@@ -812,6 +829,8 @@ def select_scene_object(oid, mode="replace"):
     if str(oid) == "sim_cursor":
         return wp.select_item("sim", None, mode=mode)
     if str(oid) == SIM_BOT_ID:
+        if not SIM_BOT_ENABLED:
+            return False
         return wp.select_item("bot", None, mode=mode)
     obj = _find_object(oid)
     if obj is None:
@@ -1662,7 +1681,7 @@ def set_camera_click(oid, u, v):
 def camera_status():
     cams = [o for o in wp.scene_objects if o.get("camera") and (o.get("camera") or {}).get("enabled", True)]
     if wp.sim_camera and wp.sim_camera.get("enabled", True):
-        cams = [{"id": "sim", "name": "Sim EE", "camera": wp.sim_camera}] + cams
+        cams = [{"id": "sim", "name": SIM_CURSOR_NAME, "camera": wp.sim_camera}] + cams
     if not cams:
         return {"active": False}
     obj = None
@@ -1707,3 +1726,6 @@ def camera_status():
 for _name, _obj in list(globals().items()):
     if callable(_obj) and getattr(_obj, "__module__", None) == __name__:
         setattr(wp, _name, _obj)
+
+# Not a function, so set it on waypoints by hand.
+wp.SIM_CURSOR_NAME = SIM_CURSOR_NAME

@@ -368,6 +368,28 @@ def _aim_samples_at_track(i, samples):
             sm["wxyz"] = np.asarray(wxyz, dtype=float).reshape(4)
 
 
+def update_look_bars():
+    """Look At timeline bars, rebuilt on bake only: one bar per run of spans
+    aimed at the same target (same rule the bake uses to aim samples)."""
+    bars = []
+    wps = wp.waypoints
+    for i in range(max(0, len(wps) - 1)):
+        spec = _track_spec_for_seg(i)
+        if not spec:
+            continue
+        t0, t1 = wps[i].get("t"), wps[i + 1].get("t")
+        if t0 is None or t1 is None:
+            continue
+        name = str(spec.get("name") or "")
+        t0, t1 = float(min(t0, t1)), float(max(t0, t1))
+        if bars and bars[-1]["name"] == name and abs(bars[-1]["t1"] - t0) < 1e-6:
+            bars[-1]["t1"] = t1
+        else:
+            bars.append({"t0": t0, "t1": t1, "name": name})
+    wp.look_bars = bars
+    return bars
+
+
 def _empty_sample(pos, wxyz, u, s_abs):
     return {
         "pos": _as3(pos),
@@ -1214,6 +1236,7 @@ def _run_bake_body(spacing_m=None):
     evaluate_timing(force=True)
     _speed_valid = True
     store_bake_motion()
+    update_look_bars()
     print(
         "bake done",
         "ok", baked, "/", len(segments),
@@ -1271,6 +1294,7 @@ def _finish_bake(baked, failed_at):
     evaluate_timing(force=True)
     _speed_valid = True
     store_bake_motion()
+    update_look_bars()
     print(
         "bake done",
         "ok", baked, "/", len(segments),

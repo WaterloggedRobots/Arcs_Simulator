@@ -376,6 +376,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
         doc["sim_camera"] = dict(cam) if cam else None
         doc["sim_offset"] = wp.offsets.clean_offset(getattr(wp, "sim_offset", None))
         doc["sim_comp_order"] = list(getattr(wp, "sim_comp_order", None) or [])
+        doc["look_bars"] = [dict(b) for b in (getattr(wp, "look_bars", None) or [])]
         doc["last_save_ts"] = float(SESSION.get("last_save_ts") or 0.0)
         doc["last_autosave_ts"] = float(SESSION.get("last_autosave_ts") or 0.0)
         if SESSION.get("path"):
@@ -732,6 +733,7 @@ def apply_loaded_doc(data):
         wp.sim_camera = None
     wp.sim_offset = wp.offsets.clean_offset(data.get("sim_offset"))
     wp.sim_comp_order = [str(k) for k in (data.get("sim_comp_order") or [])]
+    wp.look_bars = [dict(b) for b in (data.get("look_bars") or []) if isinstance(b, dict)]
     # Set tracks only now: restoring objects re-syncs camera tracks, and a sync
     # that runs before the camera objects exist drops their cam_<id> keys.
     wp.extra_tracks = loaded_tracks
@@ -970,6 +972,7 @@ def new_project():
     wp.sim_camera = None
     wp.sim_offset = None
     wp.sim_comp_order = []
+    wp.look_bars = []
     if hasattr(wp, "reset_document"):
         wp.reset_document()
     else:

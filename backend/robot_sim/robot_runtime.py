@@ -1217,7 +1217,13 @@ def set_track_object(on=None, name=None, pick=None, added=None, offset=None, pos
     if added is not None:
         if added and not _track.get("added") and hasattr(wp, "note_component"):
             wp.note_component("sim", "track")
+        was = bool(_track.get("added"))
         _track["added"] = bool(added)
+        if was != _track["added"] and hasattr(wp, "sync_camera_tracks"):
+            try:
+                wp.sync_camera_tracks()
+            except Exception:
+                pass
     if _track.get("on") and _track.get("pin_pos") is None:
         try:
             p, _ = get_sim_cursor_pose()
@@ -3390,7 +3396,7 @@ def get_selected_props():
         out.update({
             "kind": "sim",
             "id": "sim",
-            "name": "Sim EE",
+            "name": getattr(wp, "SIM_CURSOR_NAME", "Sim cursor"),
             "editable": True,
             "ik": [float(v) for v in ik],
             "q": [float(v) for v in q],

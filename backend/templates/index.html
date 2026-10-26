@@ -2141,6 +2141,8 @@
     </div>
   </div>
   <script>
+    // Sim Bot / Sim EE hierarchy is built but off for now (see simulatorview.SIM_BOT_ENABLED).
+    var SIM_BOT_ENABLED = false;
     const CORE_TRACKS = [
       { id: "arm", name: "Arm", simple: true },
       { id: "dio00", name: "T_DI/O_00", simple: false },
@@ -2681,7 +2683,8 @@
         nm.className = "tl-label-name";
         nm.textContent = vis[i].name;
         d.appendChild(nm);
-        if (vis[i].custom) {
+        // The Look At track follows its component; remove the component instead.
+        if (vis[i].custom && vis[i].id !== "look_sim") {
           const del = document.createElement("button");
           del.type = "button";
           del.className = "tl-del-track";
@@ -2986,6 +2989,43 @@
           }
         });
       }
+
+      vis.forEach((tr, row) => {
+        if (tr.id !== "look_sim") return;
+        // Look At bars (rebuilt on bake): one per run of spans aimed at the same target.
+        const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+        (window.__lookBars || []).forEach((bar) => {
+          if (bar.t0 == null || bar.t1 == null) return;
+          const x0 = timeToX(Number(bar.t0));
+          const x1 = timeToX(Number(bar.t1));
+          const bx = Math.min(x0, x1);
+          const bw = Math.max(18, Math.abs(x1 - x0));
+          const by = cy - 11;
+          const bh = 22;
+          const rad = 6;
+          ctx.fillStyle = "#7aa2ff";
+          ctx.globalAlpha = 0.55;
+          ctx.beginPath();
+          ctx.moveTo(bx + rad, by);
+          ctx.arcTo(bx + bw, by, bx + bw, by + bh, rad);
+          ctx.arcTo(bx + bw, by + bh, bx, by + bh, rad);
+          ctx.arcTo(bx, by + bh, bx, by, rad);
+          ctx.arcTo(bx, by, bx + bw, by, rad);
+          ctx.closePath();
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(bx, by, bw, bh);
+          ctx.clip();
+          ctx.fillStyle = "#f2f2f2";
+          ctx.font = "10px Segoe UI, sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          ctx.fillText(bar.name || "target", bx + 6, cy);
+          ctx.restore();
+        });
+      });
 
       vis.forEach((tr, row) => {
         if (!tr.custom || !tr.keys || !tr.keys.length) return;
@@ -5058,8 +5098,10 @@
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
       const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
-      // Built-ins: Sim Bot (robot base) with Sim EE (the sim cursor) under it.
-      const objRows = [{ id: "sim_bot", name: "Sim Bot" }, { id: "sim_cursor", name: "Sim EE", parent_id: "sim_bot" }].concat(d.scene_objects || []);
+      // Built-ins. With SIM_BOT_ENABLED: Sim Bot (robot base) with Sim EE (the sim cursor) under it.
+      const objRows = (SIM_BOT_ENABLED
+        ? [{ id: "sim_bot", name: "Sim Bot" }, { id: "sim_cursor", name: "Sim EE", parent_id: "sim_bot" }]
+        : [{ id: "sim_cursor", name: "Sim cursor" }]).concat(d.scene_objects || []);
       const builtIn = (id) => id === "sim_cursor" || id === "sim_bot";
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
@@ -5082,7 +5124,7 @@
       });
       const byParent = {};
       objRows.forEach((o) => {
-        const p = o.id === "sim_bot" ? "" : (o.parent_id || "");
+        const p = (o.id === "sim_bot" || (o.id === "sim_cursor" && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
         if (!byParent[p]) byParent[p] = [];
         byParent[p].push(o);
       });
@@ -5467,14 +5509,14 @@
           "<div class='sub'><button type='button'>Add waypoint ▸</button>" +
           "<div class='sub-menu'>" +
           "<button data-act='wp-real'>Real cursor</button>" +
-          "<button data-act='wp-sim'>Sim EE</button>" +
+          "<button data-act='wp-sim'>Sim cursor</button>" +
           "</div></div>";
       } else {
         ptCtx.innerHTML =
           "<div class='sub'><button type='button'>Add saved point ▸</button>" +
           "<div class='sub-menu'>" +
           "<button data-act='pose-real'>Real cursor</button>" +
-          "<button data-act='pose-sim'>Sim EE</button>" +
+          "<button data-act='pose-sim'>Sim cursor</button>" +
           "</div></div>";
       }
       placePtCtx(e);
@@ -5682,6 +5724,7 @@
         if (realBtn2) realBtn2.disabled = true;
       }
       window.__lastObject = d.object || {};
+      if (Array.isArray(d.look_bars)) window.__lookBars = d.look_bars;
       if (Array.isArray(d.sim_poses)) applySimPoses(d.sim_poses);
       else if (Array.isArray(d.pose_markers) && d.pose_markers.length) applySimPoses(d.pose_markers);
       fillHierarchy(d);
@@ -5694,7 +5737,7 @@
         allCams.unshift({
           id: "sim",
           kind: "sim",
-          name: "Sim EE",
+          name: SIM_BOT_ENABLED ? "Sim EE" : "Sim cursor",
           camera: simCam,
           cam_type: simCam.type || "sim",
         });

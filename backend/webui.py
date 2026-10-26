@@ -304,6 +304,7 @@ def _build_status_heavy():
         st["playhead_t"] = 0.0
     st["scene_objects"] = _scene_objects_payload()
     st["sim_camera"] = getattr(wp, "sim_camera", None)
+    st["look_bars"] = list(getattr(wp, "look_bars", None) or [])
     st["cam_view"] = _cam_view_payload()
     st["selected_obj_ids"] = list(getattr(wp, "selected_obj_ids", None) or [])
     st["selected_wp_idxs"] = list(getattr(wp, "selected_wp_idxs", None) or [])
@@ -404,6 +405,7 @@ def api_status():
         "playhead": heavy.get("playhead_t"),
         "scene_objects": _scene_objects_payload(),
         "sim_camera": getattr(wp, "sim_camera", None),
+        "look_bars": list(getattr(wp, "look_bars", None) or []),
         "cam_view": heavy.get("cam_view") or {},
         "selected_obj_ids": heavy.get("selected_obj_ids") or [],
         "selected_wp_idxs": heavy.get("selected_wp_idxs") or [],
@@ -994,6 +996,9 @@ def api_tracks():
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         wp.extra_tracks = data.get("tracks") or []
+        # Camera and Look At tracks follow their components, not the client list.
+        if hasattr(wp, "sync_camera_tracks"):
+            wp.sync_camera_tracks()
     return jsonify({"ok": True, "tracks": list(getattr(wp, "extra_tracks", None) or [])})
 
 

@@ -79,7 +79,7 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
 
 ### 3D objects
 
-- The simulated robot appears as the **sim cursor** (**Sim EE** in the hierarchy) — the draggable handle that stands in for the real arm's end effector. It sits under **Sim Bot**, the robot base, shown as a large blue marker at the origin. Both are built in and cannot be deleted, renamed or re-parented; other objects can be parented to either.
+- The simulated robot appears as the **sim cursor** — the draggable handle that stands in for the real arm's end effector.
 - Add simple primitives, or import custom **`.stl`** meshes to build a simulation environment around the robot.
 - Add advanced objects such as **cameras**, to reproduce a real camera's position in the simulated world.
 - **Parent hierarchy.** Objects can be parented to one another so a child moves with its parent. This is how you bind objects to the end effector — an EE-parented camera, for example, follows every move the arm makes.
@@ -271,6 +271,8 @@ Move the target object in the simulator and the arm's orientation follows it, so
 > Tracking is computed from the target's position **before** baking. The arm does not follow a moving target during a run yet — live tracking is in progress.
 
 The aiming point sits at the **Pos offset** (cursor-local) and the cursor is turned by the **Rot offset** after aiming. **copy offset component values** fills both fields once from the cursor's Offset component, so that the Offset frame is what aims at the target (for example a lens or tool tip mounted off-centre). It is a one-time copy: later Offset edits don't change Look At. A red warning appears, and the button is disabled, while the Offset component is missing or switched off. Waypoints added from the cursor keep the Look At values they were added with.
+
+Adding Look At also adds a **Look At** track to the timeline. On each bake it shows a bar, labelled with the target, over every stretch of the path that is aimed at a target (a span is aimed when either of its waypoints has Look At on). Stretches with no target stay empty. The bars only change when you bake.
 
 ### Offset
 
