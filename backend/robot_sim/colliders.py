@@ -495,14 +495,32 @@ def _owners():
     return out
 
 
+def _ancestors(owner):
+    """Owners above this one in the hierarchy; the sim cursor is "sim"."""
+    out = set()
+    obj = _sv()._find_object(owner) if owner != "sim" else None
+    while obj is not None:
+        pid = str(obj.get("parent_id") or "")
+        if not pid or pid in out:
+            break
+        pid = _norm_owner(pid)
+        out.add(pid)
+        obj = None if pid == "sim" else _sv()._find_object(pid)
+    return out
+
+
 def find_contacts():
     """Pairs of owners whose colliders overlap. Boxes of the same owner never
-    count against each other."""
+    count against each other, and neither do a parent and its children (a
+    tool mounted on the cursor would otherwise always touch the wrist)."""
     shapes = {o: _owner_shapes(o) for o in _owners()}
     owners = [o for o in shapes if shapes[o]]
+    above = {o: _ancestors(o) for o in owners}
     pairs = set()
     for i, a in enumerate(owners):
         for b in owners[i + 1:]:
+            if a in above[b] or b in above[a]:
+                continue
             hit = False
             for sa in shapes[a]:
                 for sb in shapes[b]:
