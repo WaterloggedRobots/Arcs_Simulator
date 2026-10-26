@@ -27,6 +27,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
   - [Camera](#camera)
   - [Look At](#look-at)
   - [Offset](#offset)
+  - [Collider](#collider)
 - [Miscellaneous features](#miscellaneous-features)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
@@ -279,6 +280,17 @@ Adding Look At also adds a **Look At** track to the timeline. On each bake it sh
 The **Offset component** can be added to any 3D object and to the sim cursor. It adds a yellow, waypoint-like frame fixed to its owner, shown only while the owner is selected. Click the yellow sphere, or click the Offset panel in Properties, to get its move/rotate gizmo (click the owner again to get the owner's gizmo back; deselecting hides it). It never joins the waypoint list or the path.
 
 The properties panel shows its **local** position and rotation relative to the owner's origin; edit them there or with the gizmo. New offsets start 10 cm along the owner's local z axis. Offsets are saved with the project and covered by undo for scene objects.
+
+### Collider
+
+The **Collider component** can be added to any 3D object and to the sim cursor.
+
+- **Sim cursor:** the collider covers the whole sim robot in the shape of its URDF (one convex hull per link). Its shape and size can't be changed; **Margin** (default 0 m) makes it thicker.
+- **Other objects:** the component holds a list of collider boxes. Each box has a shape (**Cube** or **Sphere**), a position and rotation relative to the object, and a size in meters (a diameter for spheres). The size does not follow the object's scale. A new box starts wrapped around the object as it is at that moment. Use **+** to add a box and the **−** at the top right of a box to delete it; several boxes on one object make a custom shape. Rotation has the same Quat/Euler and rad/deg toggles as Offset.
+- **Green outlines** of the boxes (or of the robot hull) show only while you click the Collider panel. Selecting the object again hides them. Collider boxes can't be moved in the 3D view yet.
+- **During a simulation**, when colliders of two different objects touch, both models turn red. Boxes of the same object never count against each other. If either object has **stop simulation if collide** ticked, the simulation pauses (same as the Pause button) when the contact starts; Resume plays on while they stay touching.
+
+Colliders are saved with the project and covered by undo for scene objects.
 
 Components in the properties panel are listed in the order they were added, newest at the bottom.
 

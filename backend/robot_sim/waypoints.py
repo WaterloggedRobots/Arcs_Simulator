@@ -42,6 +42,7 @@ _pose_markers = {}
 show_pose_markers = True
 sim_camera = None
 sim_offset = None  # sim cursor Offset component (see offsets.py)
+sim_collider = None  # sim cursor Collider component (see colliders.py)
 sim_comp_order = []  # sim cursor components, oldest first
 look_bars = []  # Look At timeline bars [{t0, t1, name}], rebuilt on bake
 list_vis = {"obj": True, "wp": True, "pose": True, "track": True}
@@ -529,6 +530,7 @@ def _snapshot():
             "local_wxyz": np.array(o.get("local_wxyz", o.get("wxyz", [1, 0, 0, 0])), copy=True),
             "camera": None if not o.get("camera") else dict(o.get("camera")),
             "offset": offsets.clean_offset(o.get("offset")),
+            "collider": colliders.clean_collider(o.get("collider")),
             "comp_order": list(o.get("comp_order") or []),
             "mesh_path": o.get("mesh_path"),
         })
@@ -598,8 +600,10 @@ def _restore_objects_snapshot(doc):
         selected_obj_id = doc.get("selected_obj_id")
         for o, rec in zip(scene_objects, want):
             o["offset"] = offsets.clean_offset(rec.get("offset"))
+            o["collider"] = colliders.clean_collider(rec.get("collider"))
             o["comp_order"] = list(rec.get("comp_order") or [])
         offsets.refresh_offset_viz()
+        colliders.on_selection_changed()
         return
     try:
         simulatorview.clear_scene_objects()
@@ -611,6 +615,7 @@ def _restore_objects_snapshot(doc):
         except Exception as e:
             print("undo restore object failed", e)
     offsets.refresh_offset_viz()
+    colliders.on_selection_changed()
     sel = doc.get("selected_obj_id")
     if sel and simulatorview._find_object(sel) is not None:
         selected_obj_id = sel
@@ -2944,6 +2949,7 @@ def deselect_all():
     except Exception:
         pass
     offsets.on_selection_changed()
+    colliders.on_selection_changed()
 
 
 def _remove_wp_handles(wp):
@@ -3379,6 +3385,7 @@ def _apply_selection_viz():
                 pass
     simulatorview._update_measure_line()
     offsets.on_selection_changed()
+    colliders.on_selection_changed()
 
 
 def wp_server_ready():
@@ -3523,3 +3530,4 @@ def set_item_visible(kind, oid, on=None):
 # its functions here as wp.<name>.
 import simulatorview  # noqa: E402,F401
 import offsets  # noqa: E402
+import colliders  # noqa: E402

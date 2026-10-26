@@ -391,6 +391,10 @@ def start_viewer():
             except Exception as e:
                 _report_tick_error("tick_offsets", e)
             try:
+                wp.colliders.tick_colliders()
+            except Exception as e:
+                _report_tick_error("tick_colliders", e)
+            try:
                 t_win = playhead_t
                 st = rr.sim_status() if hasattr(rr, "sim_status") else {}
                 rt = rr.real_path_status() if hasattr(rr, "real_path_status") else {}

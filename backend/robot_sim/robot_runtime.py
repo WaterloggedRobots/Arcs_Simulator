@@ -3424,6 +3424,7 @@ def get_selected_props():
             "track": track_status(),
             "camera": dict(getattr(wp, "sim_camera", None) or {}) if getattr(wp, "sim_camera", None) else None,
             "offset": wp.offsets.offset_status("sim") if hasattr(wp, "offsets") else {"added": False},
+            "collider": wp.colliders.collider_status("sim") if hasattr(wp, "colliders") else {"added": False},
             "comp_order": list(getattr(wp, "sim_comp_order", None) or []),
         })
         return out
