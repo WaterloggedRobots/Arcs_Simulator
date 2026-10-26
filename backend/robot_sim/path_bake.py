@@ -346,26 +346,93 @@ def _segment_curve_pts(i):
     return _dense_cubic(p1, p2, c1, c2)
 
 
+def _track_on(rec):
+    return bool(rec and rec.get("on") and rec.get("name"))
+
+
+def _same_track(a, b):
+    if str(a.get("name") or "").strip().lower() != str(b.get("name") or "").strip().lower():
+        return False
+    for key in ("offset", "pos_offset"):
+        va = np.asarray(a.get(key) or [0.0, 0.0, 0.0], dtype=float).reshape(-1)[:3]
+        vb = np.asarray(b.get(key) or [0.0, 0.0, 0.0], dtype=float).reshape(-1)[:3]
+        if not np.allclose(va, vb, atol=1e-6):
+            return False
+    return True
+
+
 def _track_spec_for_seg(i):
+    """Look At for span i, only when both of its waypoints aim at the same
+    target with the same offsets; any other span keeps its normal rotation."""
     wps = wp.waypoints
-    for j in (i, i + 1):
-        if 0 <= j < len(wps):
-            rec = wps[j].get("track_object") or {}
-            if rec.get("on") and rec.get("name"):
-                return rec
+    if not (0 <= i and i + 1 < len(wps)):
+        return None
+    a = wps[i].get("track_object") or {}
+    b = wps[i + 1].get("track_object") or {}
+    if _track_on(a) and _track_on(b) and _same_track(a, b):
+        return a
     return None
 
 
+def _quat_angle(q1, q2):
+    q1 = np.asarray(q1, dtype=float).reshape(4)
+    q2 = np.asarray(q2, dtype=float).reshape(4)
+    n = np.linalg.norm(q1) * np.linalg.norm(q2)
+    if n < 1e-12:
+        return np.pi
+    return 2.0 * np.arccos(min(1.0, abs(float(np.dot(q1, q2))) / n))
+
+
+_INFER_TOL = np.radians(1.0)
+
+
+def _infer_track(w, offsets):
+    """Target name whose Look At reproduces the waypoint's saved rotation."""
+    if w.get("pos") is None or w.get("wxyz") is None:
+        return None
+    best = None
+    for obj in getattr(wp, "scene_objects", None) or []:
+        name = obj.get("name")
+        if not name:
+            continue
+        for off, pos_off in offsets:
+            aim = rr.look_at_wxyz_offset(w["pos"], name, off, pos_off)
+            if aim is None:
+                continue
+            ang = _quat_angle(aim, w["wxyz"])
+            if ang < _INFER_TOL and (best is None or ang < best[0]):
+                best = (ang, name, off, pos_off)
+    return best
+
+
 def _fill_missing_track_records():
-    """Waypoints that never recorded Look At (added before it was saved per
-    waypoint) take the cursor's current Look At, so a rebake aims them and
-    draws their bars. Waypoints with any record, even off, are left alone."""
-    rec = rr.waypoint_track_record() if hasattr(rr, "waypoint_track_record") else None
-    if not rec or not rec.get("on"):
+    """Rebuild Look At for waypoints that never saved it (added before it was
+    stored per waypoint) from their own rotation: a waypoint whose rotation
+    is exactly the Look At aim at some object gets that object as its target.
+    Records that point at the wrong object for the saved rotation, while it
+    matches another object exactly, are corrected the same way."""
+    if not hasattr(rr, "look_at_wxyz_offset"):
         return
+    cur = rr.track_status() if hasattr(rr, "track_status") else {}
+    cur_off = (list((cur or {}).get("offset") or [0.0, 0.0, 0.0]),
+               list((cur or {}).get("pos_offset") or [0.0, 0.0, 0.0]))
     for w in wp.waypoints:
-        if w.get("track_object") is None:
-            w["track_object"] = dict(rec)
+        rec = w.get("track_object")
+        if rec is not None and not _track_on(rec):
+            continue
+        offsets = [cur_off]
+        if rec:
+            own = (list(rec.get("offset") or [0.0, 0.0, 0.0]), list(rec.get("pos_offset") or [0.0, 0.0, 0.0]))
+            aim = rr.look_at_wxyz_offset(w.get("pos"), rec.get("name"), own[0], own[1]) if w.get("pos") is not None else None
+            if aim is not None and w.get("wxyz") is not None and _quat_angle(aim, w["wxyz"]) < _INFER_TOL:
+                continue
+            offsets = [own, cur_off]
+        hit = _infer_track(w, offsets)
+        if hit is None:
+            continue
+        _, name, off, pos_off = hit
+        w["track_object"] = {"on": True, "added": True, "name": name,
+                             "offset": list(off), "pos_offset": list(pos_off)}
 
 
 def _aim_samples_at_track(i, samples):
