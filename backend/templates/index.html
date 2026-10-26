@@ -5632,6 +5632,14 @@
           if (!cur || cur.indexOf(":" + d.viser_port) < 0) ifr.src = url;
         }
       }
+      // The page can load before the backend has its project; pick the name
+      // up from polling, but only when the backend's name changes so a local
+      // rename is not overwritten.
+      if (d.doc_title && d.doc_title !== window.__lastDocTitle) {
+        window.__lastDocTitle = d.doc_title;
+        const el = document.getElementById("docTitle");
+        if (el && !el.classList.contains("editing")) setDocTitle(d.doc_title);
+      }
       if (Array.isArray(d.tracks) && tracksSyncing === 0) {
         const same = d.tracks.length === extraTracks.length &&
           d.tracks.every((tr, i) => extraTracks[i] &&

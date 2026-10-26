@@ -406,6 +406,7 @@ def api_status():
         "scene_objects": _scene_objects_payload(),
         "sim_camera": getattr(wp, "sim_camera", None),
         "look_bars": list(getattr(wp, "look_bars", None) or []),
+        "doc_title": fman.SESSION.get("title"),
         "cam_view": heavy.get("cam_view") or {},
         "selected_obj_ids": heavy.get("selected_obj_ids") or [],
         "selected_wp_idxs": heavy.get("selected_wp_idxs") or [],
