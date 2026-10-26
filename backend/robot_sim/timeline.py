@@ -957,7 +957,12 @@ def _timeline_payload_body():
                 "speed": None if hop is None else hop.get("speed"),
                 "limit": None if hop is None else hop.get("limit"),
             })
-    if not samples and bake.baked_points:
+    # Frozen bake points are a fallback for loads that carry no segment
+    # samples. When segments exist they own the frames: the points keep their
+    # bake-time t, so after a diamond drag the old end time showed up as a
+    # frame from nowhere on spans with no interior frames.
+    has_seg_samples = any(len(seg.get("samples") or []) >= 2 for seg in bake.segments)
+    if not samples and not has_seg_samples and bake.baked_points:
         for i, p in enumerate(bake.baked_points):
             t = float(p.get("t") or 0.0)
             if round(t, 3) in key_times:
