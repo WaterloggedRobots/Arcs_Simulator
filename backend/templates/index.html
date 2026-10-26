@@ -2047,6 +2047,7 @@
             <div class="track-row">
               <input id="trackName" type="text" placeholder="object name">
               <button type="button" id="trackPickBtn" title="Pick in viewer">○</button>
+              <button type="button" id="trackPrimaryBtn" title="select primary target">🎯</button>
               <div id="trackPoseMenu" class="pose-menu" hidden></div>
             </div>
             <div id="trackErr" class="track-err" hidden>no valid tracking target.</div>
@@ -5131,6 +5132,12 @@
     if (holdLinEl) holdLinEl.addEventListener("change", saveCtrlSettings);
     const trackPickBtn = document.getElementById("trackPickBtn");
     if (trackPickBtn) trackPickBtn.onclick = () => postTrack({ pick: true, added: true });
+    const trackPrimaryBtn = document.getElementById("trackPrimaryBtn");
+    if (trackPrimaryBtn) trackPrimaryBtn.onclick = () => {
+      // Look At follows the camera script's primary target (red sphere).
+      if (trackNameEl) trackNameEl.value = "Primary target";
+      postTrack({ name: "Primary target", added: true, pick: false });
+    };
     const trackPoseBtn = document.getElementById("trackPoseBtn");
     const trackPoseMenu = document.getElementById("trackPoseMenu");
     if (trackPoseBtn && trackPoseMenu) {
@@ -5412,9 +5419,16 @@
       }
       const tracked = document.getElementById("hierTracked");
       const tc = document.getElementById("trackCount");
-      if (tc) tc.textContent = "(0)";
-      if (tracked && !tracked.dataset.ready) {
-        tracked.innerHTML = "<div class='hier-row muted'>No tracked points</div>";
+      // Targets from OpenCV camera scripts; the server sends primary targets first.
+      const trackRows = d.tracked_points || [];
+      if (tc) tc.textContent = "(" + trackRows.length + ")";
+      if (tracked) {
+        tracked.innerHTML = trackRows.map((t) => {
+          const p = t.pos || [0, 0, 0];
+          const xyz = p.map((v) => Number(v).toFixed(3)).join(", ");
+          const dot = "<span style='display:inline-block;width:" + (t.primary ? 10 : 7) + "px;height:" + (t.primary ? 10 : 7) + "px;border-radius:50%;margin-right:6px;vertical-align:middle;background:" + (t.primary ? "#e62828" : "#ffdc28") + "'></span>";
+          return "<div class='hier-row' data-tid='" + t.id + "' title='" + xyz + "'><span class='hier-label'>" + dot + (t.name || t.id) + "</span></div>";
+        }).join("") || "<div class='hier-row muted'>No tracked points</div>";
       }
     }
     document.getElementById("hierPanel").addEventListener("click", (e) => {

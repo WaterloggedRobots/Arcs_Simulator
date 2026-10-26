@@ -1063,7 +1063,9 @@ def snap_to_parent_offset(oid):
     return True
 
 
-_cam_track_handles = []
+_cam_track_handles = []  # [(handle, is_primary)]
+_cam_targets = {}  # camera id -> world-space targets from its script
+_last_primary = None
 _cam_cv_mod = {}
 _cam_frame_jpeg = {}
 _cam_cv_thread = None
@@ -1309,61 +1311,176 @@ def _pixel_to_cam(x, y, d, w, h, hfov_deg, vfov_deg):
     return np.array([z * np.tan(hf * 0.5) * nx, z * np.tan(vf * 0.5) * ny, -z], dtype=float)
 
 
-def _update_cam_tracks(obj, tracks, frame_wh):
+def _script_point(rec):
+    """One [x, y, z] from a camera script, or None."""
+    if rec is None:
+        return None
+    try:
+        arr = np.asarray(rec, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if arr.size < 3 or not np.all(np.isfinite(arr[:3])):
+        return None
+    return arr[:3]
+
+
+def _script_point_list(recs):
+    out = []
+    if recs is None:
+        return out
+    try:
+        arr = np.asarray(recs, dtype=float)
+        if arr.ndim == 1 and arr.size == 3:
+            recs = [arr]
+    except Exception:
+        pass
+    try:
+        items = list(recs)
+    except Exception:
+        return out
+    for rec in items:
+        pt = _script_point(rec)
+        if pt is not None:
+            out.append(pt)
+    return out
+
+
+def _cam_point_to_world(obj, pt, frame_wh, space):
+    """Script point -> world xyz.
+
+    space "pixel" (default, same as tracked_cam_pos): [x_px, y_px, depth_m].
+    space "camera": metres in the OpenCV camera frame (x right, y down, z forward).
+    space "world": already world metres.
+    """
+    space = str(space or "pixel").lower()
+    if space == "world":
+        return np.asarray(pt, dtype=float).reshape(3)
+    cam = obj.get("camera") or {}
+    cpos = np.asarray(obj.get("pos"), dtype=float).reshape(3)
+    cq = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
+    if space in ("camera", "cam", "m", "metric"):
+        local = np.array([float(pt[0]), -float(pt[1]), -float(pt[2])], dtype=float)
+        if float(pt[2]) <= 0:
+            return None
+    else:
+        x, y, d = float(pt[0]), float(pt[1]), float(pt[2])
+        if d <= 0:
+            return None
+        w, hgt = frame_wh
+        local = _pixel_to_cam(x, y, d, w, hgt, cam.get("hfov") or 90, cam.get("vfov") or 60)
+    return cpos + _qrot(cq, local)
+
+
+def _update_cam_tracks(obj, primary, targets, frame_wh, space=None):
+    """Store one camera's script targets in world space (drawn by _render_cam_targets)."""
+    try:
+        np.asarray(obj.get("pos"), dtype=float).reshape(3)
+    except Exception:
+        return None
+    prim = None
+    if primary is not None:
+        try:
+            prim = _cam_point_to_world(obj, primary, frame_wh, space)
+        except Exception:
+            prim = None
+    pts = []
+    for rec in targets or []:
+        try:
+            world = _cam_point_to_world(obj, rec, frame_wh, space)
+        except Exception:
+            world = None
+        if world is not None:
+            pts.append(world)
+    return {
+        "cam_id": obj.get("id"),
+        "cam_name": str(obj.get("name") or obj.get("id") or "camera"),
+        "primary": prim,
+        "targets": pts,
+    }
+
+
+def cam_target_list():
+    """Rows for the Tracked Points list; primary targets always first."""
+    recs = [r for r in list(_cam_targets.values()) if r]
+    multi = len(recs) > 1
+    prim_rows, rows = [], []
+    for rec in recs:
+        lead = (rec.get("cam_name") + ": ") if multi else ""
+        p = rec.get("primary")
+        if p is not None:
+            prim_rows.append({
+                "id": "%s:primary" % rec.get("cam_id"),
+                "name": lead + "Primary target",
+                "primary": True,
+                "cam_id": rec.get("cam_id"),
+                "pos": [float(v) for v in p],
+            })
+        for i, t in enumerate(rec.get("targets") or []):
+            rows.append({
+                "id": "%s:%d" % (rec.get("cam_id"), i),
+                "name": lead + "Target %d" % (i + 1),
+                "primary": False,
+                "cam_id": rec.get("cam_id"),
+                "pos": [float(v) for v in t],
+            })
+    return prim_rows + rows
+
+
+def primary_target_pos():
+    """World xyz of the first camera's primary target; last seen one while it drops out."""
+    global _last_primary
+    for rec in list(_cam_targets.values()):
+        p = (rec or {}).get("primary")
+        if p is not None:
+            _last_primary = np.asarray(p, dtype=float).reshape(3).copy()
+            return _last_primary.copy()
+    return None if _last_primary is None else _last_primary.copy()
+
+
+def _render_cam_targets():
+    """Big red spheres for primary targets, small yellow ones for the rest."""
     global _cam_track_handles
     if wp.server is None:
         return
-    pts = []
-    w, hgt = frame_wh
-    cam = obj.get("camera") or {}
-    try:
-        cpos = np.asarray(obj.get("pos"), dtype=float).reshape(3)
-        cq = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
-    except Exception:
-        return
-    for rec in list(tracks or []):
-        if rec is None:
-            continue
-        try:
-            x, y, d = float(rec[0]), float(rec[1]), float(rec[2])
-        except Exception:
-            continue
-        if d <= 0:
-            continue
-        local = _pixel_to_cam(x, y, d, w, hgt, cam.get("hfov") or 90, cam.get("vfov") or 60)
-        world = cpos + _qrot(cq, local)
-        pts.append(world)
-    while len(_cam_track_handles) > len(pts):
-        h = _cam_track_handles.pop()
+    shown = bool((getattr(wp, "list_vis", None) or {}).get("track", True))
+    want = []
+    for row in cam_target_list():
+        want.append((bool(row["primary"]), tuple(row["pos"])))
+    if not shown:
+        want = []
+    while len(_cam_track_handles) > len(want):
+        h, _ = _cam_track_handles.pop()
         try:
             h.remove()
         except Exception:
             pass
-    for i, world in enumerate(pts):
-        pos = tuple(float(v) for v in world)
+    for i, (prim, pos) in enumerate(want):
         if i < len(_cam_track_handles):
-            try:
-                _cam_track_handles[i].position = pos
-                continue
-            except Exception:
+            h, was_prim = _cam_track_handles[i]
+            if was_prim == prim:
                 try:
-                    _cam_track_handles[i].remove()
+                    h.position = pos
+                    continue
                 except Exception:
                     pass
-                _cam_track_handles[i] = None
+            try:
+                h.remove()
+            except Exception:
+                pass
         try:
             h = wp.server.scene.add_icosphere(
                 name="/cam_track/%d" % i,
-                radius=0.02,
-                color=(255, 220, 40),
+                radius=0.035 if prim else 0.02,
+                color=(230, 40, 40) if prim else (255, 220, 40),
                 position=pos,
             )
-            if i < len(_cam_track_handles):
-                _cam_track_handles[i] = h
-            else:
-                _cam_track_handles.append(h)
         except Exception as e:
             print("cam track sphere failed", e)
+            continue
+        if i < len(_cam_track_handles):
+            _cam_track_handles[i] = (h, prim)
+        else:
+            _cam_track_handles.append((h, prim))
 
 
 def refresh_sim_camera_viz():
@@ -1577,8 +1694,10 @@ def _resolve_cv_script(cam):
 
 
 def _tick_cv_cameras():
+    global _cam_targets
     import cv2
     _tick_sony_cameras()
+    seen = {}
     for obj in list(wp.scene_objects):
         cam = obj.get("camera") or {}
         if not cam or cam.get("enabled", True) is False:
@@ -1646,8 +1765,18 @@ def _tick_cv_cameras():
                     cam["_jpeg_logged"] = True
         elif err:
             cam["error"] = err
-        tracks = list(getattr(mod, "tracked_cam_pos", None) or [])
-        _update_cam_tracks(obj, tracks, (w, hgt))
+        # primary_target = [x, y, z]; targets = [[x, y, z], ...]. Older scripts
+        # only set tracked_cam_pos, which is read as plain targets.
+        primary = _script_point(getattr(mod, "primary_target", None))
+        if hasattr(mod, "targets"):
+            targets = _script_point_list(getattr(mod, "targets", None))
+        else:
+            targets = _script_point_list(getattr(mod, "tracked_cam_pos", None))
+        rec = _update_cam_tracks(obj, primary, targets, (w, hgt), getattr(mod, "target_space", None))
+        if rec is not None:
+            seen[obj["id"]] = rec
+    _cam_targets = seen  # swap whole dict; the Flask thread reads it
+    _render_cam_targets()
 
 
 def _ensure_cv_thread():

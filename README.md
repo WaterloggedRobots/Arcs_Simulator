@@ -263,6 +263,15 @@ Camera recording controls:
 - A **manual override toggle** records or stops independently of the timeline keyframes.
 - Explicit **start record** and **stop record** buttons.
 
+#### Script targets
+
+An OpenCV camera script can publish targets as module variables, read every frame:
+
+- `primary_target = [x, y, z]` — shown as a large red sphere.
+- `targets = [[x, y, z], ...]` — shown as small yellow spheres.
+
+By default each point is `[x_px, y_px, depth_m]` in the camera image, the same format as the older `tracked_cam_pos` (which is still read as `targets` when a script has no `targets`). Set `target_space = "camera"` for metres in the OpenCV camera frame (x right, y down, z forward), or `"world"` for world metres. All points are listed in the **Tracked Points** tab of the hierarchy, primary target first; its eye button hides the spheres.
+
 ### Look At
 
 *(Formerly "Tracker" / "Track Object".)* Given a target, the sim cursor keeps **looking at** a designated object — both while you drag it by hand and along the path segments it generates. Combined with an OpenCV camera, the arm can track and centre real targets as well as simulated ones *(in progress)*.
@@ -272,6 +281,8 @@ Move the target object in the simulator and the arm's orientation follows it, so
 > Tracking is computed from the target's position **before** baking. The arm does not follow a moving target during a run yet — live tracking is in progress.
 
 The aiming point sits at the **Pos offset** (cursor-local) and the cursor is turned by the **Rot offset** after aiming. **copy offset component values** fills both fields once from the cursor's Offset component, so that the Offset frame is what aims at the target (for example a lens or tool tip mounted off-centre). It is a one-time copy: later Offset edits don't change Look At. A red warning appears, and the button is disabled, while the Offset component is missing or switched off. Waypoints added from the cursor keep the Look At values they were added with.
+
+**🎯 select primary target** (right of the pick button) makes Look At follow the OpenCV camera script's primary target (the big red sphere) instead of an object. The sim cursor re-aims live as the target moves; if the script loses the target for a frame, it keeps aiming at the last place it was seen.
 
 Adding Look At also adds a **Look At** track to the timeline. On each bake it shows a bar, labelled with the target, over every stretch of the path that is aimed at a target (a span is aimed when either of its waypoints has Look At on). Stretches with no target stay empty. The bars only change when you bake.
 

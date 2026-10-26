@@ -422,6 +422,7 @@ def api_status():
         "item_vis": getattr(wp, "item_vis", {}) or {},
         "list_vis": getattr(wp, "list_vis", {}) or {},
         "merged_points": wp.list_merged_points() if hasattr(wp, "list_merged_points") else [],
+        "tracked_points": wp.cam_target_list() if hasattr(wp, "cam_target_list") else [],
         "gizmo_space": getattr(wp, "gizmo_space", "local"),
         "hide_robot": rr.hide_real_robot_status() if hasattr(rr, "hide_real_robot_status") else {},
         "show_viewer_samples": bool(getattr(bake, "show_viewer_samples", True)),
