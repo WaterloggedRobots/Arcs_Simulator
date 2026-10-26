@@ -711,10 +711,10 @@
       width: 28px; min-width: 28px; margin: 0; padding: 0;
       background: #3a3b44; font-size: 14px;
     }
-    #trackWrap.simple .mode-simple { color: #e39a3c !important; }
-    #trackWrap.advanced .mode-advanced { color: #7aa2ff !important; }
-    #trackToggle { background: #141518 !important; position: relative; z-index: 2; pointer-events: auto; }
-    #trackToggle.advanced { background: #3d6ebd !important; }
+    #trackWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #trackWrap.advanced .mode-advanced { color: #4aa3ff !important; }
+    #trackToggle { background: #8a8a92 !important; position: relative; z-index: 2; pointer-events: auto; }
+    #trackToggle.advanced { background: #4aa3ff !important; }
     #camWrap.simple .mode-simple { color: #8a8a92 !important; }
     #camWrap.advanced .mode-advanced { color: #4aa3ff !important; }
     #camEnable { background: #8a8a92 !important; }
@@ -729,6 +729,20 @@
     #offsetWrap.advanced .mode-advanced { color: #4aa3ff !important; }
     #offsetEnable { background: #8a8a92 !important; }
     #offsetEnable.advanced { background: #4aa3ff !important; }
+    #colliderWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #colliderWrap.advanced .mode-advanced { color: #4aa3ff !important; }
+    #colliderEnable { background: #8a8a92 !important; }
+    #colliderEnable.advanced { background: #4aa3ff !important; }
+    .col-stop { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; font-size: 12px; cursor: pointer; }
+    .col-stop[hidden] { display: none; }
+    .col-note { font-size: 12px; color: #9a9aa2; margin: 4px 0; }
+    .col-entry { position: relative; border: 1px solid #3a3b44; border-radius: 6px; padding: 6px 8px 8px; margin-top: 8px; }
+    .col-entry.hit { border-color: #e64a4a; }
+    .col-entry-head { display: grid; grid-template-columns: auto 1fr; gap: 6px; align-items: center; padding-right: 30px; font-size: 12px; }
+    .col-entry-head select { width: 100%; background: #1c1d21; color: #e8e8ea; border: 1px solid #111; border-radius: 6px; padding: 4px; }
+    .col-entry .col-del { position: absolute; top: 4px; right: 4px; width: 24px; min-width: 24px; height: 24px; margin: 0; padding: 0; background: #3a3b44; font-size: 16px; line-height: 1; }
+    .col-entry .col-del:hover { background: #6a3a3a; }
+    .col-entry .row[hidden] { display: none !important; }
     .track-xyz input { font-size: 14px; }
     #trackName { background: #1c1d21; color: var(--text); border: 1px solid #111; border-radius: 6px; padding: 6px 8px; width: 100%; }
     #moveRobotPose { margin-bottom: 28px; }
@@ -2100,11 +2114,48 @@
               <label>rz</label><input id="offRz" type="number" step="0.001" value="0">
             </div>
           </div>
+          <hr id="colliderSep" hidden>
+          <div id="colliderComp" class="track-comp" hidden>
+            <div class="track-head">
+              <span>Collider</span>
+              <div class="track-head-right">
+                <div class="tl-mode advanced" id="colliderWrap" title="Enable collider">
+                  <span class="mode-simple">Off</span>
+                  <button type="button" class="slide advanced" id="colliderEnable"></button>
+                  <span class="mode-advanced">On</span>
+                </div>
+                <button type="button" id="colliderTrash" class="track-trash" title="Remove component">🗑</button>
+              </div>
+            </div>
+            <label class="col-stop"><input id="colliderStop" type="checkbox"> stop simulation if collide</label>
+            <label class="col-stop" id="colIgnoreRow" hidden><input id="colliderIgnoreParent" type="checkbox"> ignore parent collider</label>
+            <div id="colRobot" hidden>
+              <div class="col-note">Covers the whole robot in the shape of its URDF.</div>
+              <div class="row name-row"><label>Margin</label><input id="colMargin" type="number" step="0.001" min="0" value="0"></div>
+            </div>
+            <div id="colObj" hidden>
+              <div class="row rot-tools">
+                <div class="fk-units euler deg" id="colRotWrap">
+                  <span class="mode-rad">Quat</span>
+                  <button type="button" class="slide advanced" id="colRotMode" title="Quaternion / Euler"></button>
+                  <span class="mode-deg">Euler</span>
+                </div>
+                <div class="fk-units rad" id="colUnitWrap">
+                  <span class="mode-rad">rad</span>
+                  <button type="button" class="slide" id="colUnits" title="rad / deg"></button>
+                  <span class="mode-deg">deg</span>
+                </div>
+              </div>
+              <div id="colList"></div>
+              <button type="button" id="colAddItem" class="use-offset-btn" title="Add a collider box">+</button>
+            </div>
+          </div>
           <button type="button" id="simExtraAdd" class="sim-extra-add" title="Add">+</button>
           <div id="compMenu" class="kf-menu" hidden>
             <button type="button" data-comp="track">Look At</button>
             <button type="button" data-comp="camera">Camera</button>
             <button type="button" data-comp="offset">Offset</button>
+            <button type="button" data-comp="collider">Collider</button>
           </div>
       </aside>
     </div>
@@ -4482,9 +4533,10 @@
         camera: ["camProps"],
         track: ["trackSep", "trackComp"],
         offset: ["offsetSep", "offsetComp"],
+        collider: ["colliderSep", "colliderComp"],
       };
       const seen = [];
-      ((obj && obj.comp_order) || []).concat(["camera", "track", "offset"]).forEach((k) => {
+      ((obj && obj.comp_order) || []).concat(["camera", "track", "offset", "collider"]).forEach((k) => {
         if (groups[k] && seen.indexOf(k) < 0) seen.push(k);
       });
       const want = [];
@@ -4496,6 +4548,7 @@
     }
     function renderOffsetComp(obj) {
       orderComps(obj);
+      renderColliderComp(obj);
       const box = document.getElementById("offsetComp");
       const sep = document.getElementById("offsetSep");
       const off = (obj && obj.offset) || {};
@@ -4621,6 +4674,184 @@
         body: JSON.stringify({ id: obj.id, snap_parent_offset: true }),
       }).then(() => setTimeout(refresh, 80));
     };
+    // Collider component: one robot-shaped collider on the sim cursor (margin
+    // only), or a list of cube / sphere boxes on a scene object.
+    let colRotEuler = true;
+    function colEntryHtml(i) {
+      const num = (f, v) => "<input data-f='" + f + "' type='number' step='0.001' value='" + v + "'>";
+      return "<div class='col-entry' data-ci='" + i + "'>" +
+        "<div class='col-entry-head'><span>Collider " + (i + 1) + "</span>" +
+        "<select data-f='shape'><option value='cube'>Cube</option><option value='sphere'>Sphere</option></select></div>" +
+        "<button type='button' class='col-del' title='Delete this collider'>−</button>" +
+        "<label class='field tight'>Position</label>" +
+        "<div class='row triple'><label>x</label>" + num("p0", 0) + "<label>y</label>" + num("p1", 0) + "<label>z</label>" + num("p2", 0) + "</div>" +
+        "<label class='field tight'>Rotation</label>" +
+        "<div class='row quad rot-line' data-row='quat'><label>w</label>" + num("q0", 1) + "<label>x</label>" + num("q1", 0) + "<label>y</label>" + num("q2", 0) + "<label>z</label>" + num("q3", 0) + "</div>" +
+        "<div class='row triple rot-line' data-row='euler'><label>rx</label>" + num("e0", 0) + "<label>ry</label>" + num("e1", 0) + "<label>rz</label>" + num("e2", 0) + "</div>" +
+        "<label class='field tight' data-lab='size'>Size</label>" +
+        "<div class='row triple' data-row='size3'><label>x</label>" + num("s0", 0.1) + "<label>y</label>" + num("s1", 0.1) + "<label>z</label>" + num("s2", 0.1) + "</div>" +
+        "<div class='row name-row' data-row='size1'><label>d</label>" + num("d", 0.1) + "</div>" +
+        "</div>";
+    }
+    function setColVal(entry, f, v, digits) {
+      const el = entry.querySelector("[data-f='" + f + "']");
+      if (el && document.activeElement !== el) el.value = Number(v || 0).toFixed(digits);
+    }
+    function renderColliderComp(obj) {
+      const box = document.getElementById("colliderComp");
+      const sep = document.getElementById("colliderSep");
+      const col = (obj && obj.collider) || {};
+      const kinds = ["sim", "empty", "sphere", "cube", "camera", "mesh", "import"];
+      const show = !!(obj && kinds.indexOf(obj.kind) >= 0 && col.added);
+      if (box) box.hidden = !show;
+      if (sep) sep.hidden = !show;
+      if (!show) return;
+      const on = col.enabled !== false;
+      const en = document.getElementById("colliderEnable");
+      const wrap = document.getElementById("colliderWrap");
+      if (en) en.classList.toggle("advanced", on);
+      if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+      const stop = document.getElementById("colliderStop");
+      if (stop) stop.checked = !!col.stop;
+      const robot = !!col.robot;
+      const igRow = document.getElementById("colIgnoreRow");
+      if (igRow) igRow.hidden = robot || !col.has_parent;
+      const ig = document.getElementById("colliderIgnoreParent");
+      if (ig) ig.checked = !!col.ignore_parent;
+      const rb = document.getElementById("colRobot");
+      const ob = document.getElementById("colObj");
+      if (rb) rb.hidden = !robot;
+      if (ob) ob.hidden = robot;
+      if (robot) {
+        const m = document.getElementById("colMargin");
+        if (m && document.activeElement !== m) m.value = Number(col.margin || 0).toFixed(4);
+        return;
+      }
+      const items = col.items || [];
+      const list = document.getElementById("colList");
+      if (!list) return;
+      // Rebuild only when the count changes, so typing in a field keeps focus.
+      if (list.children.length !== items.length) {
+        list.innerHTML = items.map((_, i) => colEntryHtml(i)).join("");
+      }
+      items.forEach((it, i) => {
+        const entry = list.children[i];
+        if (!entry) return;
+        const sphere = it.shape === "sphere";
+        const sel = entry.querySelector("[data-f='shape']");
+        if (sel && document.activeElement !== sel) sel.value = sphere ? "sphere" : "cube";
+        const p = it.pos || [0, 0, 0];
+        [0, 1, 2].forEach((k) => setColVal(entry, "p" + k, p[k], 4));
+        const q = it.wxyz || [1, 0, 0, 0];
+        [0, 1, 2, 3].forEach((k) => setColVal(entry, "q" + k, q[k], 4));
+        const eu = quatToEuler(Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3]));
+        [0, 1, 2].forEach((k) => setColVal(entry, "e" + k, fkDeg ? rad2deg(eu[k]) : eu[k], fkDeg ? 2 : 4));
+        const sc = it.scale || [0.1, 0.1, 0.1];
+        [0, 1, 2].forEach((k) => setColVal(entry, "s" + k, sc[k], 4));
+        setColVal(entry, "d", Math.max(sc[0], sc[1], sc[2]), 4);
+        entry.querySelector("[data-row='quat']").hidden = !!colRotEuler;
+        entry.querySelector("[data-row='euler']").hidden = !colRotEuler;
+        entry.querySelector("[data-row='size3']").hidden = sphere;
+        entry.querySelector("[data-row='size1']").hidden = !sphere;
+        const lab = entry.querySelector("[data-lab='size']");
+        if (lab) lab.textContent = sphere ? "Diameter" : "Size";
+        entry.classList.toggle("hit", !!col.hit);
+      });
+      const rm = document.getElementById("colRotMode");
+      const rw = document.getElementById("colRotWrap");
+      if (rm) rm.classList.toggle("advanced", !!colRotEuler);
+      if (rw) { rw.classList.toggle("deg", !!colRotEuler); rw.classList.toggle("rad", !colRotEuler); }
+      const cu = document.getElementById("colUnits");
+      const uw = document.getElementById("colUnitWrap");
+      if (cu) { cu.classList.toggle("deg", fkDeg); cu.classList.toggle("advanced", fkDeg); }
+      if (uw) { uw.classList.toggle("deg", fkDeg); uw.classList.toggle("rad", !fkDeg); }
+    }
+    function postCollider(payload) {
+      const obj = window.__lastObject || {};
+      const body = Object.assign({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id }, payload || {});
+      return fetch("/api/collider", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json()).then((d) => {
+        if (d && d.collider && window.__lastObject) window.__lastObject.collider = d.collider;
+        setTimeout(refresh, 80);
+        return d;
+      });
+    }
+    function sendColliderItem(entry) {
+      const i = Number(entry.getAttribute("data-ci"));
+      const val = (f) => parseFloat((entry.querySelector("[data-f='" + f + "']") || {}).value || "0");
+      const shape = (entry.querySelector("[data-f='shape']") || {}).value || "cube";
+      const pos = [val("p0"), val("p1"), val("p2")];
+      let wxyz;
+      if (colRotEuler) {
+        const eu = [val("e0"), val("e1"), val("e2")].map((v) => (fkDeg ? deg2rad(v) : v));
+        wxyz = eulerToQuat(eu[0], eu[1], eu[2]);
+      } else {
+        wxyz = [val("q0"), val("q1"), val("q2"), val("q3")];
+      }
+      const d = val("d");
+      const scale = shape === "sphere" ? [d, d, d] : [val("s0"), val("s1"), val("s2")];
+      postCollider({ act: "item", index: i, shape: shape, pos: pos, wxyz: wxyz, scale: scale });
+    }
+    const colListEl = document.getElementById("colList");
+    if (colListEl) {
+      colListEl.addEventListener("change", (e) => {
+        const entry = e.target.closest(".col-entry");
+        if (!entry) return;
+        if (e.target.getAttribute("data-f") === "shape") {
+          // Switching shape keeps the box where it is; the server sizes the sphere.
+          postCollider({ act: "item", index: Number(entry.getAttribute("data-ci")), shape: e.target.value });
+          return;
+        }
+        sendColliderItem(entry);
+      });
+      colListEl.addEventListener("click", (e) => {
+        const del = e.target.closest(".col-del");
+        if (!del) return;
+        const entry = del.closest(".col-entry");
+        if (!entry) return;
+        postCollider({ act: "remove_item", index: Number(entry.getAttribute("data-ci")) });
+      });
+    }
+    const colAddItem = document.getElementById("colAddItem");
+    if (colAddItem) colAddItem.onclick = () => postCollider({ act: "add_item" });
+    const colRotModeBtn = document.getElementById("colRotMode");
+    if (colRotModeBtn) colRotModeBtn.onclick = () => { colRotEuler = !colRotEuler; refresh(); };
+    const colUnitsBtn = document.getElementById("colUnits");
+    if (colUnitsBtn) colUnitsBtn.onclick = () => { fkDeg = !fkDeg; refresh(); };
+    const colMargin = document.getElementById("colMargin");
+    if (colMargin) colMargin.addEventListener("change", () => {
+      postCollider({ act: "update", margin: Math.max(0, parseFloat(colMargin.value || "0") || 0) });
+    });
+    const colliderStop = document.getElementById("colliderStop");
+    if (colliderStop) colliderStop.addEventListener("change", () => postCollider({ act: "update", stop: colliderStop.checked }));
+    const colliderIgnoreParent = document.getElementById("colliderIgnoreParent");
+    if (colliderIgnoreParent) colliderIgnoreParent.addEventListener("change", () => postCollider({ act: "update", ignore_parent: colliderIgnoreParent.checked }));
+    const colliderEnable = document.getElementById("colliderEnable");
+    if (colliderEnable) {
+      colliderEnable.onclick = () => {
+        const on = !colliderEnable.classList.contains("advanced");
+        colliderEnable.classList.toggle("advanced", on);
+        const wrap = document.getElementById("colliderWrap");
+        if (wrap) { wrap.classList.toggle("simple", !on); wrap.classList.toggle("advanced", on); }
+        postCollider({ act: "update", enabled: on });
+      };
+    }
+    const colliderCompEl = document.getElementById("colliderComp");
+    if (colliderCompEl) colliderCompEl.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#colliderWrap") || e.target.closest("#colliderTrash")) return;
+      // Clicking the panel shows the green outlines (like clicking the object hides them).
+      const obj = window.__lastObject || {};
+      fetch("/api/collider", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id, act: "edit" }),
+      });
+    });
+    const colliderTrash = document.getElementById("colliderTrash");
+    if (colliderTrash) colliderTrash.onclick = () => postCollider({ act: "remove" });
     function sendPrim() {
       let wxyz;
       if (primRotEuler) {
@@ -4790,10 +5021,11 @@
         const hasCam = !!(obj.camera);
         const hasTrack = !!(obj.track && obj.track.added);
         const hasOffset = !!(obj.offset && obj.offset.added);
+        const hasCollider = !!(obj.collider && obj.collider.added);
         compMenu.querySelectorAll("[data-comp]").forEach((b) => {
           const k = b.getAttribute("data-comp");
-          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint") || (k === "offset" && obj.kind === "waypoint");
-          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset);
+          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint") || ((k === "offset" || k === "collider") && obj.kind === "waypoint");
+          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset) || (k === "collider" && hasCollider);
           b.disabled = !!taken;
           b.style.opacity = taken ? "0.4" : "";
           b.style.pointerEvents = taken ? "none" : "";
@@ -4823,6 +5055,9 @@
         }
         if (btn.getAttribute("data-comp") === "offset") {
           postOffset({ act: "add" }).catch(() => {});
+        }
+        if (btn.getAttribute("data-comp") === "collider") {
+          postCollider({ act: "add" }).catch(() => {});
         }
         if (btn.getAttribute("data-comp") === "camera") {
           const obj = window.__lastObject || {};
@@ -5714,7 +5949,8 @@
         (spdFail ? (" over " + spdFail) : "") +
         (spdPend ? (" pend " + spdPend) : "") +
         (b.baking ? "  baking…" : "") +
-        (d.viewer_ready ? "" : "  viewer not ready");
+        (d.viewer_ready ? "" : "  viewer not ready") +
+        (window.__colNote && simState.active && simState.paused ? "  · " + window.__colNote : "");
       if (d.snap_to_grid != null && !window.__snapLocal && snapToGrid !== !!d.snap_to_grid) {
         snapToGrid = !!d.snap_to_grid;
         const sb = document.getElementById("tlSnapBtn");
@@ -7605,10 +7841,20 @@
         const r = await fetch("/api/clock");
         const d = await r.json();
         const simWas = !!simState.active;
+        const col = d.collision || {};
+        if (typeof col.pause_seq === "number") {
+          // The server paused the sim on a collision: show who hit and where it stopped.
+          if (window.__colPauseSeq != null && col.pause_seq > window.__colPauseSeq && col.paused_by) {
+            window.__colNote = "collision: " + col.paused_by.join(" ↔ ");
+            if (d.sim && typeof d.sim.t === "number") playhead = d.sim.t;
+          }
+          window.__colPauseSeq = col.pause_seq;
+        }
         if (d.sim) simState = mergeState(simState, d.sim);
         if (d.real) realState = mergeState(realState, d.real);
         if (d.sim && d.sim.active === false) simState.active = false;
         if (d.real && d.real.active === false) realState.active = false;
+        if (!(simState.active && simState.paused)) window.__colNote = null;
         if (simWas && !simState.active && !realState.active) {
           /* Sim finished on its own: the server put the ghost and its
              playhead back where play started, so match Stop here. */

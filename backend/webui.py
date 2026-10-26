@@ -449,6 +449,7 @@ def api_clock():
         "playhead": t,
         "lin_sim": lin_sim,
         "lin_real": lin_real,
+        "collision": wp.colliders.collision_status() if hasattr(wp, "colliders") else {},
         "sim": rr.sim_status() if hasattr(rr, "sim_status") else {},
         "real": rr.real_path_status() if hasattr(rr, "real_path_status") else {},
     })
@@ -1273,6 +1274,42 @@ def api_offset():
         )
     _status_dirty.set()
     return jsonify({"ok": st is not None, "offset": st or {}})
+
+
+@app.route("/api/collider", methods=["POST"])
+def api_collider():
+    """Collider component on a scene object or the sim cursor (owner "sim")."""
+    data = request.get_json(silent=True) or {}
+    owner = data.get("id") or data.get("owner")
+    if data.get("kind") == "sim" or owner in ("sim", "sim_cursor"):
+        owner = "sim"
+    if not owner:
+        owner = getattr(wp, "selected_obj_id", None)
+    if not owner:
+        return jsonify({"ok": False, "error": "no owner"})
+    act = str(data.get("act") or "update").lower()
+    if act == "add":
+        st = wp.colliders.add_collider_component(owner)
+    elif act == "edit":
+        # Collider panel clicked: show the green outlines.
+        wp.colliders.begin_collider_edit(owner)
+        st = wp.colliders.collider_status(owner)
+    else:
+        st = wp.colliders.update_collider(
+            owner,
+            act=act,
+            enabled=data.get("enabled"),
+            stop=data.get("stop"),
+            margin=data.get("margin"),
+            index=data.get("index"),
+            shape=data.get("shape"),
+            pos=data.get("pos"),
+            wxyz=data.get("wxyz"),
+            scale=data.get("scale"),
+            ignore_parent=data.get("ignore_parent"),
+        )
+    _status_dirty.set()
+    return jsonify({"ok": st is not None, "collider": st or {}})
 
 
 @app.route("/api/path_window", methods=["POST"])

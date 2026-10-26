@@ -52,7 +52,7 @@ def _doc_hash(data):
 def _doc_has_work(data):
     if not isinstance(data, dict):
         return False
-    if data.get("sim_camera") or data.get("sim_offset"):
+    if data.get("sim_camera") or data.get("sim_offset") or data.get("sim_collider"):
         return True
     for key in ("waypoints", "objects", "sim_poses", "tracks", "points"):
         val = data.get(key)
@@ -65,7 +65,7 @@ def scene_is_empty():
     n_wp = len(getattr(wp, "waypoints", None) or [])
     n_obj = len(getattr(wp, "scene_objects", None) or [])
     n_pose = len([p for p in (getattr(wp, "sim_poses", None) or []) if not p.get("builtin")])
-    cam = getattr(wp, "sim_camera", None) or getattr(wp, "sim_offset", None)
+    cam = getattr(wp, "sim_camera", None) or getattr(wp, "sim_offset", None) or getattr(wp, "sim_collider", None)
     tracks = [t for t in (getattr(wp, "extra_tracks", None) or []) if t]
     return n_wp == 0 and n_obj == 0 and n_pose == 0 and not cam and not tracks
 
@@ -220,6 +220,7 @@ def _dump_scene_objects():
             "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(-1)[:4]],
             "camera": dict(obj.get("camera") or {}) if obj.get("camera") else None,
             "offset": wp.offsets.clean_offset(obj.get("offset")),
+            "collider": wp.colliders.clean_collider(obj.get("collider")),
             "comp_order": list(obj.get("comp_order") or []),
             "mesh_path": obj.get("mesh_path") or None,
         })
@@ -375,6 +376,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
         cam = getattr(wp, "sim_camera", None)
         doc["sim_camera"] = dict(cam) if cam else None
         doc["sim_offset"] = wp.offsets.clean_offset(getattr(wp, "sim_offset", None))
+        doc["sim_collider"] = wp.colliders.clean_sim_collider(getattr(wp, "sim_collider", None))
         doc["sim_comp_order"] = list(getattr(wp, "sim_comp_order", None) or [])
         doc["look_bars"] = [dict(b) for b in (getattr(wp, "look_bars", None) or [])]
         doc["last_save_ts"] = float(SESSION.get("last_save_ts") or 0.0)
@@ -732,6 +734,7 @@ def apply_loaded_doc(data):
     else:
         wp.sim_camera = None
     wp.sim_offset = wp.offsets.clean_offset(data.get("sim_offset"))
+    wp.sim_collider = wp.colliders.clean_sim_collider(data.get("sim_collider"))
     wp.sim_comp_order = [str(k) for k in (data.get("sim_comp_order") or [])]
     wp.look_bars = [dict(b) for b in (data.get("look_bars") or []) if isinstance(b, dict)]
     # Set tracks only now: restoring objects re-syncs camera tracks, and a sync
@@ -971,6 +974,7 @@ def new_project():
     # once and a swallowed error could leave objects in the scene.
     wp.sim_camera = None
     wp.sim_offset = None
+    wp.sim_collider = None
     wp.sim_comp_order = []
     wp.look_bars = []
     if hasattr(wp, "reset_document"):

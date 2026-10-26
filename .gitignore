@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 ~$*
+user_files/paths/
+user_files/exports/

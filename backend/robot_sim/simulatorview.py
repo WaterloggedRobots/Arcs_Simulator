@@ -334,6 +334,11 @@ def _offsets():
     return offsets
 
 
+def _colliders():
+    import colliders
+    return colliders
+
+
 def _find_object(oid):
     for obj in wp.scene_objects:
         if obj.get("id") == oid:
@@ -743,6 +748,7 @@ def restore_scene_object(rec):
         "gizmo": None,
         "camera": dict((rec or {}).get("camera") or {}) if ((rec or {}).get("camera") or kind == "camera") else None,
         "offset": _offsets().clean_offset((rec or {}).get("offset")),
+        "collider": _colliders().clean_collider((rec or {}).get("collider")),
         "comp_order": [str(k) for k in ((rec or {}).get("comp_order") or [])],
         "mesh_path": str((rec or {}).get("mesh_path") or "") if _is_mesh_kind(kind) else None,
         "mesh_error": None,
@@ -792,6 +798,7 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
         "gizmo": None,
         "camera": None,
         "offset": None,
+        "collider": None,
         "comp_order": [],
         "mesh_path": str(mesh_path) if (_is_mesh_kind(kind) and mesh_path) else (str(mesh_path) if mesh_path else None),
         "mesh_error": None,
@@ -904,6 +911,10 @@ def delete_scene_object(oid):
     obj = _find_object(oid)
     if obj is None:
         return False
+    try:
+        _colliders().forget_owner(oid)
+    except Exception as e:
+        print("delete: collider cleanup failed", e)
     for key in ("gizmo", "handle", "frustum"):
         h = obj.get(key)
         if h is not None:
@@ -1017,6 +1028,7 @@ def selected_object_props():
         "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(4)],
         "camera": dict(obj.get("camera")) if obj.get("camera") else None,
         "offset": _offsets().offset_status(obj.get("id")),
+        "collider": _colliders().collider_status(obj.get("id")),
         "parent_offset": _parent_offset(obj) is not None,
         "comp_order": list(obj.get("comp_order") or []),
     }
