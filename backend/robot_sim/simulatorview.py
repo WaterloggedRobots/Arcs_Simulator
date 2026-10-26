@@ -66,10 +66,69 @@ def _qrot(q, v):
     ])
 
 
+SIM_BOT_ID = "sim_bot"
+SIM_BOT_RGB = (60, 130, 255)
+_sim_bot_viz = {}
+
+
+def sim_bot_pose():
+    """Sim Bot is the robot base: fixed at the world origin for now."""
+    return np.zeros(3, dtype=float), np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+
+def ensure_sim_bot_marker():
+    """Large blue waypoint-style marker for Sim Bot (built in, never removed)."""
+    if wp.server is None or _sim_bot_viz.get("sphere") is not None:
+        return
+    pos, q = sim_bot_pose()
+    name = "/sim_bot"
+    try:
+        sphere = wp.server.scene.add_icosphere(
+            name=name + "/sphere", radius=0.035, color=SIM_BOT_RGB,
+            position=tuple(float(v) for v in pos), wxyz=tuple(float(v) for v in q))
+    except Exception as e:
+        print("sim bot marker failed", e)
+        return
+    _sim_bot_viz["sphere"] = sphere
+    _sim_bot_viz["arrow"] = wp.add_forward_arrow(name, length=0.16, colors=SIM_BOT_RGB, pos=pos, wxyz=q)
+    _sim_bot_viz["side"] = wp.add_side_arrow(name, length=0.07, colors=SIM_BOT_RGB, pos=pos, wxyz=q)
+
+    @sphere.on_click
+    def _(_e=None):
+        mode = "add" if wp._select_ctrl else "replace"
+        select_scene_object(SIM_BOT_ID, mode=mode)
+
+
+def set_sim_bot_visible(on):
+    for h in _sim_bot_viz.values():
+        try:
+            h.visible = bool(on)
+        except Exception:
+            pass
+
+
+def sim_bot_props():
+    pos, q = sim_bot_pose()
+    return {
+        "kind": "bot",
+        "id": SIM_BOT_ID,
+        "name": "Sim Bot",
+        "editable": False,
+        "pos": [float(v) for v in pos],
+        "wxyz": [float(v) for v in q],
+        "scale": [1.0, 1.0, 1.0],
+        "parent_id": None,
+        "space": "world",
+    }
+
+
 def _obj_parent(obj):
     pid = (obj or {}).get("parent_id")
     if not pid:
         return None
+    if str(pid) == SIM_BOT_ID:
+        pos, q = sim_bot_pose()
+        return {"id": SIM_BOT_ID, "pos": pos, "wxyz": q, "parent_id": None}
     if str(pid) == "sim_cursor":
         try:
             import robot_runtime as rr
@@ -153,6 +212,8 @@ def reparent_object(oid, parent_id=None):
 
 
 def _item_pos(kind, key):
+    if kind == "bot":
+        return sim_bot_pose()[0]
     if kind == "sim":
         try:
             import robot_runtime as rr
@@ -601,7 +662,7 @@ def sync_camera_tracks():
     """One extra timeline track per camera component; id cam_<oid>."""
     cams = [o for o in wp.scene_objects if o.get("camera")]
     if wp.sim_camera:
-        cams = [{"id": "sim", "name": "Sim cursor", "camera": wp.sim_camera}] + list(cams)
+        cams = [{"id": "sim", "name": "Sim EE", "camera": wp.sim_camera}] + list(cams)
     ids = {str(o.get("id")) for o in cams}
     kept = []
     seen = set()
@@ -750,6 +811,8 @@ def select_scene_object(oid, mode="replace"):
     wp._obj_select_hold = _t.time() + 1.5
     if str(oid) == "sim_cursor":
         return wp.select_item("sim", None, mode=mode)
+    if str(oid) == SIM_BOT_ID:
+        return wp.select_item("bot", None, mode=mode)
     obj = _find_object(oid)
     if obj is None:
         return False
@@ -1599,7 +1662,7 @@ def set_camera_click(oid, u, v):
 def camera_status():
     cams = [o for o in wp.scene_objects if o.get("camera") and (o.get("camera") or {}).get("enabled", True)]
     if wp.sim_camera and wp.sim_camera.get("enabled", True):
-        cams = [{"id": "sim", "name": "Sim cursor", "camera": wp.sim_camera}] + cams
+        cams = [{"id": "sim", "name": "Sim EE", "camera": wp.sim_camera}] + cams
     if not cams:
         return {"active": False}
     obj = None

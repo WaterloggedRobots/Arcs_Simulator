@@ -252,8 +252,7 @@ def start_viewer():
                                     "added": True,
                                     "name": st.get("name") or "",
                                     "offset": list(st.get("offset") or [0.0, 0.0, 0.0]),
-                                    "use_offset": bool(st.get("use_offset")),
-                                    "offset_xform": wp.offsets.clean_offset(getattr(wp, "sim_offset", None)),
+                                    "pos_offset": list(st.get("pos_offset") or [0.0, 0.0, 0.0]),
                                 }
                 except Exception as e:
                     print("add_waypoint failed:", e)
@@ -396,6 +395,7 @@ def start_viewer():
                     _report_tick_error(_tick, e)
             try:
                 wp.offsets.tick_offsets()
+                wp.ensure_sim_bot_marker()
             except Exception as e:
                 _report_tick_error("tick_offsets", e)
             try:

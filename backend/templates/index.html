@@ -456,6 +456,10 @@
     .props .reset-btn svg { width: 14px; height: 14px; color: #d8d8dc; }
     .props .reset-btn:hover { background: #4a4b55; }
     .props .row.snap-row { grid-template-columns: 1fr; }
+    .props.is-bot .reset-btn,
+    .props.is-bot #primScaleBlock,
+    .props.is-bot #objSpaceWrap,
+    .props.is-bot #primSnapRow { display: none !important; }
     .props .row.snap-row[hidden] { display: none; }
     #primSnapOffset { width: 100%; margin: 0; background: #3a3b44; }
     .props .row.rot-line input { min-width: 0; width: 100%; }
@@ -720,8 +724,7 @@
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
     .track-err { color: #e05555; font-size: 12px; margin-top: 4px; }
     .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
-    #trackRotRow input:disabled { opacity: 0.45; }
-    .use-offset-btn.on { background: #3d6ebd; color: #fff; }
+    .use-offset-btn:disabled { opacity: 0.45; cursor: default; }
     #offsetWrap.simple .mode-simple { color: #8a8a92 !important; }
     #offsetWrap.advanced .mode-advanced { color: #4aa3ff !important; }
     #offsetEnable { background: #8a8a92 !important; }
@@ -2038,13 +2041,19 @@
               <label>y</label><input id="trackY" type="number" step="0.001" readonly>
               <label>z</label><input id="trackZ" type="number" step="0.001" readonly>
             </div>
+            <label class="field tight">Pos offset</label>
+            <div class="row triple" id="trackPosRow">
+              <label>x</label><input id="trackPx" type="number" step="0.001" value="0">
+              <label>y</label><input id="trackPy" type="number" step="0.001" value="0">
+              <label>z</label><input id="trackPz" type="number" step="0.001" value="0">
+            </div>
             <label class="field tight">Rot offset</label>
             <div class="row triple" id="trackRotRow">
               <label>rx</label><input id="trackRx" type="number" step="0.001" value="0">
               <label>ry</label><input id="trackRy" type="number" step="0.001" value="0">
               <label>rz</label><input id="trackRz" type="number" step="0.001" value="0">
             </div>
-            <button type="button" id="trackUseOffset" class="use-offset-btn" title="Aim from this object's Offset component; the manual rot offset is ignored">Use Offset component</button>
+            <button type="button" id="trackUseOffset" class="use-offset-btn" title="Copy this object's Offset component into the pos and rot offset fields">copy offset component values</button>
             <div id="trackOffErr" class="track-err" hidden></div>
           </div>
           <hr id="offsetSep" hidden>
@@ -4163,7 +4172,9 @@
       const primBody = document.getElementById("primBody");
       const name = document.getElementById("propName");
       const panel = document.getElementById("propsPanel");
-      const isPrim = !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import"));
+      const isBot = !!(obj && obj.kind === "bot");
+      panel.classList.toggle("is-bot", isBot);
+      const isPrim = isBot || !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import"));
       const moveBtn = document.getElementById("moveRobotPose");
       const extraAdd = document.getElementById("simExtraAdd");
       const isSim = !!(obj && obj.kind === "sim");
@@ -4191,7 +4202,7 @@
       if (isPrim) {
         body.hidden = true;
         if (primBody) primBody.hidden = false;
-        if (extraAdd) extraAdd.classList.add("show");
+        if (extraAdd) extraAdd.classList.toggle("show", !isBot);
         const tcP = document.getElementById("trackComp");
         const tsP = document.getElementById("trackSep");
         if (tcP) tcP.hidden = true;
@@ -4391,22 +4402,25 @@
           el.value = (tp[i] == null || !isFinite(Number(tp[i]))) ? "" : Number(tp[i]).toFixed(4);
         });
         const off = track.offset || [0, 0, 0];
-        const useOff = !!track.use_offset;
         ["trackRx", "trackRy", "trackRz"].forEach((id, i) => {
           const el = document.getElementById(id);
-          if (!el) return;
-          el.disabled = useOff;
-          if (document.activeElement === el) return;
+          if (!el || document.activeElement === el) return;
           let v = Number(off[i] || 0);
           if (fkDeg) v = rad2deg(v);
           el.value = Number(v).toFixed(fkDeg ? 2 : 4);
         });
+        const poff = track.pos_offset || [0, 0, 0];
+        ["trackPx", "trackPy", "trackPz"].forEach((id, i) => {
+          const el = document.getElementById(id);
+          if (el && document.activeElement !== el) el.value = Number(poff[i] || 0).toFixed(4);
+        });
+        const offOk = (track.offset_state || "missing") === "ok";
         const ub = document.getElementById("trackUseOffset");
-        if (ub) ub.classList.toggle("on", useOff);
+        if (ub) ub.disabled = !offOk;
         const oe = document.getElementById("trackOffErr");
         if (oe) {
           const st = track.offset_state || "missing";
-          oe.hidden = !(useOff && st !== "ok");
+          oe.hidden = st === "ok";
           oe.textContent = st === "disabled"
             ? "Offset component is not enabled on this object."
             : "This object has no Offset component.";
@@ -4704,8 +4718,11 @@
         return fkDeg ? deg2rad(v) : v;
       });
     }
+    function trackPosOffset() {
+      return ["trackPx", "trackPy", "trackPz"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
+    }
     function postTrack(payload, opts) {
-      payload = Object.assign({ offset: trackOffsetRad() }, payload || {});
+      payload = Object.assign({ offset: trackOffsetRad(), pos_offset: trackPosOffset() }, payload || {});
       if (window._propKind === "waypoint" && window._propIndex != null) payload.index = window._propIndex;
       return fetch("/api/track_object", {
         method: "POST",
@@ -4822,7 +4839,7 @@
     if (trackNameEl) trackNameEl.addEventListener("change", () => {
       postTrack({ name: trackNameEl.value, added: true });
     });
-    ["trackRx", "trackRy", "trackRz"].forEach((id) => {
+    ["trackRx", "trackRy", "trackRz", "trackPx", "trackPy", "trackPz"].forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
       el.addEventListener("change", () => postTrack({ added: true, on: trackToggle && trackToggle.classList.contains("advanced") }));
@@ -4830,9 +4847,8 @@
     const trackUseOffset = document.getElementById("trackUseOffset");
     if (trackUseOffset) trackUseOffset.onclick = (e) => {
       e.preventDefault();
-      const on = !trackUseOffset.classList.contains("on");
-      trackUseOffset.classList.toggle("on", on);
-      postTrack({ added: true, use_offset: on });
+      if (trackUseOffset.disabled) return;
+      postTrack({ added: true, copy_offset: true });
     };
     const trackTrash = document.getElementById("trackTrash");
     if (trackTrash) trackTrash.onclick = () => { window.__trackAdded = false; postTrack({ added: false, on: false }); };
@@ -5042,7 +5058,9 @@
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
       const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
-      const objRows = [{ id: "sim_cursor", name: "Sim cursor" }].concat(d.scene_objects || []);
+      // Built-ins: Sim Bot (robot base) with Sim EE (the sim cursor) under it.
+      const objRows = [{ id: "sim_bot", name: "Sim Bot" }, { id: "sim_cursor", name: "Sim EE", parent_id: "sim_bot" }].concat(d.scene_objects || []);
+      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot";
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
       function eyeOn(kind, id) {
@@ -5064,7 +5082,7 @@
       });
       const byParent = {};
       objRows.forEach((o) => {
-        const p = o.id === "sim_cursor" ? "" : (o.parent_id || "");
+        const p = o.id === "sim_bot" ? "" : (o.parent_id || "");
         if (!byParent[p]) byParent[p] = [];
         byParent[p].push(o);
       });
@@ -5072,7 +5090,7 @@
         return (byParent[pid] || []).map((o) => {
           const pad = 8 + depth * 14;
           const mark = (o.parent_id ? "↳ " : "");
-          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (o.id !== "sim_cursor" ? "true" : "false") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
+          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
         }).join("");
       }
       let tree = walk("", 0);
@@ -5138,7 +5156,7 @@
       const row = e.target.closest("[data-oid]");
       if (!row) return;
       const oid = row.getAttribute("data-oid");
-      if (!oid || oid === "sim_cursor") return;
+      if (!oid || oid === "sim_cursor" || oid === "sim_bot") return;
       e.preventDefault();
       e.stopPropagation();
       const label = row.querySelector(".hier-label") || row.querySelector("span:not(.hier-eye)");
@@ -5203,7 +5221,7 @@
       let dragId = null;
       list.addEventListener("dragstart", (e) => {
         const row = e.target.closest("[data-oid]");
-        if (!row || row.getAttribute("data-oid") === "sim_cursor") { e.preventDefault(); return; }
+        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot") { e.preventDefault(); return; }
         dragId = row.getAttribute("data-oid");
         e.dataTransfer.setData("text/plain", dragId);
       });
@@ -5449,14 +5467,14 @@
           "<div class='sub'><button type='button'>Add waypoint ▸</button>" +
           "<div class='sub-menu'>" +
           "<button data-act='wp-real'>Real cursor</button>" +
-          "<button data-act='wp-sim'>Sim cursor</button>" +
+          "<button data-act='wp-sim'>Sim EE</button>" +
           "</div></div>";
       } else {
         ptCtx.innerHTML =
           "<div class='sub'><button type='button'>Add saved point ▸</button>" +
           "<div class='sub-menu'>" +
           "<button data-act='pose-real'>Real cursor</button>" +
-          "<button data-act='pose-sim'>Sim cursor</button>" +
+          "<button data-act='pose-sim'>Sim EE</button>" +
           "</div></div>";
       }
       placePtCtx(e);
@@ -5676,7 +5694,7 @@
         allCams.unshift({
           id: "sim",
           kind: "sim",
-          name: "Sim cursor",
+          name: "Sim EE",
           camera: simCam,
           cam_type: simCam.type || "sim",
         });

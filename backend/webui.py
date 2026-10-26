@@ -1226,7 +1226,8 @@ def api_track_object():
             pick=data.get("pick"),
             added=data.get("added"),
             offset=data.get("offset"),
-            use_offset=data.get("use_offset"),
+            pos_offset=data.get("pos_offset"),
+            copy_offset=data.get("copy_offset"),
         ) or {}
     return jsonify({"ok": True, "track": st})
 
@@ -1257,9 +1258,6 @@ def api_offset():
             wxyz=data.get("wxyz"),
             remove=(act == "remove"),
         )
-    if owner == "sim" and hasattr(rr, "set_track_object"):
-        # Look At in offset mode re-aims when the offset changes.
-        rr.set_track_object()
     _status_dirty.set()
     return jsonify({"ok": st is not None, "offset": st or {}})
 

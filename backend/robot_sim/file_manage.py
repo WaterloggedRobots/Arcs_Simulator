@@ -787,7 +787,7 @@ def _sim_track_record():
         "name": str(tr.get("name") or ""),
         "added": bool(tr.get("added")),
         "offset": [float(v) for v in list(tr.get("offset") or [0.0, 0.0, 0.0])[:3]],
-        "use_offset": bool(tr.get("use_offset")),
+        "pos_offset": [float(v) for v in list(tr.get("pos_offset") or [0.0, 0.0, 0.0])[:3]],
     }
 
 
@@ -800,10 +800,10 @@ def _restore_sim_track(rec):
                 pick=False,
                 added=bool(rec.get("added", True)),
                 offset=rec.get("offset"),
-                use_offset=bool(rec.get("use_offset")),
+                pos_offset=rec.get("pos_offset") or [0.0, 0.0, 0.0],
             )
         else:
-            rr.set_track_object(on=False, name="", pick=False, added=False, use_offset=False)
+            rr.set_track_object(on=False, name="", pick=False, added=False, offset=[0.0, 0.0, 0.0], pos_offset=[0.0, 0.0, 0.0])
     except Exception as e:
         print("restore track failed:", e)
 
@@ -980,7 +980,7 @@ def new_project():
     try:
         import robot_runtime as rr
         if hasattr(rr, "set_track_object"):
-            rr.set_track_object(on=False, name="", pick=False, added=False, use_offset=False)
+            rr.set_track_object(on=False, name="", pick=False, added=False, offset=[0.0, 0.0, 0.0], pos_offset=[0.0, 0.0, 0.0])
     except Exception as e:
         print("new: track reset failed", e)
     if hasattr(wp, "refresh_sim_camera_viz"):

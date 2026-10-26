@@ -3316,6 +3316,9 @@ def _sync_selection_globals():
         if kind == "sim":
             selected_obj_ids.append("sim_cursor")
             selection_kind = "sim"
+        elif kind == "bot":
+            selected_obj_ids.append("sim_bot")
+            selection_kind = "bot"
         elif kind == "obj":
             selected_obj_ids.append(key)
             selected_obj_id = key
@@ -3486,7 +3489,9 @@ def set_item_visible(kind, oid, on=None):
         except Exception:
             pass
     elif kind == "obj":
-        if str(oid) == "sim_cursor":
+        if str(oid) == "sim_bot":
+            simulatorview.set_sim_bot_visible(shown)
+        elif str(oid) == "sim_cursor":
             try:
                 import robot_runtime as rr
                 if rr._cursor_sim is not None:
