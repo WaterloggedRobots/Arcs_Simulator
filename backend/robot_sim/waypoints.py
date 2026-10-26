@@ -42,6 +42,7 @@ _pose_markers = {}
 show_pose_markers = True
 sim_camera = None
 sim_offset = None  # sim cursor Offset component (see offsets.py)
+sim_comp_order = []  # sim cursor components, oldest first
 list_vis = {"obj": True, "wp": True, "pose": True, "track": True}
 snap_to_grid = False
 point_order = []
@@ -527,6 +528,7 @@ def _snapshot():
             "local_wxyz": np.array(o.get("local_wxyz", o.get("wxyz", [1, 0, 0, 0])), copy=True),
             "camera": None if not o.get("camera") else dict(o.get("camera")),
             "offset": offsets.clean_offset(o.get("offset")),
+            "comp_order": list(o.get("comp_order") or []),
             "mesh_path": o.get("mesh_path"),
         })
     return {
@@ -595,6 +597,7 @@ def _restore_objects_snapshot(doc):
         selected_obj_id = doc.get("selected_obj_id")
         for o, rec in zip(scene_objects, want):
             o["offset"] = offsets.clean_offset(rec.get("offset"))
+            o["comp_order"] = list(rec.get("comp_order") or [])
         offsets.refresh_offset_viz()
         return
     try:

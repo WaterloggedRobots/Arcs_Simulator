@@ -1212,6 +1212,8 @@ def set_track_object(on=None, name=None, pick=None, added=None, offset=None, use
     if pick is not None:
         _track["pick"] = bool(pick)
     if added is not None:
+        if added and not _track.get("added") and hasattr(wp, "note_component"):
+            wp.note_component("sim", "track")
         _track["added"] = bool(added)
     if _track.get("on") and _track.get("pin_pos") is None:
         try:
@@ -1328,6 +1330,14 @@ def tick_track_object():
         except Exception:
             pass
     _draw_sim_dir(frozen)
+    # Children of the cursor follow the new heading now, not on their next move.
+    try:
+        if hasattr(wp, "_propagate_children"):
+            wp._propagate_children("sim_cursor")
+        if hasattr(wp, "refresh_sim_camera_viz"):
+            wp.refresh_sim_camera_viz()
+    except Exception:
+        pass
 
 
 def _force_sim_heading(q):
@@ -3380,6 +3390,7 @@ def get_selected_props():
             "track": track_status(),
             "camera": dict(getattr(wp, "sim_camera", None) or {}) if getattr(wp, "sim_camera", None) else None,
             "offset": wp.offsets.offset_status("sim") if hasattr(wp, "offsets") else {"added": False},
+            "comp_order": list(getattr(wp, "sim_comp_order", None) or []),
         })
         return out
     if hasattr(wp, "selected_object_props"):

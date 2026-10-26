@@ -124,6 +124,7 @@ def add_offset_component(owner):
         wp._push_history()
     if not _set_record(owner, default_offset()):
         return None
+    _sv().note_component(owner, "offset")
     refresh_offset_viz()
     return offset_status(owner)
 

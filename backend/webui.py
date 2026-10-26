@@ -1245,6 +1245,10 @@ def api_offset():
     act = str(data.get("act") or "update").lower()
     if act == "add":
         st = wp.offsets.add_offset_component(owner)
+    elif act == "edit":
+        # Offset panel clicked: same as clicking the yellow marker.
+        wp.offsets.begin_offset_edit(owner)
+        st = wp.offsets.offset_status(owner)
     else:
         st = wp.offsets.update_offset(
             owner,

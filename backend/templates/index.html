@@ -719,13 +719,13 @@
     .track-row { display: grid; grid-template-columns: 1fr 28px 28px; gap: 4px; position: relative; }
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
     .track-err { color: #e05555; font-size: 12px; margin-top: 4px; }
-    .use-offset-btn { width: 100%; margin: 6px 0 0; background: #3a3b44; }
+    .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
     #trackRotRow input:disabled { opacity: 0.45; }
     .use-offset-btn.on { background: #3d6ebd; color: #fff; }
     #offsetWrap.simple .mode-simple { color: #8a8a92 !important; }
-    #offsetWrap.advanced .mode-advanced { color: #ffd228 !important; }
+    #offsetWrap.advanced .mode-advanced { color: #4aa3ff !important; }
     #offsetEnable { background: #8a8a92 !important; }
-    #offsetEnable.advanced { background: #c9a21f !important; }
+    #offsetEnable.advanced { background: #4aa3ff !important; }
     .track-xyz input { font-size: 14px; }
     #trackName { background: #1c1d21; color: var(--text); border: 1px solid #111; border-radius: 6px; padding: 6px 8px; width: 100%; }
     #moveRobotPose { margin-bottom: 28px; }
@@ -2066,8 +2066,26 @@
               <label>y</label><input id="offY" type="number" step="0.001" value="0">
               <label>z</label><input id="offZ" type="number" step="0.001" value="0">
             </div>
-            <label class="field tight">Local rotation <span id="offRotUnit">(rad)</span></label>
-            <div class="row triple">
+            <label class="field tight">Local rotation</label>
+            <div class="row rot-tools">
+              <div class="fk-units euler deg" id="offRotWrap">
+                <span class="mode-rad">Quat</span>
+                <button type="button" class="slide advanced" id="offRotMode" title="Quaternion / Euler"></button>
+                <span class="mode-deg">Euler</span>
+              </div>
+              <div class="fk-units rad" id="offUnitWrap">
+                <span class="mode-rad">rad</span>
+                <button type="button" class="slide" id="offUnits" title="rad / deg"></button>
+                <span class="mode-deg">deg</span>
+              </div>
+            </div>
+            <div class="row quad rot-line" id="offQuatRow" hidden>
+              <label>w</label><input id="offQw" type="number" step="0.001" value="1">
+              <label>x</label><input id="offQx" type="number" step="0.001" value="0">
+              <label>y</label><input id="offQy" type="number" step="0.001" value="0">
+              <label>z</label><input id="offQz" type="number" step="0.001" value="0">
+            </div>
+            <div class="row triple rot-line" id="offEulerRow">
               <label>rx</label><input id="offRx" type="number" step="0.001" value="0">
               <label>ry</label><input id="offRy" type="number" step="0.001" value="0">
               <label>rz</label><input id="offRz" type="number" step="0.001" value="0">
@@ -4402,7 +4420,28 @@
         moveBtn.disabled = !realOn || !armed;
       }
     }
+    function orderComps(obj) {
+      // Components stack oldest first: re-append them before the + button.
+      const anchor = document.getElementById("simExtraAdd");
+      if (!anchor || !anchor.parentNode) return;
+      const groups = {
+        camera: ["camProps"],
+        track: ["trackSep", "trackComp"],
+        offset: ["offsetSep", "offsetComp"],
+      };
+      const seen = [];
+      ((obj && obj.comp_order) || []).concat(["camera", "track", "offset"]).forEach((k) => {
+        if (groups[k] && seen.indexOf(k) < 0) seen.push(k);
+      });
+      const want = [];
+      seen.forEach((k) => groups[k].forEach((id) => { const el = document.getElementById(id); if (el) want.push(el); }));
+      const have = Array.from(anchor.parentNode.children).filter((el) => want.indexOf(el) >= 0);
+      // Moving a node blurs a focused input, so only move when the order changed.
+      if (have.length === want.length && have.every((el, i) => el === want[i])) return;
+      want.forEach((el) => anchor.parentNode.insertBefore(el, anchor));
+    }
     function renderOffsetComp(obj) {
+      orderComps(obj);
       const box = document.getElementById("offsetComp");
       const sep = document.getElementById("offsetSep");
       const off = (obj && obj.offset) || {};
@@ -4422,6 +4461,10 @@
         if (el && document.activeElement !== el) el.value = Number(p[i] || 0).toFixed(4);
       });
       const q = off.wxyz || [1, 0, 0, 0];
+      ["offQw", "offQx", "offQy", "offQz"].forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = Number(q[i] || 0).toFixed(4);
+      });
       const eu = quatToEuler(Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3]));
       ["offRx", "offRy", "offRz"].forEach((id, i) => {
         const el = document.getElementById(id);
@@ -4429,9 +4472,23 @@
         const v = fkDeg ? rad2deg(eu[i]) : eu[i];
         el.value = Number(v).toFixed(fkDeg ? 2 : 4);
       });
-      const unit = document.getElementById("offRotUnit");
-      if (unit) unit.textContent = fkDeg ? "(deg)" : "(rad)";
+      const qRow = document.getElementById("offQuatRow");
+      const eRow = document.getElementById("offEulerRow");
+      if (qRow) qRow.hidden = !!offRotEuler;
+      if (eRow) eRow.hidden = !offRotEuler;
+      const rm = document.getElementById("offRotMode");
+      const rw = document.getElementById("offRotWrap");
+      if (rm) rm.classList.toggle("advanced", !!offRotEuler);
+      if (rw) {
+        rw.classList.toggle("deg", !!offRotEuler);
+        rw.classList.toggle("rad", !offRotEuler);
+      }
+      const ou = document.getElementById("offUnits");
+      const uw = document.getElementById("offUnitWrap");
+      if (ou) { ou.classList.toggle("deg", fkDeg); ou.classList.toggle("advanced", fkDeg); }
+      if (uw) { uw.classList.toggle("deg", fkDeg); uw.classList.toggle("rad", !fkDeg); }
     }
+    let offRotEuler = true;
     function postOffset(payload) {
       const obj = window.__lastObject || {};
       const body = Object.assign({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id }, payload || {});
@@ -4447,13 +4504,23 @@
     }
     function sendOffset() {
       const pos = ["offX", "offY", "offZ"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
-      const eu = ["offRx", "offRy", "offRz"].map((id) => {
-        const v = parseFloat((document.getElementById(id) || {}).value || "0");
-        return fkDeg ? deg2rad(v) : v;
-      });
-      postOffset({ act: "update", pos: pos, wxyz: eulerToQuat(eu[0], eu[1], eu[2]) });
+      let wxyz;
+      if (offRotEuler) {
+        const eu = ["offRx", "offRy", "offRz"].map((id) => {
+          const v = parseFloat((document.getElementById(id) || {}).value || "0");
+          return fkDeg ? deg2rad(v) : v;
+        });
+        wxyz = eulerToQuat(eu[0], eu[1], eu[2]);
+      } else {
+        wxyz = ["offQw", "offQx", "offQy", "offQz"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
+      }
+      postOffset({ act: "update", pos: pos, wxyz: wxyz });
     }
-    ["offX", "offY", "offZ", "offRx", "offRy", "offRz"].forEach((id) => {
+    const offRotModeBtn = document.getElementById("offRotMode");
+    if (offRotModeBtn) offRotModeBtn.onclick = () => { offRotEuler = !offRotEuler; refresh(); };
+    const offUnitsBtn = document.getElementById("offUnits");
+    if (offUnitsBtn) offUnitsBtn.onclick = () => { fkDeg = !fkDeg; refresh(); };
+    ["offX", "offY", "offZ", "offRx", "offRy", "offRz", "offQw", "offQx", "offQy", "offQz"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("change", sendOffset);
     });
@@ -4467,6 +4534,16 @@
         postOffset({ act: "update", enabled: on });
       };
     }
+    const offsetCompEl = document.getElementById("offsetComp");
+    if (offsetCompEl) offsetCompEl.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#offsetWrap") || e.target.closest("#offsetTrash")) return;
+      const obj = window.__lastObject || {};
+      fetch("/api/offset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id, act: "edit" }),
+      });
+    });
     const offsetTrash = document.getElementById("offsetTrash");
     if (offsetTrash) offsetTrash.onclick = () => postOffset({ act: "remove" });
     const primPosReset = document.getElementById("primPosReset");

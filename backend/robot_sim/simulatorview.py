@@ -241,6 +241,28 @@ def _hide_all_object_gizmos():
             pass
 
 
+def note_component(owner, key):
+    """Record that a component was added: the props panel lists components
+    oldest first, so a re-added one moves to the bottom."""
+    owner = str(owner or "")
+    if owner in ("sim", "sim_cursor"):
+        order = [k for k in (getattr(wp, "sim_comp_order", None) or []) if k != key]
+        wp.sim_comp_order = order + [key]
+        return
+    obj = _find_object(owner)
+    if obj is None:
+        return
+    obj["comp_order"] = [k for k in (obj.get("comp_order") or []) if k != key] + [key]
+
+
+def comp_order(owner):
+    owner = str(owner or "")
+    if owner in ("sim", "sim_cursor"):
+        return list(getattr(wp, "sim_comp_order", None) or [])
+    obj = _find_object(owner)
+    return [] if obj is None else list(obj.get("comp_order") or [])
+
+
 def _offsets():
     import offsets
     return offsets
@@ -643,6 +665,7 @@ def restore_scene_object(rec):
         "gizmo": None,
         "camera": dict((rec or {}).get("camera") or {}) if ((rec or {}).get("camera") or kind == "camera") else None,
         "offset": _offsets().clean_offset((rec or {}).get("offset")),
+        "comp_order": [str(k) for k in ((rec or {}).get("comp_order") or [])],
         "mesh_path": str((rec or {}).get("mesh_path") or "") if _is_mesh_kind(kind) else None,
         "mesh_error": None,
     }
@@ -691,6 +714,7 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
         "gizmo": None,
         "camera": None,
         "offset": None,
+        "comp_order": [],
         "mesh_path": str(mesh_path) if (_is_mesh_kind(kind) and mesh_path) else (str(mesh_path) if mesh_path else None),
         "mesh_error": None,
     }
@@ -834,6 +858,7 @@ def add_camera_component(oid=None):
     if oid in (None, "", "sim") or str(oid) == "sim":
         if wp.sim_camera:
             return {"id": "sim", "kind": "sim", "camera": dict(wp.sim_camera)}
+        note_component("sim", "camera")
         if not wp.sim_camera:
             wp.sim_camera = dict(cam)
         else:
@@ -861,6 +886,7 @@ def add_camera_component(oid=None):
     if obj.get("camera"):
         return selected_object_props()
     existing = obj.get("camera") if isinstance(obj.get("camera"), dict) else {}
+    note_component(obj.get("id"), "camera")
     merged = dict(cam)
     merged.update(existing or {})
     merged["enabled"] = True
@@ -910,6 +936,7 @@ def selected_object_props():
         "camera": dict(obj.get("camera")) if obj.get("camera") else None,
         "offset": _offsets().offset_status(obj.get("id")),
         "parent_offset": _parent_offset(obj) is not None,
+        "comp_order": list(obj.get("comp_order") or []),
     }
 
 

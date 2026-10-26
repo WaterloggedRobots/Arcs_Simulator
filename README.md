@@ -274,9 +274,11 @@ By default the cursor's own frame aims at the target, plus the manual **Rot offs
 
 ### Offset
 
-The **Offset component** can be added to any 3D object and to the sim cursor. It adds a yellow, waypoint-like frame fixed to its owner, shown only while the owner is selected. Click the yellow sphere to get its move/rotate gizmo (click the owner again to get the owner's gizmo back). It never joins the waypoint list or the path.
+The **Offset component** can be added to any 3D object and to the sim cursor. It adds a yellow, waypoint-like frame fixed to its owner, shown only while the owner is selected. Click the yellow sphere, or click the Offset panel in Properties, to get its move/rotate gizmo (click the owner again to get the owner's gizmo back; deselecting hides it). It never joins the waypoint list or the path.
 
 The properties panel shows its **local** position and rotation relative to the owner's origin; edit them there or with the gizmo. New offsets start 10 cm along the owner's local z axis. Offsets are saved with the project and covered by undo for scene objects.
+
+Components in the properties panel are listed in the order they were added, newest at the bottom.
 
 ---
 
