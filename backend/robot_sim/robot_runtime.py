@@ -51,7 +51,8 @@ _sim_gizmo = None
 _gizmo_serial = 0
 _sim_ik_pending = False
 _ik_lock = threading.Lock()
-_track = {"on": False, "name": "", "pick": False, "valid": False, "added": False, "offset": [0.0, 0.0, 0.0], "pos_offset": [0.0, 0.0, 0.0], "pin_pos": None}
+_track = {"on": False, "name": "", "pick": False, "valid": False, "added": False, "offset": [0.0, 0.0, 0.0], "pos_offset": [0.0, 0.0, 0.0], "pin_pos": None,
+          "tool": "", "tool_pick": False}
 _hold_sim = 0
 _start_snap_done = False
 _rpc_probe_ready = False
@@ -1290,8 +1291,51 @@ def _track_target_pos(name):
     return None
 
 
-def set_track_object(on=None, name=None, pick=None, added=None, offset=None, pos_offset=None, copy_offset=None):
+def _cursor_children():
+    """Objects parented straight to the sim cursor: the swappable EE tools."""
+    return [o for o in (getattr(wp, "scene_objects", None) or []) if str(o.get("parent_id") or "") == "sim_cursor"]
+
+
+def _tool_offsets(obj):
+    """Look At (pos offset, rx/ry/rz) from a cursor child's local transform."""
+    rec = {
+        "pos": [float(v) for v in np.asarray(obj.get("local_pos", [0, 0, 0]), dtype=float).reshape(3)],
+        "wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)],
+    }
+    return offset_to_look_at(rec)
+
+
+def _use_tool(key):
+    """Copy a cursor child's local transform into the Look At offsets."""
+    key = str(key or "").strip()
+    if not key:
+        _track["tool"] = ""
+        return True
+    for obj in _cursor_children():
+        if key in (str(obj.get("id")), str(obj.get("name") or "")):
+            _track["pos_offset"], _track["offset"] = _tool_offsets(obj)
+            _track["tool"] = str(obj.get("name") or obj.get("id"))
+            return True
+    return False
+
+
+def set_track_object(on=None, name=None, pick=None, added=None, offset=None, pos_offset=None, copy_offset=None,
+                     tool=None, tool_pick=None):
     _track["_ik_key"] = None
+    # The page sends both offsets with every change; hand edits that differ
+    # from the chosen tool's values drop the tool label.
+    if tool is None and _track.get("tool"):
+        for key, val in (("pos_offset", pos_offset), ("offset", offset)):
+            if val is None:
+                continue
+            try:
+                if not np.allclose(np.asarray(val, dtype=float).reshape(-1)[:3],
+                                   np.asarray(_track.get(key) or [0, 0, 0], dtype=float).reshape(-1)[:3], atol=1e-5):
+                    _track["tool"] = ""
+            except Exception:
+                pass
+    if tool_pick is not None:
+        _track["tool_pick"] = bool(tool_pick)
     if pos_offset is not None:
         try:
             _track["pos_offset"] = [float(pos_offset[0]), float(pos_offset[1]), float(pos_offset[2])]
@@ -1327,6 +1371,9 @@ def set_track_object(on=None, name=None, pick=None, added=None, offset=None, pos
             _track["offset"] = [float(offset[0]), float(offset[1]), float(offset[2])]
         except Exception:
             pass
+    if tool is not None:
+        # One-shot copy of the child's local transform; later moves of the child do not follow.
+        _use_tool(tool)
     if copy_offset:
         # One-shot copy into Look At's own fields; later Offset edits do not follow.
         rec = getattr(wp, "sim_offset", None)
@@ -1356,6 +1403,7 @@ def waypoint_track_record():
         "on": True,
         "added": True,
         "name": st.get("name") or "",
+        "tool": st.get("tool") or "",
         "offset": list(st.get("offset") or [0.0, 0.0, 0.0]),
         "pos_offset": list(st.get("pos_offset") or [0.0, 0.0, 0.0]),
     }
@@ -1365,6 +1413,15 @@ def begin_track_pick():
     _track["pick"] = True
     _track["added"] = True
     return track_status()
+
+
+def consume_tool_pick(oid):
+    """Tool pick armed: a click on a cursor child (viewer or list) uses it."""
+    if not _track.get("tool_pick"):
+        return False
+    _track["tool_pick"] = False
+    _track["_ik_key"] = None
+    return _use_tool(oid)
 
 
 def consume_track_pick(name):
@@ -1396,6 +1453,9 @@ def track_status():
         "offset": [float(off[0]), float(off[1]), float(off[2])],
         "pos_offset": [float(v) for v in list(_track.get("pos_offset") or [0.0, 0.0, 0.0])[:3]],
         "offset_state": _offset_state(getattr(wp, "sim_offset", None)),
+        "tool": _track.get("tool") or "",
+        "tool_pick": bool(_track.get("tool_pick")),
+        "tools": [{"id": str(o.get("id")), "name": str(o.get("name") or o.get("id"))} for o in _cursor_children()],
     }
 
 

@@ -423,6 +423,7 @@ def api_status():
         "list_vis": getattr(wp, "list_vis", {}) or {},
         "merged_points": wp.list_merged_points() if hasattr(wp, "list_merged_points") else [],
         "tracked_points": wp.cam_target_list() if hasattr(wp, "cam_target_list") else [],
+        "arm_move_pending": bool(wp.arm_move_pending()) if hasattr(wp, "arm_move_pending") else False,
         "gizmo_space": getattr(wp, "gizmo_space", "local"),
         "hide_robot": rr.hide_real_robot_status() if hasattr(rr, "hide_real_robot_status") else {},
         "show_viewer_samples": bool(getattr(bake, "show_viewer_samples", True)),
@@ -567,7 +568,7 @@ def api_object_props():
             # Aubo Arm: only its pose is editable (moves both arms).
             if (data.get("pos") is not None or data.get("wxyz") is not None) and hasattr(wp, "set_sim_bot_pose"):
                 wp._push_history()
-                wp.set_sim_bot_pose(data.get("pos"), data.get("wxyz"))
+                wp.set_sim_bot_pose(data.get("pos"), data.get("wxyz"), ask=True)
         elif data.get("kind") == "sim" or oid == "sim":
             if data.get("remove_camera"):
                 wp.sim_camera = None
@@ -909,6 +910,7 @@ def api_file_open():
         return jsonify({**out, "session": fman.session_info(), "title": fman.SESSION.get("title"), "path": path})
     except Exception as e:
         print("api_file_open failed", e)
+        traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)})
 
 
@@ -1248,8 +1250,18 @@ def api_track_object():
             offset=data.get("offset"),
             pos_offset=data.get("pos_offset"),
             copy_offset=data.get("copy_offset"),
+            tool=data.get("tool"),
+            tool_pick=data.get("tool_pick"),
         ) or {}
     return jsonify({"ok": True, "track": st})
+
+
+@app.route("/api/arm_move_choice", methods=["POST"])
+def api_arm_move_choice():
+    data = request.get_json(silent=True) or {}
+    ok = wp.resolve_arm_move(bool(data.get("follow"))) if hasattr(wp, "resolve_arm_move") else False
+    _status_dirty.set()
+    return jsonify({"ok": bool(ok)})
 
 
 @app.route("/api/offset", methods=["POST"])

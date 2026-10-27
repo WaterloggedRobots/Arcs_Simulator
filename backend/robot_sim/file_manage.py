@@ -418,6 +418,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
                 "in_ctrl_pos": in_p,
                 "force_fk": bool(w.get("force_fk")),
                 "q_dirty": bool(w.get("q_dirty")),
+                "ik_stale": bool(w.get("ik_stale")),
                 "added_from": w.get("added_from"),
                 "track_object": None if not w.get("track_object") else dict(w.get("track_object")),
                 "is_waypoint": True,
@@ -599,6 +600,7 @@ def resolve_point_fields(raw, index=0, t_prev=0.0, q_prev=None, pos_prev=None):
         "in_ctrl_pos": p.get("in_ctrl_pos"),
         "force_fk": bool(p.get("force_fk")),
         "q_dirty": bool(p.get("q_dirty")),
+        "ik_stale": bool(p.get("ik_stale")),
         "added_from": p.get("added_from"),
         "track_object": None if not p.get("track_object") else dict(p.get("track_object")),
         "clip_id": p.get("clip_id"),
@@ -822,6 +824,7 @@ def _sim_track_record():
         "added": bool(tr.get("added")),
         "offset": [float(v) for v in list(tr.get("offset") or [0.0, 0.0, 0.0])[:3]],
         "pos_offset": [float(v) for v in list(tr.get("pos_offset") or [0.0, 0.0, 0.0])[:3]],
+        "tool": str(tr.get("tool") or ""),
     }
 
 
@@ -836,6 +839,7 @@ def _restore_sim_track(rec):
                 offset=rec.get("offset"),
                 pos_offset=rec.get("pos_offset") or [0.0, 0.0, 0.0],
             )
+            rr._track["tool"] = str(rec.get("tool") or "")
         else:
             rr.set_track_object(on=False, name="", pick=False, added=False, offset=[0.0, 0.0, 0.0], pos_offset=[0.0, 0.0, 0.0])
     except Exception as e:

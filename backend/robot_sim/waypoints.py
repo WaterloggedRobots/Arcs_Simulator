@@ -522,6 +522,7 @@ def _snapshot():
             "force_fk": bool(wp.get("force_fk")),
             "added_from": wp.get("added_from"),
             "track_object": None if not wp.get("track_object") else dict(wp.get("track_object")),
+            "ik_stale": bool(wp.get("ik_stale")),
         })
     objs = []
     for o in scene_objects:
@@ -585,6 +586,7 @@ def _apply_snap_fields(wp, s):
     wp["force_fk"] = bool(s.get("force_fk"))
     wp["added_from"] = s.get("added_from")
     wp["track_object"] = None if not s.get("track_object") else dict(s.get("track_object"))
+    set_wp_stale(wp, bool(s.get("ik_stale")))
     pos = wp["pos"]
     wxyz = wp["wxyz"]
     for key in ("sphere", "arrow", "side", "halo"):
@@ -702,6 +704,7 @@ def _rebuild_from_snapshot(doc):
         wp["force_fk"] = bool(s.get("force_fk"))
         wp["added_from"] = s.get("added_from")
         wp["track_object"] = None if not s.get("track_object") else dict(s.get("track_object"))
+        set_wp_stale(wp, bool(s.get("ik_stale")))
         idx = len(waypoints) - 1
         if s.get("out_ctrl_pos") is not None:
             ensure_ctrl(idx, "out")
@@ -2217,6 +2220,50 @@ def _new_wp_node():
     return f"/wp_n{_wp_node_seq}"
 
 
+STALE_RGB = (230, 50, 50)
+
+
+def set_wp_stale(item, on):
+    """Red waypoint: its joints were cleared (arm moved, waypoint kept) and the
+    next bake re-solves them. Drawn as a red shell on the white sphere, as a
+    child node so it follows the sphere."""
+    item["ik_stale"] = bool(on)
+    old = item.get("stale_mark")
+    if not on:
+        item["stale_mark"] = None
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:
+                pass
+        return
+    if old is not None or server is None or item.get("sphere") is None:
+        return
+    try:
+        mark = server.scene.add_icosphere(
+            name=f"{_wp_node(item)}/sphere/stale", radius=0.023, color=STALE_RGB)
+    except Exception as e:
+        print("stale mark failed", e)
+        return
+    item["stale_mark"] = mark
+
+    @mark.on_click
+    def _(_e=None, _item=item):
+        try:
+            j = _index_of(_item)
+            mode = "add" if _select_ctrl else ("range" if _select_shift else "replace")
+            select_waypoint(j, mode=mode)
+        except Exception as e:
+            print("select stale waypoint failed", e)
+
+
+def refresh_stale_marks():
+    """After a bake: waypoints that got joints back turn white again."""
+    for item in waypoints:
+        if item.get("ik_stale") and item.get("q") is not None and not item.get("q_dirty"):
+            set_wp_stale(item, False)
+
+
 def _wp_node(item):
     """Viser scene path for one waypoint; stable across reorder/delete."""
     node = item.get("node")
@@ -3182,6 +3229,8 @@ def load_editor_waypoints(rows):
             item = next((x for x in waypoints if id(x) not in before), waypoints[-1])
             item["force_fk"] = bool(row.get("force_fk"))
             item["q_dirty"] = bool(row.get("q_dirty"))
+            if row.get("ik_stale"):
+                set_wp_stale(item, True)
             item["added_from"] = row.get("added_from")
             if row.get("name"):
                 item["name"] = str(row.get("name"))
@@ -3259,6 +3308,8 @@ def load_from_motion_points(wp_rows, sample_rows):
             add_waypoint(pos, mode="arc", wxyz=wxyz, t=row.get("t"), q=q, skip_ctrls=True)
             waypoints[-1]["force_fk"] = bool(row.get("force_fk"))
             waypoints[-1]["q_dirty"] = bool(row.get("q_dirty"))
+            if row.get("ik_stale"):
+                set_wp_stale(waypoints[-1], True)
             waypoints[-1]["added_from"] = row.get("added_from")
             if row.get("name"):
                 waypoints[-1]["name"] = str(row.get("name"))

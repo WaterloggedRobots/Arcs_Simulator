@@ -81,8 +81,9 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
 ### 3D objects
 
 - The simulated robot appears as the **sim cursor** — the draggable handle that stands in for the real arm's end effector.
-- **Aubo Arm** is the robot base, shown as a blue marker at the foot of the arm. The **Sim cursor** and, while the robot is connected, the **Real cursor** sit under it in the hierarchy. Select it to get a gizmo at the base, or type its position and rotation in Properties: both the real and the sim arm move with it, and the sim cursor keeps its joint angles. IK values, MoveL targets and the IK fields stay relative to the arm's base, as on the teach pendant; waypoints stay where they are in the world. The base pose is saved with the project and can be undone.
+- **Aubo Arm** is the robot base, shown as a blue marker at the foot of the arm. The **Sim cursor** and, while the robot is connected, the **Real cursor** sit under it in the hierarchy. Select it to get a gizmo at the base, or type its position and rotation in Properties: both the real and the sim arm move with it, and the sim cursor keeps its joint angles. IK values, MoveL targets and the IK fields stay relative to the arm's base, as on the teach pendant; saved points (Bookmarks) always move with the arm. After a move, if there are waypoints, the app asks whether they should **move with the arm** or **stay in place**. Waypoints that stay turn red and lose their joint angles; the next bake solves them again and turns each one white once IK is found. The base pose is saved with the project and can be undone (together with the waypoint choice).
 - Add simple primitives, or import custom **`.stl`** meshes to build a simulation environment around the robot.
+- **Empty** objects are drawn as grey, see-through waypoint markers (sphere with forward and side arrows), so their orientation is visible.
 - Add advanced objects such as **cameras**, to reproduce a real camera's position in the simulated world.
 - **Parent hierarchy.** Objects can be parented to one another so a child moves with its parent. This is how you bind objects to the end effector — an EE-parented camera, for example, follows every move the arm makes.
 
@@ -281,13 +282,15 @@ Move the target object in the simulator and the arm's orientation follows it, so
 
 > Tracking is computed from the target's position **before** baking. The arm does not follow a moving target during a run yet — live tracking is in progress.
 
-The aiming point sits at the **Pos offset** (cursor-local) and the cursor is turned by the **Rot offset** after aiming. **copy offset component values** fills both fields once from the cursor's Offset component, so that the Offset frame is what aims at the target (for example a lens or tool tip mounted off-centre). It is a one-time copy: later Offset edits don't change Look At. A red warning appears, and the button is disabled, while the Offset component is missing or switched off. Waypoints added from the cursor keep the Look At values they were added with.
+The aiming point sits at the **Pos offset** (cursor-local) and the cursor is turned by the **Rot offset** after aiming. **Offset from tool** lists the objects parented to the Sim cursor (swappable EE tools such as a lens or gripper tip). Pick one from the list, or press the ○ button beside it and click the child in the 3D view or the object list: its **local** transform is copied once into the pos and rot offset, so that child is what aims at the target. Later moves of the child don't change Look At; editing the offset fields by hand drops the tool name. Waypoints added from the cursor keep the Look At target, offset and tool they were added with, so the tool can change along the path.
 
 **🎯 select primary target** (right of the pick button) makes Look At follow the OpenCV camera script's primary target (the big red sphere) instead of an object. The sim cursor re-aims live as the target moves; if the script loses the target for a frame, it keeps aiming at the last place it was seen.
 
-Adding Look At also adds a **Look At** track to the timeline. On each bake it shows a bar, labelled with the target, over every stretch of the path that is aimed at a target (a span is aimed when either of its waypoints has Look At on). Stretches with no target stay empty. The bars only change when you bake.
+Adding Look At also adds a **Look At** track to the timeline. On each bake it shows a bar over every run of spans aimed at the same target with the same offset, labelled with the target and the tool (or "offset" when the offset was typed in). A change of offset starts a new bar even when the target stays the same. A waypoint with Look At on that shares it with neither neighbour gets a thin bar with no label; hover any bar to see its target, tool and offsets. Stretches with no target stay empty. The bars only change when you bake.
 
 ### Offset
+
+> The Offset component is switched off for now: it can't be added, and existing Offset data in files is kept but not shown or used.
 
 The **Offset component** can be added to any 3D object and to the sim cursor. It adds a yellow, waypoint-like frame fixed to its owner, shown only while the owner is selected. Click the yellow sphere, or click the Offset panel in Properties, to get its move/rotate gizmo (click the owner again to get the owner's gizmo back; deselecting hides it). It never joins the waypoint list or the path.
 

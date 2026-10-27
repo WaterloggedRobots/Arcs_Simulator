@@ -74,6 +74,7 @@ SIM_BOT_ID = "sim_bot"
 SIM_BOT_NAME = "Aubo Arm"
 REAL_CURSOR_ID = "real_cursor"
 SIM_BOT_RGB = (60, 130, 255)
+EMPTY_RGB = (150, 150, 158)
 _sim_bot_viz = {}
 _sim_bot_giz = {"gizmo": None, "rot0": None}
 
@@ -128,11 +129,98 @@ def set_sim_bot_visible(on):
             pass
 
 
-def set_sim_bot_pose(pos=None, wxyz=None):
-    """Move the Aubo Arm, then everything parented to it or to the sim cursor."""
+# Arm move waiting for "move waypoints with the arm?": base pose before the move.
+_arm_move = {"from": None}
+
+
+def _arm_delta(from_pose, to_pose):
+    """Rigid map world -> world that carries the arm from one base pose to another."""
+    fp = np.asarray(from_pose[0], dtype=float).reshape(3)
+    fq = np.asarray(from_pose[1], dtype=float).reshape(4)
+    tp = np.asarray(to_pose[0], dtype=float).reshape(3)
+    tq = np.asarray(to_pose[1], dtype=float).reshape(4)
+    dq = _qmul(tq, _qinv(fq))
+    dq = dq / (float(np.linalg.norm(dq)) or 1.0)
+
+    def apply(pos=None, wxyz=None):
+        p = None if pos is None else tp + _qrot(dq, np.asarray(pos, dtype=float).reshape(3) - fp)
+        q = None
+        if wxyz is not None:
+            q = _qmul(dq, np.asarray(wxyz, dtype=float).reshape(4))
+            q = q / (float(np.linalg.norm(q)) or 1.0)
+        return p, q
+    return apply
+
+
+def _carry_saved_points(move):
+    """Saved points (Bookmarks) belong to the arm: they follow every base move.
+    Home and Real pose come from the arm's own FK and follow by themselves."""
+    for p in list(getattr(wp, "sim_poses", None) or []):
+        if p.get("builtin") or str(p.get("id")) in ("home", "real") or p.get("pos") is None:
+            continue
+        try:
+            np_, nq = move(p.get("pos"), p.get("wxyz"))
+            p["pos"] = [float(v) for v in np_]
+            if nq is not None:
+                p["wxyz"] = [float(v) for v in nq]
+        except Exception:
+            pass
+    try:
+        wp.refresh_pose_markers()
+    except Exception:
+        pass
+
+
+def arm_move_pending():
+    """True once a finished arm move waits on the waypoint question."""
+    return _arm_move.get("from") is not None and bool(wp.waypoints) and not wp._drag_checkpointed
+
+
+def resolve_arm_move(follow):
+    """Answer the question: waypoints follow the arm, or stay and get re-solved.
+
+    follow: waypoints (and their Bezier handles) move with the arm; their
+    joints still fit since they did not move relative to the base.
+    keep: waypoints stay in the world; their joints no longer fit, so they
+    are cleared, the waypoints turn red, and the next bake re-solves them.
+    """
+    frm = _arm_move.get("from")
+    _arm_move["from"] = None
+    if frm is None or not wp.waypoints:
+        return False
+    if follow:
+        move = _arm_delta(frm, sim_bot_pose())
+        snap = wp._snapshot()
+        snap["arm_base"] = None
+        for s in snap["waypoints"]:
+            s["pos"], s["wxyz"] = move(s["pos"], s.get("wxyz", [1, 0, 0, 0]))
+            for key in ("out_ctrl_pos", "in_ctrl_pos"):
+                if s.get(key) is not None:
+                    s[key] = move(s[key])[0]
+        wp._rebuild_from_snapshot(snap)
+    else:
+        for item in wp.waypoints:
+            item["q"] = None
+            item["q_dirty"] = True
+            wp.set_wp_stale(item, True)
+    try:
+        import path_bake as bake
+        bake.invalidate_from(0)
+    except Exception as e:
+        print("arm move: invalidate bake failed", e)
+    return True
+
+
+def set_sim_bot_pose(pos=None, wxyz=None, ask=False):
+    """Move the Aubo Arm, then everything parented to it or to the sim cursor.
+    ask: a user move (gizmo / props) that should ask about the waypoints."""
     import robot_runtime as rr
+    before = sim_bot_pose()
     if not rr.set_arm_base(pos, wxyz):
         return False
+    _carry_saved_points(_arm_delta(before, sim_bot_pose()))
+    if ask and wp.waypoints and _arm_move.get("from") is None:
+        _arm_move["from"] = (before[0].copy(), before[1].copy())
     _move_sim_bot_marker()
     giz = _sim_bot_giz.get("gizmo")
     if giz is not None:
@@ -173,7 +261,7 @@ def show_sim_bot_gizmo():
                 wp._drag_checkpointed = True
             rot0 = _sim_bot_giz.get("rot0")
             new_q = wp._keep_heading(old_q, wp._orientation_from_gizmo(giz, old_q, rot0 if rot0 is not None else old_q))
-            set_sim_bot_pose(np.array(giz.position, dtype=float).reshape(3), new_q)
+            set_sim_bot_pose(np.array(giz.position, dtype=float).reshape(3), new_q, ask=True)
             wp._arm_drag_release(giz)
     try:
         hold = wp._suspend_gizmo_cb
@@ -732,7 +820,7 @@ def _spawn_object_mesh(obj):
         )
     else:
         base = 0.02 if kind == "empty" else 0.05
-        color = (80, 160, 255) if kind == "empty" else (220, 220, 220)
+        color = EMPTY_RGB if kind == "empty" else (220, 220, 220)
         handle = wp.server.scene.add_icosphere(
             name=name,
             radius=base * max(1e-4, float(np.mean(np.abs(sc)))),
@@ -741,10 +829,18 @@ def _spawn_object_mesh(obj):
             color=color,
         )
         if kind == "empty":
+            # Empties look like a grey, see-through waypoint: sphere + forward
+            # and side arrows. The arrows are child nodes, so they follow the
+            # sphere's pose and visibility and go when it is removed.
             try:
                 handle.opacity = 0.4
             except Exception:
                 pass
+            try:
+                wp.add_forward_arrow(name, colors=EMPTY_RGB)
+                wp.add_side_arrow(name, colors=EMPTY_RGB)
+            except Exception as e:
+                print("empty arrows failed", e)
     obj["handle"] = handle
     if obj.get("camera"):
         try:
@@ -956,6 +1052,8 @@ def select_scene_object(oid, mode="replace"):
         import robot_runtime as rr
         if rr.consume_track_pick(obj.get("name")):
             return True
+        if rr.consume_tool_pick(oid):
+            return True
     except Exception:
         pass
     return wp.select_item("obj", oid, mode=mode)
@@ -1148,6 +1246,8 @@ def _parent_offset(obj):
     """The parent's Offset record when it exists and is enabled, else None."""
     pid = (obj or {}).get("parent_id")
     if not pid:
+        return None
+    if not _offsets().OFFSETS_ENABLED:
         return None
     rec = _offsets().get_offset(pid)
     if not rec or not rec.get("enabled", True):
