@@ -237,6 +237,88 @@ def _apply_world_yaw(model):
             print("world yaw failed:", e)
 
 
+# Aubo Arm: where the robot base sits in the world. Both arms (real, sim) and
+# the hidden IK model stand on it; viewer poses are world, AUBO poses (IK,
+# MoveL, the IK fields) are relative to this base.
+_base_pos = np.zeros(3, dtype=float)
+_base_wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+
+def arm_base_pose():
+    return _base_pos.copy(), _base_wxyz.copy()
+
+
+def _base_rot():
+    return R.from_quat(wxyz_to_xyzw(_base_wxyz))
+
+
+def _apply_base(model):
+    if model is None:
+        return
+    try:
+        from skrobot.coordinates import Coordinates
+        model.newcoords(Coordinates(pos=[float(v) for v in _base_pos], rot=[float(v) for v in _base_wxyz]))
+    except Exception as e:
+        print("arm base failed:", e)
+        return
+    _apply_world_yaw(model)
+
+
+def world_to_base(pos, wxyz):
+    inv = _base_rot().inv()
+    p = inv.apply(np.asarray(pos, dtype=float).reshape(3) - _base_pos)
+    q = (inv * R.from_quat(wxyz_to_xyzw(wxyz))).as_quat()
+    return p, np.array([q[3], q[0], q[1], q[2]], dtype=float)
+
+
+def base_to_world(pos, wxyz):
+    rot = _base_rot()
+    p = _base_pos + rot.apply(np.asarray(pos, dtype=float).reshape(3))
+    q = (rot * R.from_quat(wxyz_to_xyzw(wxyz))).as_quat()
+    return p, np.array([q[3], q[0], q[1], q[2]], dtype=float)
+
+
+def set_arm_base(pos=None, wxyz=None):
+    """Move the Aubo Arm. The sim cursor rides along (same joints, same pose
+    relative to the base); the real cursor follows the real arm's FK."""
+    global _base_pos, _base_wxyz, _sim_wxyz
+    if edits_locked():
+        return False
+    new_p = _base_pos.copy() if pos is None else np.asarray(pos, dtype=float).reshape(3)
+    new_q = _base_wxyz.copy() if wxyz is None else np.asarray(wxyz, dtype=float).reshape(4)
+    n = float(np.linalg.norm(new_q)) or 1.0
+    new_q = new_q / n
+    if not (np.all(np.isfinite(new_p)) and np.all(np.isfinite(new_q))):
+        return False
+    try:
+        cur_p, cur_q = get_sim_cursor_pose()
+        loc_p, loc_q = world_to_base(cur_p, cur_q)
+    except Exception:
+        loc_p = loc_q = None
+    _base_pos, _base_wxyz = new_p, new_q
+    for model in (robot_actual, robot_sim, robot_ik):
+        _apply_base(model)
+    if loc_p is not None:
+        p, q = base_to_world(loc_p, loc_q)
+        _sim_wxyz = q
+        pin = tuple(float(v) for v in p)
+        hold = wp._suspend_gizmo_cb
+        wp._suspend_gizmo_cb = True
+        try:
+            if _cursor_sim is not None:
+                _cursor_sim.position = pin
+            if _sim_gizmo is not None:
+                _sim_gizmo.position = pin
+                _sim_gizmo.wxyz = tuple(float(v) for v in q)
+            if _track.get("pin_pos") is not None:
+                _track["pin_pos"] = np.asarray(p, dtype=float).reshape(3).copy()
+            _track["_ik_key"] = None
+        finally:
+            wp._suspend_gizmo_cb = hold
+        _draw_sim_dir(p)
+    return True
+
+
 def _flat(x, n, default=None):
     if x is None:
         return None if default is None else [float(v) for v in default]
@@ -264,6 +346,7 @@ def apply_tool(pos, wxyz, offset=TOOL_OFFSET):
 
 
 def aubo_pose_from_viewer(pos, wxyz):
+    pos, wxyz = world_to_base(_flat(pos, 3), wxyz)
     p = _flat(pos, 3)
     rx, ry, rz = wxyz_to_rpy(wxyz)
     return [float(p[0]), float(p[1]), float(p[2]), float(rx), float(ry), float(rz)]
@@ -274,7 +357,7 @@ def viewer_pose_from_aubo(ik):
     pos = np.array(ik[:3], dtype=float)
     quat_xyzw = R.from_euler("xyz", ik[3:6], degrees=False).as_quat()
     wxyz = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=float)
-    return pos, wxyz
+    return base_to_world(pos, wxyz)
 
 
 def viser_to_aubo_pose(pos, wxyz, as_quat=True):
@@ -2105,6 +2188,8 @@ def import_robots(urdf_path=URDF_PATH, urdf_sim_path=URDF_SIM_PATH):
     robot_ik = RobotModel()
     robot_ik.load_urdf_file(urdf_sim_path)
     apply_aubo_i5_joint_limits(robot_ik)
+    for model in (robot_actual, robot_sim, robot_ik):
+        _apply_base(model)
     set_opacity_only(robot_sim, SIM_OPACITY, rgb=SIM_RGB)
     viewer.add(robot_actual)
     viewer.add(robot_sim)
@@ -3384,11 +3469,12 @@ def get_selected_props():
         kind = "sim"
     if sel and sel[-1][0] == "bot" and hasattr(wp, "sim_bot_props"):
         return wp.sim_bot_props()
-    if kind == "object" and hasattr(wp, "selected_object_props"):
+    real_pick = bool(sel and sel[-1][0] == "real")
+    if kind == "object" and hasattr(wp, "selected_object_props") and not real_pick:
         prim = wp.selected_object_props()
         if prim:
             return prim
-    idx = getattr(wp, "selected_idx", None)
+    idx = None if real_pick else getattr(wp, "selected_idx", None)
     if kind != "sim" and idx is not None and 0 <= idx < len(wp.waypoints):
         w = wp.waypoints[idx]
         ik = bake._ik_from_pos_wxyz(w.get("pos"), w.get("wxyz"))
@@ -3413,7 +3499,7 @@ def get_selected_props():
         # A waypoint keeps the sim cursor's Offset as it was when the point was added.
         tr["offset_state"] = _offset_state(getattr(wp, "sim_offset", None))
         return out
-    if kind == "sim" or ((kind is None) and (_sim_gizmo is not None or _sim_selected) and not getattr(wp, "selected_obj_id", None)):
+    if not real_pick and (kind == "sim" or ((kind is None) and (_sim_gizmo is not None or _sim_selected) and not getattr(wp, "selected_obj_id", None))):
         pos, wxyz = get_sim_cursor_pose()
         ee, wxyz = _ee_from_cursor(pos, wxyz, "sim")
         ik = aubo_pose_from_viewer(ee, wxyz)
@@ -3434,11 +3520,11 @@ def get_selected_props():
             "comp_order": list(getattr(wp, "sim_comp_order", None) or []),
         })
         return out
-    if hasattr(wp, "selected_object_props"):
+    if hasattr(wp, "selected_object_props") and not real_pick:
         prim = wp.selected_object_props()
         if prim:
             return prim
-    sel_sm = bake.get_selected_sample() if hasattr(bake, "get_selected_sample") else None
+    sel_sm = None if real_pick else bake.get_selected_sample() if hasattr(bake, "get_selected_sample") else None
     if sel_sm is not None:
         seg_i, k, sm = sel_sm
         ik = bake._ik_from_pos_wxyz(sm.get("pos"), sm.get("wxyz"))
@@ -3465,7 +3551,7 @@ def get_selected_props():
             ik = [0.0] * 6
         out.update({
             "kind": "real",
-            "name": "Actual robot",
+            "name": "Real cursor" if real_pick else "Actual robot",
             "editable": False,
             "ik": [float(v) for v in ik],
             "q": [float(v) for v in q],

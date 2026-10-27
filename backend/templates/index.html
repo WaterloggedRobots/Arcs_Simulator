@@ -2193,8 +2193,8 @@
     </div>
   </div>
   <script>
-    // Sim Bot / Sim EE hierarchy is built but off for now (see simulatorview.SIM_BOT_ENABLED).
-    var SIM_BOT_ENABLED = false;
+    // Aubo Arm (robot base) parents the Sim and Real cursors (see simulatorview.SIM_BOT_ENABLED).
+    var SIM_BOT_ENABLED = true;
     const CORE_TRACKS = [
       { id: "arm", name: "Arm", simple: true },
       { id: "dio00", name: "T_DI/O_00", simple: false },
@@ -5340,11 +5340,14 @@
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
       const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
-      // Built-ins. With SIM_BOT_ENABLED: Sim Bot (robot base) with Sim EE (the sim cursor) under it.
+      // Built-ins. With SIM_BOT_ENABLED: Aubo Arm (robot base) with the Sim cursor and,
+      // while the robot is connected, the Real cursor under it.
+      const realLinked = !!(d.real && d.real.connected);
       const objRows = (SIM_BOT_ENABLED
-        ? [{ id: "sim_bot", name: "Sim Bot" }, { id: "sim_cursor", name: "Sim EE", parent_id: "sim_bot" }]
+        ? [{ id: "sim_bot", name: "Aubo Arm" }, { id: "sim_cursor", name: "Sim cursor", parent_id: "sim_bot" }]
+            .concat(realLinked ? [{ id: "real_cursor", name: "Real cursor", parent_id: "sim_bot" }] : [])
         : [{ id: "sim_cursor", name: "Sim cursor" }]).concat(d.scene_objects || []);
-      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot";
+      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot" || id === "real_cursor";
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
       function eyeOn(kind, id) {
@@ -5366,7 +5369,7 @@
       });
       const byParent = {};
       objRows.forEach((o) => {
-        const p = (o.id === "sim_bot" || (o.id === "sim_cursor" && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
+        const p = (o.id === "sim_bot" || ((o.id === "sim_cursor" || o.id === "real_cursor") && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
         if (!byParent[p]) byParent[p] = [];
         byParent[p].push(o);
       });
@@ -5447,7 +5450,7 @@
       const row = e.target.closest("[data-oid]");
       if (!row) return;
       const oid = row.getAttribute("data-oid");
-      if (!oid || oid === "sim_cursor" || oid === "sim_bot") return;
+      if (!oid || oid === "sim_cursor" || oid === "sim_bot" || oid === "real_cursor") return;
       e.preventDefault();
       e.stopPropagation();
       const label = row.querySelector(".hier-label") || row.querySelector("span:not(.hier-eye)");
@@ -5512,7 +5515,7 @@
       let dragId = null;
       list.addEventListener("dragstart", (e) => {
         const row = e.target.closest("[data-oid]");
-        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot") { e.preventDefault(); return; }
+        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot" || row.getAttribute("data-oid") === "real_cursor") { e.preventDefault(); return; }
         dragId = row.getAttribute("data-oid");
         e.dataTransfer.setData("text/plain", dragId);
       });
@@ -5995,7 +5998,7 @@
         allCams.unshift({
           id: "sim",
           kind: "sim",
-          name: SIM_BOT_ENABLED ? "Sim EE" : "Sim cursor",
+          name: "Sim cursor",
           camera: simCam,
           cam_type: simCam.type || "sim",
         });

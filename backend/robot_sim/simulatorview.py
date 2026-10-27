@@ -66,23 +66,29 @@ def _qrot(q, v):
     ])
 
 
-# Sim Bot: robot-base parent of the sim cursor ("Sim EE"). Designed and wired
-# (hierarchy row, blue marker, read-only props, parenting) but switched off for
-# now; set True here and SIM_BOT_ENABLED in templates/index.html to bring it back.
-SIM_BOT_ENABLED = False
-SIM_CURSOR_NAME = "Sim EE" if SIM_BOT_ENABLED else "Sim cursor"
+# Aubo Arm (id sim_bot): the robot base, parent of the Sim and Real cursors.
+# Its gizmo sits at the base; moving it moves both arms (robot_runtime.set_arm_base).
+SIM_BOT_ENABLED = True
+SIM_CURSOR_NAME = "Sim cursor"
 SIM_BOT_ID = "sim_bot"
+SIM_BOT_NAME = "Aubo Arm"
+REAL_CURSOR_ID = "real_cursor"
 SIM_BOT_RGB = (60, 130, 255)
 _sim_bot_viz = {}
+_sim_bot_giz = {"gizmo": None, "rot0": None}
 
 
 def sim_bot_pose():
-    """Sim Bot is the robot base: fixed at the world origin for now."""
-    return np.zeros(3, dtype=float), np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    """Aubo Arm pose (robot base) in the world."""
+    try:
+        import robot_runtime as rr
+        return rr.arm_base_pose()
+    except Exception:
+        return np.zeros(3, dtype=float), np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
 
 def ensure_sim_bot_marker():
-    """Large blue waypoint-style marker for Sim Bot (built in, never removed)."""
+    """Large blue waypoint-style marker for the Aubo Arm (built in, never removed)."""
     if not SIM_BOT_ENABLED or wp.server is None or _sim_bot_viz.get("sphere") is not None:
         return
     pos, q = sim_bot_pose()
@@ -104,10 +110,111 @@ def ensure_sim_bot_marker():
         select_scene_object(SIM_BOT_ID, mode=mode)
 
 
+def _move_sim_bot_marker():
+    pos, q = sim_bot_pose()
+    for h in _sim_bot_viz.values():
+        try:
+            h.position = tuple(float(v) for v in pos)
+            h.wxyz = tuple(float(v) for v in q)
+        except Exception:
+            pass
+
+
 def set_sim_bot_visible(on):
     for h in _sim_bot_viz.values():
         try:
             h.visible = bool(on)
+        except Exception:
+            pass
+
+
+def set_sim_bot_pose(pos=None, wxyz=None):
+    """Move the Aubo Arm, then everything parented to it or to the sim cursor."""
+    import robot_runtime as rr
+    if not rr.set_arm_base(pos, wxyz):
+        return False
+    _move_sim_bot_marker()
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is not None:
+        p, q = sim_bot_pose()
+        hold = wp._suspend_gizmo_cb
+        wp._suspend_gizmo_cb = True
+        try:
+            giz.position = tuple(float(v) for v in p)
+            giz.wxyz = wp._gizmo_display_wxyz(q)
+        except Exception:
+            pass
+        finally:
+            wp._suspend_gizmo_cb = hold
+    _propagate_children(SIM_BOT_ID)
+    _propagate_children("sim_cursor")
+    return True
+
+
+def show_sim_bot_gizmo():
+    if wp.server is None:
+        return None
+    pos, q = sim_bot_pose()
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is None:
+        giz = wp._new_transform_gizmo("/sim_bot/gizmo_%s" % wp.gizmo_space, pos, wp._gizmo_display_wxyz(q), 0.22, False, True)
+        _sim_bot_giz["gizmo"] = giz
+
+        @giz.on_update
+        def _(_):
+            if wp._suspend_gizmo_cb:
+                return
+            old_p, old_q = sim_bot_pose()
+            if not wp._drag_checkpointed:
+                # First update of a drag: undo checkpoint + start pose for world-axes rotation.
+                _sim_bot_giz["rot0"] = old_q.copy()
+                if not wp._suspend_history:
+                    wp._push_history()
+                wp._drag_checkpointed = True
+            rot0 = _sim_bot_giz.get("rot0")
+            new_q = wp._keep_heading(old_q, wp._orientation_from_gizmo(giz, old_q, rot0 if rot0 is not None else old_q))
+            set_sim_bot_pose(np.array(giz.position, dtype=float).reshape(3), new_q)
+            wp._arm_drag_release(giz)
+    try:
+        hold = wp._suspend_gizmo_cb
+        wp._suspend_gizmo_cb = True
+        giz.position = tuple(float(v) for v in pos)
+        giz.wxyz = wp._gizmo_display_wxyz(q)
+        giz.visible = True
+    except Exception:
+        pass
+    finally:
+        wp._suspend_gizmo_cb = hold
+    return giz
+
+
+def drop_sim_bot_gizmo():
+    """Gizmo space changed: rebuild on next show."""
+    giz = _sim_bot_giz.get("gizmo")
+    _sim_bot_giz["gizmo"] = None
+    if giz is not None:
+        try:
+            giz.remove()
+        except Exception:
+            pass
+
+
+def park_sim_bot_gizmo():
+    """Pointer-up in world-axes mode: axes back to world XYZ."""
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is None or wp.gizmo_space == "local":
+        return
+    try:
+        giz.wxyz = wp.WORLD_WXYZ
+    except Exception:
+        pass
+
+
+def hide_sim_bot_gizmo():
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is not None:
+        try:
+            giz.visible = False
         except Exception:
             pass
 
@@ -117,8 +224,8 @@ def sim_bot_props():
     return {
         "kind": "bot",
         "id": SIM_BOT_ID,
-        "name": "Sim Bot",
-        "editable": False,
+        "name": SIM_BOT_NAME,
+        "editable": True,
         "pos": [float(v) for v in pos],
         "wxyz": [float(v) for v in q],
         "scale": [1.0, 1.0, 1.0],
@@ -202,7 +309,7 @@ def reparent_object(oid, parent_id=None):
     pid = None if not parent_id or parent_id in ("", None) else str(parent_id)
     if pid == "sim_cursor":
         pid = "sim_cursor"
-    if pid == oid:
+    if pid == oid or pid == REAL_CURSOR_ID:
         return False
     walk = pid
     while walk:
@@ -297,6 +404,7 @@ def _update_measure_line():
 
 
 def _hide_all_object_gizmos():
+    hide_sim_bot_gizmo()
     for obj in wp.scene_objects:
         giz = obj.get("gizmo")
         if giz is None:
@@ -839,6 +947,8 @@ def select_scene_object(oid, mode="replace"):
         if not SIM_BOT_ENABLED:
             return False
         return wp.select_item("bot", None, mode=mode)
+    if str(oid) == REAL_CURSOR_ID:
+        return wp.select_item("real", None, mode=mode)
     obj = _find_object(oid)
     if obj is None:
         return False

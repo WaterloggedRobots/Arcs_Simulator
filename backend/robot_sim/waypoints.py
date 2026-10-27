@@ -414,6 +414,13 @@ def _release_gizmo_drag():
     """Pointer-up: park world-mode axes, keep the Bézier handle selected."""
     global _gizmo_dirty, _drag_checkpointed, _suspend_gizmo_cb, _pending_rebuild_idx
     _drag_checkpointed = False
+    _suspend_gizmo_cb = True
+    try:
+        simulatorview.park_sim_bot_gizmo()
+    except Exception:
+        pass
+    finally:
+        _suspend_gizmo_cb = False
     if selected_ctrl is not None and 0 <= selected_ctrl[0] < len(waypoints):
         ctrl = waypoints[selected_ctrl[0]].get("%s_ctrl" % selected_ctrl[1])
         if ctrl is not None:
@@ -471,6 +478,9 @@ def apply_gizmo_space(space=None):
         for obj in scene_objects:
             vis = selected_obj_id == obj.get("id")
             simulatorview._bind_object_gizmo(obj, visible=vis)
+        simulatorview.drop_sim_bot_gizmo()
+        if any(k == "bot" for k, _ in _selection):
+            simulatorview.show_sim_bot_gizmo()
         try:
             import robot_runtime as rr
             if hasattr(rr, "apply_gizmo_space"):
@@ -534,11 +544,18 @@ def _snapshot():
             "comp_order": list(o.get("comp_order") or []),
             "mesh_path": o.get("mesh_path"),
         })
+    try:
+        import robot_runtime as rr
+        bpos, bq = rr.arm_base_pose()
+        arm_base = {"pos": bpos, "wxyz": bq}
+    except Exception:
+        arm_base = None
     return {
         "waypoints": snaps,
         "selected_idx": selected_idx,
         "objects": objs,
         "selected_obj_id": selected_obj_id,
+        "arm_base": arm_base,
     }
 
 
@@ -633,6 +650,12 @@ def _rebuild_from_snapshot(doc):
     _drag_checkpointed = False
     snaps = doc["waypoints"] if isinstance(doc, dict) else doc
     want_sel = doc.get("selected_idx") if isinstance(doc, dict) else None
+    base = doc.get("arm_base") if isinstance(doc, dict) else None
+    if base:
+        try:
+            simulatorview.set_sim_bot_pose(base["pos"], base["wxyz"])
+        except Exception as e:
+            print("undo arm base failed", e)
 
     if len(snaps) == len(waypoints):
         for i, s in enumerate(snaps):
@@ -3326,6 +3349,9 @@ def _sync_selection_globals():
         elif kind == "bot":
             selected_obj_ids.append("sim_bot")
             selection_kind = "bot"
+        elif kind == "real":
+            selected_obj_ids.append("real_cursor")
+            selection_kind = "real"
         elif kind == "obj":
             selected_obj_ids.append(key)
             selected_obj_id = key
@@ -3374,6 +3400,13 @@ def _apply_selection_viz():
                         giz.visible = True
                     except Exception:
                         pass
+        elif kind == "bot":
+            try:
+                import robot_runtime as rr
+                if not rr.edits_locked():
+                    simulatorview.show_sim_bot_gizmo()
+            except Exception:
+                pass
         elif kind == "sim":
             try:
                 import robot_runtime as rr
@@ -3504,6 +3537,13 @@ def set_item_visible(kind, oid, on=None):
                 import robot_runtime as rr
                 if rr._cursor_sim is not None:
                     rr._cursor_sim.visible = shown
+            except Exception:
+                pass
+        elif str(oid) == "real_cursor":
+            try:
+                import robot_runtime as rr
+                if rr._cursor_real is not None:
+                    rr._cursor_real.visible = shown
             except Exception:
                 pass
         else:

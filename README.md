@@ -81,6 +81,7 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
 ### 3D objects
 
 - The simulated robot appears as the **sim cursor** — the draggable handle that stands in for the real arm's end effector.
+- **Aubo Arm** is the robot base, shown as a blue marker at the foot of the arm. The **Sim cursor** and, while the robot is connected, the **Real cursor** sit under it in the hierarchy. Select it to get a gizmo at the base, or type its position and rotation in Properties: both the real and the sim arm move with it, and the sim cursor keeps its joint angles. IK values, MoveL targets and the IK fields stay relative to the arm's base, as on the teach pendant; waypoints stay where they are in the world. The base pose is saved with the project and can be undone.
 - Add simple primitives, or import custom **`.stl`** meshes to build a simulation environment around the robot.
 - Add advanced objects such as **cameras**, to reproduce a real camera's position in the simulated world.
 - **Parent hierarchy.** Objects can be parented to one another so a child moves with its parent. This is how you bind objects to the end effector — an EE-parented camera, for example, follows every move the arm makes.

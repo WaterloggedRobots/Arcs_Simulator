@@ -563,7 +563,12 @@ def api_object_props():
         return jsonify({"ok": bool(ok)})
     if any(k in data for k in ("pos", "wxyz", "scale", "space", "name", "camera", "remove_camera")):
         oid = data.get("id") or getattr(wp, "selected_obj_id", None)
-        if data.get("kind") == "sim" or oid == "sim":
+        if data.get("kind") == "bot" or oid == "sim_bot":
+            # Aubo Arm: only its pose is editable (moves both arms).
+            if (data.get("pos") is not None or data.get("wxyz") is not None) and hasattr(wp, "set_sim_bot_pose"):
+                wp._push_history()
+                wp.set_sim_bot_pose(data.get("pos"), data.get("wxyz"))
+        elif data.get("kind") == "sim" or oid == "sim":
             if data.get("remove_camera"):
                 wp.sim_camera = None
             elif data.get("camera") is not None:
