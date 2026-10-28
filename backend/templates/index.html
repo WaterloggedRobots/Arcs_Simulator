@@ -722,6 +722,7 @@
     .hud-label { font-size: 11px; color: #c8c8c8; margin-right: 6px; }
     .track-row { display: grid; grid-template-columns: 1fr 28px 28px; gap: 4px; position: relative; }
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
+    .track-row button.on { background: #4aa3ff; }
     .track-err { color: #e05555; font-size: 12px; margin-top: 4px; }
     .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
     .use-offset-btn:disabled { opacity: 0.45; cursor: default; }
@@ -1473,7 +1474,6 @@
           <button data-act="undo">Undo<span class="hintk">Ctrl+Z</span></button>
           <button data-act="redo">Redo<span class="hintk">Ctrl+Shift+Z</span></button>
           <button data-act="settings">Preferences</button>
-          <button data-act="robot-type">Robot type</button>
         </div>
       </div>
       <div class="menu" id="menuAdd">
@@ -1625,6 +1625,16 @@
           </div>
         </div>
       </div>
+      <div id="armMoveModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3>Move waypoints with the arm?</h3>
+          <p style="max-width:280px;font-size:12px;color:#bbb;">The Aubo Arm moved. Waypoints can move with it, or stay where they are in the world. Waypoints that stay turn red and get new joint angles on the next bake.</p>
+          <div class="tr-actions">
+            <button type="button" id="armMoveKeep" class="btn-cancel">Keep in place</button>
+            <button type="button" id="armMoveFollow" class="btn-ok">Move with arm</button>
+          </div>
+        </div>
+      </div>
       <div id="robotTypeWarn" class="tr-modal" hidden>
         <div class="tr-card">
           <h3>Switch robot type?</h3>
@@ -1682,6 +1692,7 @@
           <div class="ctrl-body">
           <div class="ctrl-side">
             <button type="button" class="ctrl-tab on" data-tab="speed">Robot speed</button>
+            <button type="button" class="ctrl-tab" data-tab="robot">Robot Settings</button>
             <button type="button" class="ctrl-tab" data-tab="wps">Waypoints</button>
             <button type="button" class="ctrl-tab" data-tab="pwin">Path window</button>
             <button type="button" class="ctrl-tab" data-tab="tl">Timeline</button>
@@ -1690,11 +1701,11 @@
           </div>
           <div class="ctrl-main">
             <div class="ctrl-pane" id="pane-speed">
-              <label class="field">Robot model</label>
+              <label class="field">Robot type</label>
               <select id="robotModel" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
                 <option value="aubo_i5">aubo i5</option>
               </select>
-              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Restart Flask after changing model. Joint speed/accel below apply immediately to bake and hold moves.</p>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Changing the type reloads the arm (timeline waypoints are cleared after a confirm). Joint speed/accel below apply immediately to bake and hold moves.</p>
               <div class="lim-head"><span></span><span>Speed (°/s)</span><span>Accel (°/s²)</span></div>
               <div class="lim-row"><label>J1</label><input id="limV0" type="number" step="1"><input id="limA0" type="number" step="1"></div>
               <div class="lim-row"><label>J2</label><input id="limV1" type="number" step="1"><input id="limA1" type="number" step="1"></div>
@@ -1735,6 +1746,13 @@
                 <option value="always_aubo">Always use Aubo IK</option>
               </select>
               <p style="font-size:11px;color:#8a8a92;margin:0;">Always use Aubo IK: sim cursor drag and bake IK need a connected arm. Use Backup IK: local solver only while disconnected. Reconnect clears the bake.</p>
+            </div>
+            <div class="ctrl-pane" id="pane-robot" hidden>
+              <label class="field">Robot IP</label>
+              <input id="robotIp" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.2.124" />
+              <label class="field">Port</label>
+              <input id="robotPort" type="number" min="1" max="65535" step="1" placeholder="30004" />
+              <p id="robotAddrNote" style="font-size:11px;color:#8a8a92;margin:8px 0 0;">The app reconnects to the new address on its own. Leave empty to use the default from arcscontrol.py.</p>
             </div>
             <div class="ctrl-pane" id="pane-dev" hidden>
               <label class="field">Password</label>
@@ -2068,7 +2086,11 @@
               <label>ry</label><input id="trackRy" type="number" step="0.001" value="0">
               <label>rz</label><input id="trackRz" type="number" step="0.001" value="0">
             </div>
-            <button type="button" id="trackUseOffset" class="use-offset-btn" title="Copy this object's Offset component into the pos and rot offset fields">copy offset component values</button>
+            <label class="field tight">Offset from tool</label>
+            <div class="track-row" id="trackToolRow">
+              <select id="trackTool" title="Copy a child's local transform into the pos and rot offset" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;"></select>
+              <button type="button" id="trackToolPick" title="select tool from the 3D view or object list">○</button>
+            </div>
             <div id="trackOffErr" class="track-err" hidden></div>
           </div>
           <hr id="offsetSep" hidden>
@@ -2193,8 +2215,8 @@
     </div>
   </div>
   <script>
-    // Sim Bot / Sim EE hierarchy is built but off for now (see simulatorview.SIM_BOT_ENABLED).
-    var SIM_BOT_ENABLED = false;
+    // Aubo Arm (robot base) parents the Sim and Real cursors (see simulatorview.SIM_BOT_ENABLED).
+    var SIM_BOT_ENABLED = true;
     const CORE_TRACKS = [
       { id: "arm", name: "Arm", simple: true },
       { id: "dio00", name: "T_DI/O_00", simple: false },
@@ -3046,15 +3068,19 @@
         if (tr.id !== "look_sim") return;
         // Look At bars (rebuilt on bake): one per run of spans aimed at the same target.
         const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+        window.__lookBarHits = [];
         (window.__lookBars || []).forEach((bar) => {
           if (bar.t0 == null || bar.t1 == null) return;
           const x0 = timeToX(Number(bar.t0));
           const x1 = timeToX(Number(bar.t1));
-          const bx = Math.min(x0, x1);
-          const bw = Math.max(18, Math.abs(x1 - x0));
+          // A lone waypoint aimed at a target: thin bar, no label, data on hover.
+          const single = !!bar.single;
+          const bw = single ? 4 : Math.max(18, Math.abs(x1 - x0));
+          const bx = single ? x0 - bw / 2 : Math.min(x0, x1);
           const by = cy - 11;
           const bh = 22;
-          const rad = 6;
+          const rad = single ? 2 : 6;
+          window.__lookBarHits.push({ x: bx - (single ? 3 : 0), y: by, w: bw + (single ? 6 : 0), h: bh, bar: bar });
           ctx.fillStyle = "#7aa2ff";
           ctx.globalAlpha = 0.55;
           ctx.beginPath();
@@ -3074,7 +3100,7 @@
           ctx.font = "10px Segoe UI, sans-serif";
           ctx.textAlign = "left";
           ctx.textBaseline = "middle";
-          ctx.fillText(bar.name || "target", bx + 6, cy);
+          if (!single) ctx.fillText(lookBarLabel(bar), bx + 6, cy);
           ctx.restore();
         });
       });
@@ -3958,6 +3984,27 @@
       });
       return best;
     }
+    function lookBarLabel(bar) {
+      const name = bar.name || "target";
+      if (bar.tool) return name + " · " + bar.tool;
+      const z = (v) => !v || v.every((n) => Math.abs(Number(n) || 0) < 1e-6);
+      return (z(bar.pos_offset) && z(bar.offset)) ? name : name + " · offset";
+    }
+    function lookBarHint(bar) {
+      const f = (v) => (v || [0, 0, 0]).map((n) => Number(n || 0).toFixed(3)).join(", ");
+      const rot = (bar.offset || [0, 0, 0]).map((n) => fkDeg ? rad2deg(Number(n || 0)).toFixed(1) : Number(n || 0).toFixed(3)).join(", ");
+      return ["Look At  " + (bar.name || "target"),
+        "tool     " + (bar.tool || "—"),
+        "pos off  " + f(bar.pos_offset),
+        "rot off  " + rot + (fkDeg ? " deg" : " rad")].join("\n");
+    }
+    function hitLookBar(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const hit = (window.__lookBarHits || []).find((h) => x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h);
+      return hit ? hit.bar : null;
+    }
     function showHopTip(sp, clientX, clientY) {
       const tip = document.getElementById("hopTip");
       if (!tip || !sp) { if (tip) tip.hidden = true; return; }
@@ -3978,9 +4025,19 @@
     }
     function onTlPointerMove(e) {
       if (!dragSm && !dragKf) {
-        const hop = hitHop(e.clientX, e.clientY);
+        const lbar = hitLookBar(e.clientX, e.clientY);
+        const hop = lbar ? null : hitHop(e.clientX, e.clientY);
         if (hop && hitKeyframe(e.clientX, e.clientY) < 0) showHopTip(hop, e.clientX, e.clientY);
-        else {
+        else if (lbar) {
+          const tip = document.getElementById("hopTip");
+          if (tip) {
+            tip.textContent = lookBarHint(lbar);
+            tip.style.whiteSpace = "pre";
+            tip.hidden = false;
+            tip.style.left = (e.clientX + 12) + "px";
+            tip.style.top = (e.clientY + 14) + "px";
+          }
+        } else {
           const tip = document.getElementById("hopTip");
           if (tip) tip.hidden = true;
         }
@@ -4506,16 +4563,23 @@
           const el = document.getElementById(id);
           if (el && document.activeElement !== el) el.value = Number(poff[i] || 0).toFixed(4);
         });
-        const offOk = (track.offset_state || "missing") === "ok";
-        const ub = document.getElementById("trackUseOffset");
-        if (ub) ub.disabled = !offOk;
+        // Offset from tool: the sim cursor's children; choosing one copies its local transform.
+        const tsel = document.getElementById("trackTool");
+        const tools = track.tools || [];
+        if (tsel && document.activeElement !== tsel) {
+          const cur = track.tool || "";
+          const opts = ["<option value=''>" + (tools.length ? "— choose a child —" : "no child objects") + "</option>"]
+            .concat(tools.map((t) => "<option value='" + t.id + "'" + (t.name === cur ? " selected" : "") + ">" + t.name + "</option>"));
+          const html = opts.join("");
+          if (tsel.dataset.html !== html) { tsel.innerHTML = html; tsel.dataset.html = html; }
+          tsel.disabled = !tools.length;
+        }
+        const tpick = document.getElementById("trackToolPick");
+        if (tpick) tpick.classList.toggle("on", !!track.tool_pick);
         const oe = document.getElementById("trackOffErr");
         if (oe) {
-          const st = track.offset_state || "missing";
-          oe.hidden = st === "ok";
-          oe.textContent = st === "disabled"
-            ? "Offset component is not enabled on this object."
-            : "This object has no Offset component.";
+          oe.hidden = !!tools.length;
+          oe.textContent = "Parent objects to the Sim cursor to use them as tools.";
         }
       }
       renderOffsetComp(obj);
@@ -5025,7 +5089,8 @@
         const hasCollider = !!(obj.collider && obj.collider.added);
         compMenu.querySelectorAll("[data-comp]").forEach((b) => {
           const k = b.getAttribute("data-comp");
-          b.hidden = (k === "track" && !isSim && obj.kind !== "waypoint") || ((k === "offset" || k === "collider") && obj.kind === "waypoint");
+          // Offset component is switched off for now (offsets.OFFSETS_ENABLED).
+          b.hidden = k === "offset" || (k === "track" && !isSim && obj.kind !== "waypoint") || ((k === "offset" || k === "collider") && obj.kind === "waypoint");
           const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset) || (k === "collider" && hasCollider);
           b.disabled = !!taken;
           b.style.opacity = taken ? "0.4" : "";
@@ -5120,12 +5185,13 @@
       if (!el) return;
       el.addEventListener("change", () => postTrack({ added: true, on: trackToggle && trackToggle.classList.contains("advanced") }));
     });
-    const trackUseOffset = document.getElementById("trackUseOffset");
-    if (trackUseOffset) trackUseOffset.onclick = (e) => {
-      e.preventDefault();
-      if (trackUseOffset.disabled) return;
-      postTrack({ added: true, copy_offset: true });
-    };
+    const trackToolSel = document.getElementById("trackTool");
+    if (trackToolSel) trackToolSel.addEventListener("change", () => {
+      if (!trackToolSel.value) return;
+      postTrack({ added: true, tool: trackToolSel.value });
+    });
+    const trackToolPick = document.getElementById("trackToolPick");
+    if (trackToolPick) trackToolPick.onclick = () => postTrack({ added: true, tool_pick: true });
     const trackTrash = document.getElementById("trackTrash");
     if (trackTrash) trackTrash.onclick = () => { window.__trackAdded = false; postTrack({ added: false, on: false }); };
     const holdLinEl = document.getElementById("holdLinMps");
@@ -5340,11 +5406,14 @@
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
       const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
-      // Built-ins. With SIM_BOT_ENABLED: Sim Bot (robot base) with Sim EE (the sim cursor) under it.
+      // Built-ins. With SIM_BOT_ENABLED: Aubo Arm (robot base) with the Sim cursor and,
+      // while the robot is connected, the Real cursor under it.
+      const realLinked = !!(d.real && d.real.connected);
       const objRows = (SIM_BOT_ENABLED
-        ? [{ id: "sim_bot", name: "Sim Bot" }, { id: "sim_cursor", name: "Sim EE", parent_id: "sim_bot" }]
+        ? [{ id: "sim_bot", name: "Aubo Arm" }, { id: "sim_cursor", name: "Sim cursor", parent_id: "sim_bot" }]
+            .concat(realLinked ? [{ id: "real_cursor", name: "Real cursor", parent_id: "sim_bot" }] : [])
         : [{ id: "sim_cursor", name: "Sim cursor" }]).concat(d.scene_objects || []);
-      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot";
+      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot" || id === "real_cursor";
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
       function eyeOn(kind, id) {
@@ -5366,7 +5435,7 @@
       });
       const byParent = {};
       objRows.forEach((o) => {
-        const p = (o.id === "sim_bot" || (o.id === "sim_cursor" && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
+        const p = (o.id === "sim_bot" || ((o.id === "sim_cursor" || o.id === "real_cursor") && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
         if (!byParent[p]) byParent[p] = [];
         byParent[p].push(o);
       });
@@ -5447,7 +5516,7 @@
       const row = e.target.closest("[data-oid]");
       if (!row) return;
       const oid = row.getAttribute("data-oid");
-      if (!oid || oid === "sim_cursor" || oid === "sim_bot") return;
+      if (!oid || oid === "sim_cursor" || oid === "sim_bot" || oid === "real_cursor") return;
       e.preventDefault();
       e.stopPropagation();
       const label = row.querySelector(".hier-label") || row.querySelector("span:not(.hier-eye)");
@@ -5512,7 +5581,7 @@
       let dragId = null;
       list.addEventListener("dragstart", (e) => {
         const row = e.target.closest("[data-oid]");
-        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot") { e.preventDefault(); return; }
+        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot" || row.getAttribute("data-oid") === "real_cursor") { e.preventDefault(); return; }
         dragId = row.getAttribute("data-oid");
         e.dataTransfer.setData("text/plain", dragId);
       });
@@ -5986,6 +6055,8 @@
       if (Array.isArray(d.sim_poses)) applySimPoses(d.sim_poses);
       else if (Array.isArray(d.pose_markers) && d.pose_markers.length) applySimPoses(d.pose_markers);
       fillHierarchy(d);
+      const amm = document.getElementById("armMoveModal");
+      if (amm && !window.__armMoveAsking) amm.hidden = !d.arm_move_pending;
       const wrap = document.querySelector(".viewer-wrap");
       const pane = document.getElementById("camPane");
       const cam0 = d.cam_view || {};
@@ -5995,7 +6066,7 @@
         allCams.unshift({
           id: "sim",
           kind: "sim",
-          name: SIM_BOT_ENABLED ? "Sim EE" : "Sim cursor",
+          name: "Sim cursor",
           camera: simCam,
           cam_type: simCam.type || "sim",
         });
@@ -6728,7 +6799,21 @@
           }).join("");
         }
         rm.value = cur;
+        rm.dataset.cur = cur;
       }
+      const ra = (s && s.robot_address) || null;
+      const ipEl = document.getElementById("robotIp");
+      const portEl = document.getElementById("robotPort");
+      if (ipEl && document.activeElement !== ipEl) {
+        ipEl.value = (s && s.robot_ip) || "";
+        if (ra && ra.default_ip) ipEl.placeholder = ra.default_ip;
+      }
+      if (portEl && document.activeElement !== portEl) {
+        portEl.value = (s && s.robot_port) || "";
+        if (ra && ra.default_port) portEl.placeholder = String(ra.default_port);
+      }
+      const an = document.getElementById("robotAddrNote");
+      if (an && ra) an.textContent = "Now using " + ra.ip + ":" + ra.port + ". The app reconnects to a new address on its own. Leave empty to use the default from arcscontrol.py (" + ra.default_ip + ":" + ra.default_port + ").";
       if (s && s.auto_sample != null) {
         autoSampleOn = !!s.auto_sample;
         const btn = document.getElementById("optomise");
@@ -6759,7 +6844,9 @@
         grid_spacing: Math.max(0.001, Number(document.getElementById("tlGrid") && document.getElementById("tlGrid").value || gridSpacing || 0.01)),
         snap_to_grid: !!snapToGrid,
         dev_mode: !!devMode,
-        robot_model: (document.getElementById("robotModel") && document.getElementById("robotModel").value) || "aubo_i5",
+        robot_model: (document.getElementById("robotModel") && (document.getElementById("robotModel").dataset.cur || document.getElementById("robotModel").value)) || "aubo_i5",
+        robot_ip: ((document.getElementById("robotIp") || {}).value || "").trim(),
+        robot_port: ((document.getElementById("robotPort") || {}).value || "").trim(),
       };
     }
     function applyDevMode(on) {
@@ -6795,7 +6882,7 @@
         tab.onclick = () => {
           ctrlSettings.querySelectorAll(".ctrl-tab").forEach((t) => t.classList.remove("on"));
           tab.classList.add("on");
-          ["speed", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
+          ["speed", "robot", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
             const pane = document.getElementById("pane-" + id);
             if (pane) pane.hidden = tab.getAttribute("data-tab") !== id;
           });
@@ -6807,6 +6894,16 @@
           if (el) el.addEventListener("change", saveCtrlSettings);
         });
       }
+      ["robotIp", "robotPort"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", () => {
+          saveCtrlSettings();
+          setTimeout(() => fetch("/api/settings").then((r) => r.json()).then((d) => fillLimitInputs(d.settings || {})), 300);
+        });
+      });
+      const rmSel = document.getElementById("robotModel");
+      // Robot type lives here now (was Edit > Robot type): same switch + confirm.
+      if (rmSel) rmSel.addEventListener("change", () => applyRobotType(rmSel.value, false));
     }
     fetch("/api/settings").then((r) => r.json()).then((d) => fillLimitInputs(d.settings || {})).catch(() => {});
     function pickImportObject() {
@@ -6878,16 +6975,29 @@
       if (act === "undo") await fetch("/api/undo", { method: "POST" });
       if (act === "redo") await fetch("/api/redo", { method: "POST" });
       if (act === "settings") openCtrlSettings();
-      if (act === "robot-type") openRobotTypeModal();
       setTimeout(refresh, 150);
     });
     async function loadProjectDoc(doc, name) {
+      statusEl.textContent = "Opening " + (name || "file") + "…";
+      let res = null;
+      try {
+        res = await fetch("/api/file/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc: doc }),
+        }).then((r) => r.json());
+      } catch (err) {
+        res = { ok: false, error: String(err) };
+      }
+      if (!res || res.ok === false) {
+        // Say why instead of silently claiming the file opened.
+        const why = (res && res.error) || "no reply from the app";
+        statusEl.textContent = "Open failed: " + why;
+        alert("Could not open " + (name || "file") + ":\n" + why);
+        setTimeout(refresh, 250);
+        return;
+      }
       setDocTitle(doc.title || fileStem(name || "path"));
-      await fetch("/api/file/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc: doc }),
-      });
       statusEl.textContent = "Opened " + (name || "file");
       setTimeout(refresh, 250);
     }
@@ -6915,8 +7025,24 @@
         await loadProjectDoc(doc, file.name);
       } catch (err) {
         statusEl.textContent = "Open failed: " + err;
+        alert("Could not open " + file.name + ":\n" + err);
       }
     });
+    function answerArmMove(follow) {
+      const m = document.getElementById("armMoveModal");
+      if (m) m.hidden = true;
+      window.__armMoveAsking = true;
+      fetch("/api/arm_move_choice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ follow: !!follow }),
+      }).then(() => { window.__armMoveAsking = false; setTimeout(refresh, 80); },
+        () => { window.__armMoveAsking = false; });
+    }
+    const armMoveKeep = document.getElementById("armMoveKeep");
+    if (armMoveKeep) armMoveKeep.onclick = () => answerArmMove(false);
+    const armMoveFollow = document.getElementById("armMoveFollow");
+    if (armMoveFollow) armMoveFollow.onclick = () => answerArmMove(true);
     const fileRobotOk = document.getElementById("fileRobotOk");
     if (fileRobotOk) fileRobotOk.onclick = async () => {
       const m = document.getElementById("fileRobotModal");
@@ -7516,6 +7642,8 @@
       }
       const typeModal = document.getElementById("robotTypeModal");
       if (typeModal) typeModal.hidden = true;
+      const rmNow = document.getElementById("robotModel");
+      if (rmNow && d.ok) rmNow.dataset.cur = id;
       statusEl.textContent = d.ok
         ? ("Robot type " + id + (d.reloaded ? " loaded" : " saved"))
         : ("Robot type failed: " + (d.error || r.status));
@@ -7532,6 +7660,8 @@
     const warnCancel = document.getElementById("robotTypeWarnCancel");
     if (warnCancel) warnCancel.onclick = () => {
       _pendingRobotType = null;
+      const rmBack = document.getElementById("robotModel");
+      if (rmBack && rmBack.dataset.cur) rmBack.value = rmBack.dataset.cur;
       const w = document.getElementById("robotTypeWarn");
       if (w) w.hidden = true;
     };

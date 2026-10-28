@@ -447,11 +447,27 @@ def _aim_samples_at_track(i, samples):
             sm["wxyz"] = np.asarray(wxyz, dtype=float).reshape(4)
 
 
+def _look_bar(t0, t1, spec, single=False):
+    return {
+        "t0": float(t0),
+        "t1": float(t1),
+        "name": str(spec.get("name") or ""),
+        "tool": str(spec.get("tool") or ""),
+        "offset": [float(v) for v in list(spec.get("offset") or [0.0, 0.0, 0.0])[:3]],
+        "pos_offset": [float(v) for v in list(spec.get("pos_offset") or [0.0, 0.0, 0.0])[:3]],
+        "single": bool(single),
+    }
+
+
 def update_look_bars():
     """Look At timeline bars, rebuilt on bake only: one bar per run of spans
-    aimed at the same target (same rule the bake uses to aim samples)."""
+    aimed at the same target with the same offset (same rule the bake uses to
+    aim samples). A waypoint with Look At on that shares it with neither
+    neighbour still gets a thin "single" bar at its time."""
     bars = []
     wps = wp.waypoints
+    covered = set()
+    last_spec = None
     for i in range(max(0, len(wps) - 1)):
         spec = _track_spec_for_seg(i)
         if not spec:
@@ -459,12 +475,20 @@ def update_look_bars():
         t0, t1 = wps[i].get("t"), wps[i + 1].get("t")
         if t0 is None or t1 is None:
             continue
-        name = str(spec.get("name") or "")
+        covered.update((i, i + 1))
         t0, t1 = float(min(t0, t1)), float(max(t0, t1))
-        if bars and bars[-1]["name"] == name and abs(bars[-1]["t1"] - t0) < 1e-6:
+        if bars and last_spec is not None and _same_track(last_spec, spec) and abs(bars[-1]["t1"] - t0) < 1e-6:
             bars[-1]["t1"] = t1
         else:
-            bars.append({"t0": t0, "t1": t1, "name": name})
+            bars.append(_look_bar(t0, t1, spec))
+        last_spec = spec
+    for i, w in enumerate(wps):
+        rec = w.get("track_object") or {}
+        if i in covered or not _track_on(rec) or w.get("t") is None:
+            continue
+        t = float(w.get("t"))
+        bars.append(_look_bar(t, t, rec, single=True))
+    bars.sort(key=lambda b: (b["t0"], b["t1"]))
     wp.look_bars = bars
     return bars
 
@@ -1317,6 +1341,8 @@ def _run_bake_body(spacing_m=None):
     _speed_valid = True
     store_bake_motion()
     update_look_bars()
+    if hasattr(wp, "refresh_stale_marks"):
+        wp.refresh_stale_marks()
     print(
         "bake done",
         "ok", baked, "/", len(segments),
@@ -1375,6 +1401,8 @@ def _finish_bake(baked, failed_at):
     _speed_valid = True
     store_bake_motion()
     update_look_bars()
+    if hasattr(wp, "refresh_stale_marks"):
+        wp.refresh_stale_marks()
     print(
         "bake done",
         "ok", baked, "/", len(segments),

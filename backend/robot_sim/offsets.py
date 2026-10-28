@@ -15,6 +15,9 @@ import numpy as np
 
 import waypoints as wp
 
+# Offset component switched off for now (user, 2026-10-27): no panel, no
+# markers, can't be added. Records already in files are kept untouched.
+OFFSETS_ENABLED = False
 OFFSET_RGB = (255, 210, 40)
 DEFAULT_POS = (0.0, 0.0, 0.1)
 
@@ -85,7 +88,7 @@ def _set_record(owner, rec):
 def offset_status(owner):
     """Props-panel payload: added / enabled / local pos / local wxyz."""
     rec = get_offset(owner)
-    if not rec:
+    if not rec or not OFFSETS_ENABLED:
         return {"added": False, "enabled": False}
     c = clean_offset(rec)
     c["added"] = True
@@ -122,6 +125,8 @@ def compose(owner_pos, owner_wxyz, rec):
 
 
 def offset_world(owner, require_enabled=True):
+    if not OFFSETS_ENABLED:
+        return None
     rec = get_offset(owner)
     if not rec or (require_enabled and not rec.get("enabled", True)):
         return None
@@ -134,6 +139,8 @@ def offset_world(owner, require_enabled=True):
 @_locked
 def add_offset_component(owner):
     owner = _norm_owner(owner)
+    if not OFFSETS_ENABLED:
+        return offset_status(owner)
     if get_offset(owner):
         return offset_status(owner)
     if owner != "sim":

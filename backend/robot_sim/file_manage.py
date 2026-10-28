@@ -361,6 +361,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
         doc["spacing"] = bake.spacing
         doc["cursor"] = _sim_cursor_record()
         doc["sim_track"] = _sim_track_record()
+        doc["arm_base"] = _arm_base_record()
         src_tracks = tracks
         if src_tracks is None:
             if hasattr(wp, "sync_camera_tracks"):
@@ -417,6 +418,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
                 "in_ctrl_pos": in_p,
                 "force_fk": bool(w.get("force_fk")),
                 "q_dirty": bool(w.get("q_dirty")),
+                "ik_stale": bool(w.get("ik_stale")),
                 "added_from": w.get("added_from"),
                 "track_object": None if not w.get("track_object") else dict(w.get("track_object")),
                 "is_waypoint": True,
@@ -598,6 +600,7 @@ def resolve_point_fields(raw, index=0, t_prev=0.0, q_prev=None, pos_prev=None):
         "in_ctrl_pos": p.get("in_ctrl_pos"),
         "force_fk": bool(p.get("force_fk")),
         "q_dirty": bool(p.get("q_dirty")),
+        "ik_stale": bool(p.get("ik_stale")),
         "added_from": p.get("added_from"),
         "track_object": None if not p.get("track_object") else dict(p.get("track_object")),
         "clip_id": p.get("clip_id"),
@@ -664,6 +667,8 @@ def parse_project_doc(data):
 
 def apply_loaded_doc(data):
     data = parse_project_doc(data)
+    # Before waypoints: IK values in the file are relative to the arm base.
+    _restore_arm_base(data.get("arm_base"))
     fmt = str(data.get("format") or "").lower()
     bake.import_raw_json = fmt not in ("arcspath", "arcs")
     raw_pts = data.get("points") or []
@@ -782,6 +787,32 @@ def apply_loaded_doc(data):
     return {"ok": True, "waypoints": len(wp.waypoints), "points": len(pts)}
 
 
+def _arm_base_record():
+    """Aubo Arm (robot base) pose in the world."""
+    try:
+        pos, wxyz = rr.arm_base_pose()
+    except Exception:
+        return None
+    return {"pos": [float(v) for v in pos], "wxyz": [float(v) for v in wxyz]}
+
+
+def _restore_arm_base(rec):
+    pos, wxyz = [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]
+    if isinstance(rec, dict):
+        try:
+            pos = [float(v) for v in list(rec.get("pos"))[:3]]
+            wxyz = [float(v) for v in list(rec.get("wxyz"))[:4]]
+        except Exception:
+            pos, wxyz = [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]
+    try:
+        if hasattr(wp, "set_sim_bot_pose"):
+            wp.set_sim_bot_pose(pos, wxyz)
+        else:
+            rr.set_arm_base(pos, wxyz)
+    except Exception as e:
+        print("restore arm base failed:", e)
+
+
 def _sim_track_record():
     """The sim cursor's Track component; waypoints keep their own track_object."""
     tr = getattr(rr, "_track", None) or {}
@@ -793,6 +824,7 @@ def _sim_track_record():
         "added": bool(tr.get("added")),
         "offset": [float(v) for v in list(tr.get("offset") or [0.0, 0.0, 0.0])[:3]],
         "pos_offset": [float(v) for v in list(tr.get("pos_offset") or [0.0, 0.0, 0.0])[:3]],
+        "tool": str(tr.get("tool") or ""),
     }
 
 
@@ -807,6 +839,7 @@ def _restore_sim_track(rec):
                 offset=rec.get("offset"),
                 pos_offset=rec.get("pos_offset") or [0.0, 0.0, 0.0],
             )
+            rr._track["tool"] = str(rec.get("tool") or "")
         else:
             rr.set_track_object(on=False, name="", pick=False, added=False, offset=[0.0, 0.0, 0.0], pos_offset=[0.0, 0.0, 0.0])
     except Exception as e:
@@ -972,6 +1005,7 @@ def new_project():
     # One full reset, on this thread only. /api/file/new used to also queue
     # reset_document on the viewer thread, so both cleared the same lists at
     # once and a swallowed error could leave objects in the scene.
+    _restore_arm_base(None)
     wp.sim_camera = None
     wp.sim_offset = None
     wp.sim_collider = None

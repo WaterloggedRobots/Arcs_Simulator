@@ -66,23 +66,30 @@ def _qrot(q, v):
     ])
 
 
-# Sim Bot: robot-base parent of the sim cursor ("Sim EE"). Designed and wired
-# (hierarchy row, blue marker, read-only props, parenting) but switched off for
-# now; set True here and SIM_BOT_ENABLED in templates/index.html to bring it back.
-SIM_BOT_ENABLED = False
-SIM_CURSOR_NAME = "Sim EE" if SIM_BOT_ENABLED else "Sim cursor"
+# Aubo Arm (id sim_bot): the robot base, parent of the Sim and Real cursors.
+# Its gizmo sits at the base; moving it moves both arms (robot_runtime.set_arm_base).
+SIM_BOT_ENABLED = True
+SIM_CURSOR_NAME = "Sim cursor"
 SIM_BOT_ID = "sim_bot"
+SIM_BOT_NAME = "Aubo Arm"
+REAL_CURSOR_ID = "real_cursor"
 SIM_BOT_RGB = (60, 130, 255)
+EMPTY_RGB = (150, 150, 158)
 _sim_bot_viz = {}
+_sim_bot_giz = {"gizmo": None, "rot0": None, "quiet": False, "dragging": False}
 
 
 def sim_bot_pose():
-    """Sim Bot is the robot base: fixed at the world origin for now."""
-    return np.zeros(3, dtype=float), np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    """Aubo Arm pose (robot base) in the world."""
+    try:
+        import robot_runtime as rr
+        return rr.arm_base_pose()
+    except Exception:
+        return np.zeros(3, dtype=float), np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
 
 def ensure_sim_bot_marker():
-    """Large blue waypoint-style marker for Sim Bot (built in, never removed)."""
+    """Large blue waypoint-style marker for the Aubo Arm (built in, never removed)."""
     if not SIM_BOT_ENABLED or wp.server is None or _sim_bot_viz.get("sphere") is not None:
         return
     pos, q = sim_bot_pose()
@@ -104,10 +111,202 @@ def ensure_sim_bot_marker():
         select_scene_object(SIM_BOT_ID, mode=mode)
 
 
+def _move_sim_bot_marker():
+    pos, q = sim_bot_pose()
+    for h in _sim_bot_viz.values():
+        try:
+            h.position = tuple(float(v) for v in pos)
+            h.wxyz = tuple(float(v) for v in q)
+        except Exception:
+            pass
+
+
 def set_sim_bot_visible(on):
     for h in _sim_bot_viz.values():
         try:
             h.visible = bool(on)
+        except Exception:
+            pass
+
+
+# Arm move waiting for "move waypoints with the arm?": base pose before the move.
+_arm_move = {"from": None}
+
+
+def _arm_delta(from_pose, to_pose):
+    """Rigid map world -> world that carries the arm from one base pose to another."""
+    fp = np.asarray(from_pose[0], dtype=float).reshape(3)
+    fq = np.asarray(from_pose[1], dtype=float).reshape(4)
+    tp = np.asarray(to_pose[0], dtype=float).reshape(3)
+    tq = np.asarray(to_pose[1], dtype=float).reshape(4)
+    dq = _qmul(tq, _qinv(fq))
+    dq = dq / (float(np.linalg.norm(dq)) or 1.0)
+
+    def apply(pos=None, wxyz=None):
+        p = None if pos is None else tp + _qrot(dq, np.asarray(pos, dtype=float).reshape(3) - fp)
+        q = None
+        if wxyz is not None:
+            q = _qmul(dq, np.asarray(wxyz, dtype=float).reshape(4))
+            q = q / (float(np.linalg.norm(q)) or 1.0)
+        return p, q
+    return apply
+
+
+def _carry_saved_points(move):
+    """Saved points (Bookmarks) belong to the arm: they follow every base move.
+    Home and Real pose come from the arm's own FK and follow by themselves."""
+    for p in list(getattr(wp, "sim_poses", None) or []):
+        if p.get("builtin") or str(p.get("id")) in ("home", "real") or p.get("pos") is None:
+            continue
+        try:
+            np_, nq = move(p.get("pos"), p.get("wxyz"))
+            p["pos"] = [float(v) for v in np_]
+            if nq is not None:
+                p["wxyz"] = [float(v) for v in nq]
+        except Exception:
+            pass
+    try:
+        wp.refresh_pose_markers()
+    except Exception:
+        pass
+
+
+def arm_move_pending():
+    """True once a finished arm move waits on the waypoint question."""
+    return _arm_move.get("from") is not None and bool(wp.waypoints) and not wp._drag_checkpointed
+
+
+def resolve_arm_move(follow):
+    """Answer the question: waypoints follow the arm, or stay and get re-solved.
+
+    follow: waypoints (and their Bezier handles) move with the arm; their
+    joints still fit since they did not move relative to the base.
+    keep: waypoints stay in the world; their joints no longer fit, so they
+    are cleared, the waypoints turn red, and the next bake re-solves them.
+    """
+    frm = _arm_move.get("from")
+    _arm_move["from"] = None
+    if frm is None or not wp.waypoints:
+        return False
+    if follow:
+        move = _arm_delta(frm, sim_bot_pose())
+        snap = wp._snapshot()
+        snap["arm_base"] = None
+        for s in snap["waypoints"]:
+            s["pos"], s["wxyz"] = move(s["pos"], s.get("wxyz", [1, 0, 0, 0]))
+            for key in ("out_ctrl_pos", "in_ctrl_pos"):
+                if s.get(key) is not None:
+                    s[key] = move(s[key])[0]
+        wp._rebuild_from_snapshot(snap)
+    else:
+        for item in wp.waypoints:
+            item["q"] = None
+            item["q_dirty"] = True
+            wp.set_wp_stale(item, True)
+    try:
+        import path_bake as bake
+        bake.invalidate_from(0)
+    except Exception as e:
+        print("arm move: invalidate bake failed", e)
+    return True
+
+
+def _place_sim_bot_gizmo():
+    """Put the arm's gizmo on the arm. Uses its own guard, not the shared
+    wp._suspend_gizmo_cb, which other threads toggle."""
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is None:
+        return
+    p, q = sim_bot_pose()
+    _sim_bot_giz["quiet"] = True
+    try:
+        giz.position = tuple(float(v) for v in p)
+        giz.wxyz = wp._gizmo_display_wxyz(q)
+    except Exception:
+        pass
+    finally:
+        _sim_bot_giz["quiet"] = False
+
+
+def set_sim_bot_pose(pos=None, wxyz=None, ask=False, from_gizmo=False):
+    """Move the Aubo Arm, then everything parented to it or to the sim cursor.
+    ask: a user move (gizmo / props) that should ask about the waypoints.
+    from_gizmo: the move comes from dragging the arm's gizmo; writing the
+    gizmo back mid-drag fights the browser and the gizmo comes loose."""
+    import robot_runtime as rr
+    before = sim_bot_pose()
+    if not rr.set_arm_base(pos, wxyz):
+        return False
+    _carry_saved_points(_arm_delta(before, sim_bot_pose()))
+    if ask and wp.waypoints and _arm_move.get("from") is None:
+        _arm_move["from"] = (before[0].copy(), before[1].copy())
+    _move_sim_bot_marker()
+    if not from_gizmo:
+        _place_sim_bot_gizmo()
+    _propagate_children(SIM_BOT_ID)
+    _propagate_children("sim_cursor")
+    return True
+
+
+def show_sim_bot_gizmo():
+    if wp.server is None:
+        return None
+    pos, q = sim_bot_pose()
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is None:
+        giz = wp._new_transform_gizmo("/sim_bot/gizmo_%s" % wp.gizmo_space, pos, wp._gizmo_display_wxyz(q), 0.22, False, True)
+        _sim_bot_giz["gizmo"] = giz
+
+        @giz.on_update
+        def _(_):
+            if _sim_bot_giz.get("quiet"):
+                return
+            old_p, old_q = sim_bot_pose()
+            _sim_bot_giz["dragging"] = True
+            if not wp._drag_checkpointed:
+                # First update of a drag: undo checkpoint + start pose for world-axes rotation.
+                _sim_bot_giz["rot0"] = old_q.copy()
+                if not wp._suspend_history:
+                    wp._push_history()
+                wp._drag_checkpointed = True
+            rot0 = _sim_bot_giz.get("rot0")
+            new_q = wp._keep_heading(old_q, wp._orientation_from_gizmo(giz, old_q, rot0 if rot0 is not None else old_q))
+            if not set_sim_bot_pose(np.array(giz.position, dtype=float).reshape(3), new_q, ask=True, from_gizmo=True):
+                _place_sim_bot_gizmo()  # move refused (a run is playing): snap back onto the arm
+            wp._arm_drag_release(giz)
+    _place_sim_bot_gizmo()
+    try:
+        giz.visible = True
+    except Exception:
+        pass
+    return giz
+
+
+def drop_sim_bot_gizmo():
+    """Gizmo space changed: rebuild on next show."""
+    giz = _sim_bot_giz.get("gizmo")
+    _sim_bot_giz["gizmo"] = None
+    if giz is not None:
+        try:
+            giz.remove()
+        except Exception:
+            pass
+
+
+def park_sim_bot_gizmo():
+    """Pointer-up after dragging the arm: put the gizmo exactly back on the
+    arm (world-axes mode: axes back to world XYZ)."""
+    if not _sim_bot_giz.get("dragging"):
+        return
+    _sim_bot_giz["dragging"] = False
+    _place_sim_bot_gizmo()
+
+
+def hide_sim_bot_gizmo():
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is not None:
+        try:
+            giz.visible = False
         except Exception:
             pass
 
@@ -117,8 +316,8 @@ def sim_bot_props():
     return {
         "kind": "bot",
         "id": SIM_BOT_ID,
-        "name": "Sim Bot",
-        "editable": False,
+        "name": SIM_BOT_NAME,
+        "editable": True,
         "pos": [float(v) for v in pos],
         "wxyz": [float(v) for v in q],
         "scale": [1.0, 1.0, 1.0],
@@ -202,7 +401,7 @@ def reparent_object(oid, parent_id=None):
     pid = None if not parent_id or parent_id in ("", None) else str(parent_id)
     if pid == "sim_cursor":
         pid = "sim_cursor"
-    if pid == oid:
+    if pid == oid or pid == REAL_CURSOR_ID:
         return False
     walk = pid
     while walk:
@@ -297,6 +496,7 @@ def _update_measure_line():
 
 
 def _hide_all_object_gizmos():
+    hide_sim_bot_gizmo()
     for obj in wp.scene_objects:
         giz = obj.get("gizmo")
         if giz is None:
@@ -624,7 +824,7 @@ def _spawn_object_mesh(obj):
         )
     else:
         base = 0.02 if kind == "empty" else 0.05
-        color = (80, 160, 255) if kind == "empty" else (220, 220, 220)
+        color = EMPTY_RGB if kind == "empty" else (220, 220, 220)
         handle = wp.server.scene.add_icosphere(
             name=name,
             radius=base * max(1e-4, float(np.mean(np.abs(sc)))),
@@ -633,10 +833,18 @@ def _spawn_object_mesh(obj):
             color=color,
         )
         if kind == "empty":
+            # Empties look like a grey, see-through waypoint: sphere + forward
+            # and side arrows. The arrows are child nodes, so they follow the
+            # sphere's pose and visibility and go when it is removed.
             try:
                 handle.opacity = 0.4
             except Exception:
                 pass
+            try:
+                wp.add_forward_arrow(name, colors=EMPTY_RGB)
+                wp.add_side_arrow(name, colors=EMPTY_RGB)
+            except Exception as e:
+                print("empty arrows failed", e)
     obj["handle"] = handle
     if obj.get("camera"):
         try:
@@ -839,12 +1047,16 @@ def select_scene_object(oid, mode="replace"):
         if not SIM_BOT_ENABLED:
             return False
         return wp.select_item("bot", None, mode=mode)
+    if str(oid) == REAL_CURSOR_ID:
+        return wp.select_item("real", None, mode=mode)
     obj = _find_object(oid)
     if obj is None:
         return False
     try:
         import robot_runtime as rr
         if rr.consume_track_pick(obj.get("name")):
+            return True
+        if rr.consume_tool_pick(oid):
             return True
     except Exception:
         pass
@@ -1038,6 +1250,8 @@ def _parent_offset(obj):
     """The parent's Offset record when it exists and is enabled, else None."""
     pid = (obj or {}).get("parent_id")
     if not pid:
+        return None
+    if not _offsets().OFFSETS_ENABLED:
         return None
     rec = _offsets().get_offset(pid)
     if not rec or not rec.get("enabled", True):
