@@ -303,7 +303,6 @@ def set_arm_base(pos=None, wxyz=None):
         p, q = base_to_world(loc_p, loc_q)
         _sim_wxyz = q
         pin = tuple(float(v) for v in p)
-        hold = wp._suspend_gizmo_cb
         wp._suspend_gizmo_cb = True
         try:
             if _cursor_sim is not None:
@@ -315,7 +314,10 @@ def set_arm_base(pos=None, wxyz=None):
                 _track["pin_pos"] = np.asarray(p, dtype=float).reshape(3).copy()
             _track["_ik_key"] = None
         finally:
-            wp._suspend_gizmo_cb = hold
+            # Always back to False, like every other writer: restoring a value
+            # read earlier could leave it stuck True when another thread set
+            # it meanwhile, and then no gizmo responds any more.
+            wp._suspend_gizmo_cb = False
         _draw_sim_dir(p)
     return True
 

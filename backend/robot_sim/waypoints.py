@@ -414,13 +414,10 @@ def _release_gizmo_drag():
     """Pointer-up: park world-mode axes, keep the Bézier handle selected."""
     global _gizmo_dirty, _drag_checkpointed, _suspend_gizmo_cb, _pending_rebuild_idx
     _drag_checkpointed = False
-    _suspend_gizmo_cb = True
     try:
         simulatorview.park_sim_bot_gizmo()
     except Exception:
         pass
-    finally:
-        _suspend_gizmo_cb = False
     if selected_ctrl is not None and 0 <= selected_ctrl[0] < len(waypoints):
         ctrl = waypoints[selected_ctrl[0]].get("%s_ctrl" % selected_ctrl[1])
         if ctrl is not None:

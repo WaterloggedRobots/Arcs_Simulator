@@ -76,7 +76,7 @@ REAL_CURSOR_ID = "real_cursor"
 SIM_BOT_RGB = (60, 130, 255)
 EMPTY_RGB = (150, 150, 158)
 _sim_bot_viz = {}
-_sim_bot_giz = {"gizmo": None, "rot0": None}
+_sim_bot_giz = {"gizmo": None, "rot0": None, "quiet": False, "dragging": False}
 
 
 def sim_bot_pose():
@@ -211,9 +211,28 @@ def resolve_arm_move(follow):
     return True
 
 
-def set_sim_bot_pose(pos=None, wxyz=None, ask=False):
+def _place_sim_bot_gizmo():
+    """Put the arm's gizmo on the arm. Uses its own guard, not the shared
+    wp._suspend_gizmo_cb, which other threads toggle."""
+    giz = _sim_bot_giz.get("gizmo")
+    if giz is None:
+        return
+    p, q = sim_bot_pose()
+    _sim_bot_giz["quiet"] = True
+    try:
+        giz.position = tuple(float(v) for v in p)
+        giz.wxyz = wp._gizmo_display_wxyz(q)
+    except Exception:
+        pass
+    finally:
+        _sim_bot_giz["quiet"] = False
+
+
+def set_sim_bot_pose(pos=None, wxyz=None, ask=False, from_gizmo=False):
     """Move the Aubo Arm, then everything parented to it or to the sim cursor.
-    ask: a user move (gizmo / props) that should ask about the waypoints."""
+    ask: a user move (gizmo / props) that should ask about the waypoints.
+    from_gizmo: the move comes from dragging the arm's gizmo; writing the
+    gizmo back mid-drag fights the browser and the gizmo comes loose."""
     import robot_runtime as rr
     before = sim_bot_pose()
     if not rr.set_arm_base(pos, wxyz):
@@ -222,18 +241,8 @@ def set_sim_bot_pose(pos=None, wxyz=None, ask=False):
     if ask and wp.waypoints and _arm_move.get("from") is None:
         _arm_move["from"] = (before[0].copy(), before[1].copy())
     _move_sim_bot_marker()
-    giz = _sim_bot_giz.get("gizmo")
-    if giz is not None:
-        p, q = sim_bot_pose()
-        hold = wp._suspend_gizmo_cb
-        wp._suspend_gizmo_cb = True
-        try:
-            giz.position = tuple(float(v) for v in p)
-            giz.wxyz = wp._gizmo_display_wxyz(q)
-        except Exception:
-            pass
-        finally:
-            wp._suspend_gizmo_cb = hold
+    if not from_gizmo:
+        _place_sim_bot_gizmo()
     _propagate_children(SIM_BOT_ID)
     _propagate_children("sim_cursor")
     return True
@@ -250,9 +259,10 @@ def show_sim_bot_gizmo():
 
         @giz.on_update
         def _(_):
-            if wp._suspend_gizmo_cb:
+            if _sim_bot_giz.get("quiet"):
                 return
             old_p, old_q = sim_bot_pose()
+            _sim_bot_giz["dragging"] = True
             if not wp._drag_checkpointed:
                 # First update of a drag: undo checkpoint + start pose for world-axes rotation.
                 _sim_bot_giz["rot0"] = old_q.copy()
@@ -261,18 +271,14 @@ def show_sim_bot_gizmo():
                 wp._drag_checkpointed = True
             rot0 = _sim_bot_giz.get("rot0")
             new_q = wp._keep_heading(old_q, wp._orientation_from_gizmo(giz, old_q, rot0 if rot0 is not None else old_q))
-            set_sim_bot_pose(np.array(giz.position, dtype=float).reshape(3), new_q, ask=True)
+            if not set_sim_bot_pose(np.array(giz.position, dtype=float).reshape(3), new_q, ask=True, from_gizmo=True):
+                _place_sim_bot_gizmo()  # move refused (a run is playing): snap back onto the arm
             wp._arm_drag_release(giz)
+    _place_sim_bot_gizmo()
     try:
-        hold = wp._suspend_gizmo_cb
-        wp._suspend_gizmo_cb = True
-        giz.position = tuple(float(v) for v in pos)
-        giz.wxyz = wp._gizmo_display_wxyz(q)
         giz.visible = True
     except Exception:
         pass
-    finally:
-        wp._suspend_gizmo_cb = hold
     return giz
 
 
@@ -288,14 +294,12 @@ def drop_sim_bot_gizmo():
 
 
 def park_sim_bot_gizmo():
-    """Pointer-up in world-axes mode: axes back to world XYZ."""
-    giz = _sim_bot_giz.get("gizmo")
-    if giz is None or wp.gizmo_space == "local":
+    """Pointer-up after dragging the arm: put the gizmo exactly back on the
+    arm (world-axes mode: axes back to world XYZ)."""
+    if not _sim_bot_giz.get("dragging"):
         return
-    try:
-        giz.wxyz = wp.WORLD_WXYZ
-    except Exception:
-        pass
+    _sim_bot_giz["dragging"] = False
+    _place_sim_bot_gizmo()
 
 
 def hide_sim_bot_gizmo():
