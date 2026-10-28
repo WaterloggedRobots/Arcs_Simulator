@@ -1703,11 +1703,13 @@
           </div>
           <div class="ctrl-main">
             <div class="ctrl-pane" id="pane-speed">
+              <label class="field">Aubo Arm</label>
+              <select id="robotArmSpeed" class="arm-select" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;" title="The arm these settings belong to. Selecting one of its cursors picks it too."></select>
               <label class="field">Robot type</label>
               <select id="robotModel" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
                 <option value="aubo_i5">aubo i5</option>
               </select>
-              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Changing the type reloads the arm (timeline waypoints are cleared after a confirm). Joint speed/accel below apply immediately to bake and hold moves.</p>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Changing the type reloads the arm (timeline waypoints are cleared after a confirm). Joint speed/accel below belong to the arm picked above and apply immediately to its bake and hold moves.</p>
               <div class="lim-head"><span></span><span>Speed (°/s)</span><span>Accel (°/s²)</span></div>
               <div class="lim-row"><label>J1</label><input id="limV0" type="number" step="1"><input id="limA0" type="number" step="1"></div>
               <div class="lim-row"><label>J2</label><input id="limV1" type="number" step="1"><input id="limA1" type="number" step="1"></div>
@@ -1751,7 +1753,7 @@
             </div>
             <div class="ctrl-pane" id="pane-robot" hidden>
               <label class="field">Aubo Arm</label>
-              <select id="robotArm" title="The arm these settings belong to. Selecting one of its cursors picks it too."></select>
+              <select id="robotArm" class="arm-select" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;" title="The arm these settings belong to. Selecting one of its cursors picks it too."></select>
               <label class="field">Robot IP</label>
               <input id="robotIp" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.2.124" />
               <label class="field">Port</label>
@@ -6146,8 +6148,7 @@
         if (!first && cs && !cs.hidden) {
           fetch("/api/settings").then((r) => r.json()).then((x) => fillLimitInputs(x.settings || {}));
         } else {
-          const armSel = document.getElementById("robotArm");
-          if (armSel) armSel.value = d.active_arm;
+          document.querySelectorAll(".arm-select").forEach((armSel) => { armSel.value = d.active_arm; });
         }
       }
       const amm = document.getElementById("armMoveModal");
@@ -6900,12 +6901,11 @@
       const ipEl = document.getElementById("robotIp");
       const portEl = document.getElementById("robotPort");
       // Robot Settings belong to one arm: the select follows the active arm both ways.
-      const armSel = document.getElementById("robotArm");
-      if (armSel && s && s.arms) {
+      if (s && s.arms) document.querySelectorAll(".arm-select").forEach((armSel) => {
         armSel.innerHTML = s.arms.map((a) => "<option value=\"" + a.id + "\">" + a.name + "</option>").join("");
         armSel.value = s.active_arm || (s.arms[0] && s.arms[0].id) || "";
         armSel.dataset.cur = armSel.value;
-      }
+      });
       if (ipEl && document.activeElement !== ipEl) {
         ipEl.value = ra ? String(ra.set_ip || "") : ((s && s.robot_ip) || "");
         ipEl.placeholder = (ra && ra.default_ip) || (ra ? "Sim only: no robot" : ipEl.placeholder);
@@ -7001,8 +7001,7 @@
           if (el) el.addEventListener("change", saveCtrlSettings);
         });
       }
-      const armSel = document.getElementById("robotArm");
-      if (armSel) armSel.addEventListener("change", () => {
+      document.querySelectorAll(".arm-select").forEach((armSel) => armSel.addEventListener("change", () => {
         const id = armSel.value;
         fetch("/api/arm", {
           method: "POST",
@@ -7010,7 +7009,7 @@
           body: JSON.stringify({ action: "activate", id: id }),
         }).then(() => fetch("/api/settings")).then((r) => r.json())
           .then((d) => { window.__activeArm = (d.settings || {}).active_arm; fillLimitInputs(d.settings || {}); refresh(); });
-      });
+      }));
       ["robotIp", "robotPort"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("change", () => {

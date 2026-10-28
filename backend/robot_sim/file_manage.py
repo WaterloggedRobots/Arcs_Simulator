@@ -343,6 +343,7 @@ def build_motion_doc(include_waypoint_flag=False, tracks=None):
             rec["name"] = arms.name_of(aid)
             rec["robot_ip"] = rr._robot_addr.get("ip")
             rec["robot_port"] = rr._robot_addr.get("port")
+            rec["joint_vel_deg"], rec["joint_acc_deg"] = rr.joint_limits()
             extra.append(rec)
     if extra:
         doc["arms"] = extra
@@ -717,6 +718,7 @@ def apply_loaded_doc(data):
     for r in recs:
         with arms.using(r["id"]):
             try:
+                rr.set_joint_limits(r.get("joint_vel_deg"), r.get("joint_acc_deg"))
                 _apply_arm_points(r)
                 _apply_arm_comps(r)
                 _apply_arm_rest(r)

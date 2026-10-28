@@ -212,6 +212,32 @@ def save_settings(data):
     return cur
 
 
+def _apply_joint_limits(vel, acc):
+    """Speed / accel limits of the arm being run as (each arm has its own)."""
+    try:
+        if rr.set_joint_limits(vel, acc):
+            # New limits: re-score the bake (IK stays) so colours match them.
+            bake.evaluate_timing(force=True)
+            if hasattr(bake, "bump_timeline_cache"):
+                bake.bump_timeline_cache()
+    except Exception as e:
+        print("joint limits failed", e)
+
+
+def _arm_settings(st):
+    """Overlay the active arm's own robot settings on settings.json's."""
+    st = dict(st)
+    st["robot_model"] = getattr(rr, "_MODEL_ID", None) or st.get("robot_model") or "aubo_i5"
+    st["joint_vel_deg"], st["joint_acc_deg"] = rr.joint_limits()
+    try:
+        st["robot_address"] = rr.robot_address()
+    except Exception:
+        pass
+    st["arms"] = arms.listing()
+    st["active_arm"] = arms.active()
+    return st
+
+
 def apply_settings(data):
     data = data or {}
     if "spacing" in data and hasattr(bake, "set_spacing"):
@@ -219,15 +245,9 @@ def apply_settings(data):
             bake.set_spacing(float(data["spacing"]))
         except Exception:
             pass
-    if hasattr(rr, "set_joint_limits"):
-        try:
-            if rr.set_joint_limits(data.get("joint_vel_deg"), data.get("joint_acc_deg")):
-                # New limits: re-score the bake (IK stays) so colours match them.
-                bake.evaluate_timing(force=True)
-                if hasattr(bake, "bump_timeline_cache"):
-                    bake.bump_timeline_cache()
-        except Exception as e:
-            print("joint limits failed", e)
+    if arms.is_default():
+        # settings.json holds the default arm's limits; added arms keep their own.
+        _apply_joint_limits(data.get("joint_vel_deg"), data.get("joint_acc_deg"))
     if "hold_lin_mps" in data and hasattr(rr, "set_hold_lin_mps"):
         try:
             rr.set_hold_lin_mps(data.get("hold_lin_mps"))
@@ -591,14 +611,7 @@ def api_settings():
         st = load_settings()
         if not st.get("robot_models"):
             st["robot_models"] = list(SETTINGS_DEFAULT.get("robot_models") or [])
-        st["robot_model"] = getattr(rr, "_MODEL_ID", None) or st.get("robot_model") or "aubo_i5"
-        try:
-            st["robot_address"] = rr.robot_address()
-        except Exception:
-            pass
-        st["arms"] = arms.listing()
-        st["active_arm"] = arms.active()
-        return jsonify({"ok": True, "settings": st})
+        return jsonify({"ok": True, "settings": _arm_settings(st)})
     data = request.get_json(silent=True) or {}
     if not arms.is_default():
         # Robot Settings of an added arm: its own address, not settings.json's.
@@ -606,12 +619,11 @@ def api_settings():
         if "robot_ip" in robot_keys or "robot_port" in robot_keys:
             rr.set_robot_address(robot_keys.get("robot_ip", rr._robot_addr.get("ip")),
                                  robot_keys.get("robot_port", rr._robot_addr.get("port")))
+        # Its speed / accel limits too.
+        _apply_joint_limits(data.pop("joint_vel_deg", None), data.pop("joint_acc_deg", None))
     st = save_settings(data)
     apply_settings(st)
-    st = dict(st)
-    st["robot_model"] = getattr(rr, "_MODEL_ID", None) or st.get("robot_model")
-    st["robot_address"] = rr.robot_address()
-    return jsonify({"ok": True, "settings": st})
+    return jsonify({"ok": True, "settings": _arm_settings(st)})
 
 
 @app.route("/api/import_mesh", methods=["POST"])

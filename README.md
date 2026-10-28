@@ -315,7 +315,7 @@ Components in the properties panel are listed in the order they were added, newe
 ## Miscellaneous features
 
 - **File save and load**, with **autosave and automatic backup**.
-- **Settings menu** for robot type and joint limits. *Robot Settings* holds the robot IP and port for one arm, chosen in its **Aubo Arm** select (it follows the active arm both ways). The first arm falls back to the address in `arcscontrol.py`, so scripts run on their own keep working; an added arm is sim only until it gets an IP. Robot type, IP and port are per arm; the first arm's are kept in `settings.json`, added arms' in the project file.
+- **Settings menu** for robot type and joint limits. *Robot Settings* holds the robot IP and port for one arm, chosen in its **Aubo Arm** select (it follows the active arm both ways). The first arm falls back to the address in `arcscontrol.py`, so scripts run on their own keep working; an added arm is sim only until it gets an IP. Robot type, IP, port and the joint speed and acceleration limits are per arm (both Preferences tabs have the same **Aubo Arm** select); the first arm's are kept in `settings.json`, added arms' in the project file.
 - **Automatic reconnection** to the robot.
 - **Multi-camera handling** — the simulator, computer webcams and Sony cameras are handled separately, with split-screen views and an individual recording track for each.
 - **View console** for debugging.
@@ -362,7 +362,7 @@ The following are known to be rough or incomplete at this stage:
 | Live target tracking during a run | Not available; tracking is computed before baking. Real-arm face tracking is in progress. |
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
-| Several Aubo Arms | Undo and redo belong to the active arm. Joint limits and timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
+| Several Aubo Arms | Undo and redo belong to the active arm. Timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
 
 ---
 

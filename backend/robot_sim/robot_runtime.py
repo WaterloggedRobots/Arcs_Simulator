@@ -966,7 +966,17 @@ def set_joint_limits(vel_deg=None, acc_deg=None):
             if abs(table.get(name, 0.0) - v) > 1e-9:
                 table[name] = v
                 changed = True
+    if changed:
+        for model in (robot_actual, robot_sim, robot_ik):
+            if model is not None:
+                apply_aubo_i5_joint_limits(model)
     return changed
+
+
+def joint_limits():
+    """This arm's speed and accel limits (deg/s, deg/s^2), J1..J6."""
+    return ([float(AUBO_I5_MAX_VEL_DEG.get(n, 0.0)) for n in _JOINT_ORDER],
+            [float(AUBO_I5_MAX_ACCEL_DEG.get(n, 0.0)) for n in _JOINT_ORDER])
 
 
 def apply_aubo_i5_joint_limits(model):

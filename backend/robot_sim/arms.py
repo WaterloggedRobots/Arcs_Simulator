@@ -35,6 +35,7 @@ PER_ARM = {
     "robot_runtime": [
         "robot_actual", "robot_sim", "robot_ik", "robot",
         "_MODEL_ID", "URDF_PATH", "URDF_SIM_PATH", "_robot_addr",
+        "AUBO_I5_MAX_VEL_DEG", "AUBO_I5_MAX_ACCEL_DEG",
         "_base_pos", "_base_wxyz",
         "_cursors_ready", "_cursor_sim", "_arrow_sim", "_arrow_sim_side",
         "_cursor_real", "_arrow_real", "_arrow_real_side",
