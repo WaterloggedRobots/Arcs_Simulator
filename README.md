@@ -29,6 +29,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
   - [Offset](#offset)
   - [Collider](#collider)
 - [Miscellaneous features](#miscellaneous-features)
+- [Steam Deck edition](#steam-deck-edition)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
 - [Project layout](#project-layout)
@@ -325,6 +326,28 @@ Components in the properties panel are listed in the order they were added, newe
 
 ---
 
+## Steam Deck edition
+
+A stripped-down controller for running the real arm from a Steam Deck on Windows. Start it with `python backend/deck_webui.py` instead of `webui.py` (it runs the same backend, so don't run both at once).
+
+The page shows only the 3D viewer, the **Saved Points** list on the left (click one to move the sim cursor there), the **Hold to move** button bottom left (the real arm goes to the sim pose while it is held, and keeps following the sticks), and **Object Properties** on the right with the IK pose and joints of the sim cursor (editable) and the actual robot (read only, shown while connected). The top bar has **Axes Mode** (Local / Global) and **Settings** (robot IP, port, type, linear speed and rotation speed). There are no waypoints, bake, timeline, added objects or components, and nothing is autosaved.
+
+| Deck control | Action |
+|---|---|
+| Left stick | move the sim cursor in x / y |
+| L4 / L5 | move up / down (z) |
+| Right stick | pitch (up / down) and roll (left / right) |
+| R4 / R5 | yaw |
+| Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
+| R2 / L2 (or right pad click) | left / right click |
+| Left trackpad | scroll (zoom) |
+
+Moves follow Axes Mode: Local uses the sim cursor's own axes (so L4 / L5 move along the tool axis), Global uses world axes. Speeds are the *Linear speed* and *Rotation speed* settings; a move with no IK solution is dropped and the panel says so.
+
+The controls come from [Steam Deck Tools](https://github.com/WaterloggedRobots/steam-deck-tools)' `SteamController.exe`, which needs its hidden **Arcs Deck** profile (a build from that repository that includes it). On start the app switches `SteamController.exe` to Arcs Deck and switches back to the previous profile on exit; if the app is killed, the profile turns itself off. The Deck reaches the app as an Xbox 360 pad over XInput (`backend/deck/pad.py`); the profile switch is in `backend/deck/steam_profile.py`.
+
+---
+
 ## Feature map
 
 | Function | What Sandbox provides |
@@ -373,6 +396,8 @@ Run the app with `python backend/webui.py`. Every file the app reads or writes i
 ```
 backend/                  everything needed to run the app
   webui.py                Flask web UI (entry point)
+  deck_webui.py           Steam Deck edition (entry point), templates/deck.html
+  deck/                   Steam Deck controls (XInput) and Steam Deck Tools profile switch
   app_paths.py            folder constants
   templates/index.html    the page
   cameras/                sony_liveview.py, libusb-1.0.dll (Sony camera support)
