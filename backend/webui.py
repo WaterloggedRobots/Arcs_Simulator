@@ -31,6 +31,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.serving import WSGIRequestHandler
 
 import app_paths
+import arms
 import file_manage as fman
 import path_bake as bake
 import robot_runtime as rr
@@ -58,6 +59,81 @@ SETTINGS_DEFAULT = {
 }
 
 app = Flask(__name__, template_folder=str(ROOT / "templates"), static_folder=None)
+
+# Every request runs as the active Aubo Arm, one at a time with the viewer
+# loop and the viewer's click / gizmo callbacks (see arms.py).
+_LOCK_FREE = {"/api/cam_frame", "/api/console"}
+_lock_held = threading.local()
+
+
+@app.before_request
+def _take_arm_lock():
+    if request.path in _LOCK_FREE:
+        return
+    arms.LOCK.acquire()
+    _lock_held.n = getattr(_lock_held, "n", 0) + 1
+    arms.ensure_active_loaded()
+
+
+@app.teardown_request
+def _drop_arm_lock(_exc=None):
+    if request.path in _LOCK_FREE or not getattr(_lock_held, "n", 0):
+        return
+    _lock_held.n -= 1
+    arms.LOCK.release()
+
+
+def _unlocked(fn):
+    """A file dialog waits on the user: let the viewer run meanwhile."""
+    def run(*a, **k):
+        held = getattr(_lock_held, "n", 0)
+        for _ in range(held):
+            arms.LOCK.release()
+        try:
+            return fn(*a, **k)
+        finally:
+            for _ in range(held):
+                arms.LOCK.acquire()
+            arms.ensure_active_loaded()
+    return run
+
+
+fman.pick_save_path = _unlocked(fman.pick_save_path)
+fman.pick_open_path = _unlocked(fman.pick_open_path)
+
+
+def _each_arm(fn):
+    """fn() run as every arm in turn: [(arm id, result)]."""
+    out = []
+    for aid in arms.each():
+        with arms.using(aid):
+            out.append((aid, fn()))
+    return out
+
+
+def _arm_has_path():
+    return len(getattr(wp, "waypoints", None) or []) >= 2
+
+
+def _merged_status(fn):
+    """Playback status for the page: the active arm's, unless only another
+    arm is playing (an arm with no path still sees the others play)."""
+    rows = _each_arm(fn)
+    mine = dict(next((st for aid, st in rows if aid == arms.active()), {}) or {})
+    if mine.get("active"):
+        return mine
+    for _aid, st in rows:
+        if (st or {}).get("active"):
+            return dict(st)
+    return mine
+
+
+def _sim_status_all():
+    return _merged_status(rr.sim_status)
+
+
+def _real_status_all():
+    return _merged_status(rr.real_path_status)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 
@@ -177,6 +253,10 @@ def apply_settings(data):
             wp.load_global_saved_paths(data.get("stored_paths") or [])
         except Exception:
             pass
+    if not arms.is_default():
+        # settings.json holds the default arm's robot; added arms keep theirs
+        # (api_settings applies those, and project files save them).
+        return
     if "robot_ip" in data or "robot_port" in data:
         try:
             rr.set_robot_address(data.get("robot_ip"), data.get("robot_port"))
@@ -324,7 +404,39 @@ def _build_status_heavy():
     st["selected_path_id"] = getattr(wp, "selected_path_id", None)
     st["show_pose_markers"] = bool(getattr(wp, "show_pose_markers", True))
     st["tracks"] = list(getattr(wp, "extra_tracks", None) or [])
+    try:
+        st["arms"] = arms.listing()
+        st["arm_rows"] = _arm_rows()
+    except Exception:
+        traceback.print_exc()
     return st
+
+
+def _arm_rows():
+    """Timeline rows of the arms not being edited: their keyframes and
+    spans, drawn read-only (clicking a row makes that arm active)."""
+    rows = []
+    for aid in arms.each():
+        if aid == arms.active():
+            rows.append({"id": aid, "name": arms.name_of(aid), "active": True})
+            continue
+        with arms.using(aid):
+            try:
+                tl = bake.timeline_payload() if hasattr(bake, "timeline_payload") else {}
+            except Exception:
+                tl = {}
+            kfs = tl.get("keyframes") or [
+                {"index": i, "t": None if w.get("t") is None else float(w.get("t")), "status": "unbaked"}
+                for i, w in enumerate(getattr(wp, "waypoints", []) or [])
+            ]
+            rows.append({
+                "id": aid,
+                "name": arms.name_of(aid),
+                "active": False,
+                "keyframes": [{"index": k.get("index"), "t": k.get("t"), "status": k.get("status")} for k in kfs],
+                "spans": [{"t0": sp.get("t0"), "t1": sp.get("t1"), "status": sp.get("status")} for sp in (tl.get("spans") or [])],
+            })
+    return rows
 
 
 _status_last_req = 0.0
@@ -337,28 +449,36 @@ STATUS_REBUILD_S = 0.25
 
 
 def _status_loop():
-    global _status_heavy
     last_build = 0.0
     while True:
         try:
-            if hasattr(wp, "flush_idle_path_rebuild"):
-                wp.flush_idle_path_rebuild()
-            if hasattr(wp, "snap_global_gizmos_idle"):
-                wp.snap_global_gizmos_idle()
-            if hasattr(wp, "tick_cameras"):
-                wp.tick_cameras()
-            now = time.time()
-            polled = now - _status_last_req < 3.0
-            dirty = _status_dirty.is_set()
-            if dirty or ((polled or not _status_heavy) and now - last_build >= STATUS_REBUILD_S):
-                _status_dirty.clear()
-                heavy = _build_status_heavy()
-                last_build = time.time()
-                with _status_lock:
-                    _status_heavy = heavy
+            with arms.LOCK:
+                arms.ensure_active_loaded()
+                last_build = _status_pass(last_build)
         except Exception:
             traceback.print_exc()
         _status_dirty.wait(0.12)
+
+
+def _status_pass(last_build):
+    """One status-worker pass, under arms.LOCK. Returns the build time."""
+    global _status_heavy
+    if hasattr(wp, "flush_idle_path_rebuild"):
+        wp.flush_idle_path_rebuild()
+    if hasattr(wp, "snap_global_gizmos_idle"):
+        wp.snap_global_gizmos_idle()
+    if hasattr(wp, "tick_cameras"):
+        wp.tick_cameras()
+    now = time.time()
+    polled = now - _status_last_req < 3.0
+    dirty = _status_dirty.is_set()
+    if dirty or ((polled or not _status_heavy) and now - last_build >= STATUS_REBUILD_S):
+        _status_dirty.clear()
+        heavy = _build_status_heavy()
+        last_build = time.time()
+        with _status_lock:
+            _status_heavy = heavy
+    return last_build
 
 
 def _ensure_status_worker():
@@ -402,8 +522,11 @@ def api_status():
         "spans": [] if not getattr(wp, "waypoints", None) else (heavy.get("spans") or []),
         "runnable": bool(heavy.get("runnable")),
         "sim_runnable": bool(heavy.get("sim_runnable") or heavy.get("runnable")),
-        "sim": rr.sim_status() if hasattr(rr, "sim_status") else {},
-        "real": rr.real_path_status() if hasattr(rr, "real_path_status") else {},
+        "sim": _sim_status_all(),
+        "real": _real_status_all(),
+        "arms": heavy.get("arms") or [],
+        "active_arm": arms.active(),
+        "arm_rows": heavy.get("arm_rows") or [],
         "object": heavy.get("object") or {},
         "move": heavy.get("move") or {},
         "clipboard": heavy.get("clipboard") or {"can_paste": False},
@@ -424,7 +547,7 @@ def api_status():
         "show_pose_markers": bool(heavy.get("show_pose_markers", True)),
         "tracks": heavy.get("tracks") or list(getattr(wp, "extra_tracks", None) or []),
         "snap_to_grid": bool(getattr(wp, "snap_to_grid", False)),
-        "item_vis": getattr(wp, "item_vis", {}) or {},
+        "item_vis": wp.item_vis_view() if hasattr(wp, "item_vis_view") else (getattr(wp, "item_vis", {}) or {}),
         "list_vis": getattr(wp, "list_vis", {}) or {},
         "merged_points": wp.list_merged_points() if hasattr(wp, "list_merged_points") else [],
         "tracked_points": wp.cam_target_list() if hasattr(wp, "cam_target_list") else [],
@@ -457,8 +580,8 @@ def api_clock():
         "lin_sim": lin_sim,
         "lin_real": lin_real,
         "collision": wp.colliders.collision_status() if hasattr(wp, "colliders") else {},
-        "sim": rr.sim_status() if hasattr(rr, "sim_status") else {},
-        "real": rr.real_path_status() if hasattr(rr, "real_path_status") else {},
+        "sim": _sim_status_all(),
+        "real": _real_status_all(),
     })
 
 
@@ -473,10 +596,21 @@ def api_settings():
             st["robot_address"] = rr.robot_address()
         except Exception:
             pass
+        st["arms"] = arms.listing()
+        st["active_arm"] = arms.active()
         return jsonify({"ok": True, "settings": st})
     data = request.get_json(silent=True) or {}
+    if not arms.is_default():
+        # Robot Settings of an added arm: its own address, not settings.json's.
+        robot_keys = {k: data.pop(k) for k in ("robot_ip", "robot_port", "robot_model") if k in data}
+        if "robot_ip" in robot_keys or "robot_port" in robot_keys:
+            rr.set_robot_address(robot_keys.get("robot_ip", rr._robot_addr.get("ip")),
+                                 robot_keys.get("robot_port", rr._robot_addr.get("port")))
     st = save_settings(data)
     apply_settings(st)
+    st = dict(st)
+    st["robot_model"] = getattr(rr, "_MODEL_ID", None) or st.get("robot_model")
+    st["robot_address"] = rr.robot_address()
     return jsonify({"ok": True, "settings": st})
 
 
@@ -540,8 +674,38 @@ def api_import_mesh():
 @app.route("/api/add_object", methods=["POST"])
 def api_add_object():
     data = request.get_json(silent=True) or {}
+    if data.get("kind") == "aubo_arm":
+        aid = arms.add_arm()
+        wp.select_scene_object(arms.cid("sim_bot", aid))
+        _status_dirty.set()
+        return jsonify({"ok": True, "id": arms.cid("sim_bot", aid), "arm": aid})
     obj = wp.add_scene_object(data.get("kind") or "empty")
     return jsonify({"ok": True, "id": (obj or {}).get("id")})
+
+
+@app.route("/api/arm", methods=["POST"])
+def api_arm():
+    """Aubo Arms: {action: activate|remove|rename, id, name}."""
+    data = request.get_json(silent=True) or {}
+    act = str(data.get("action") or "activate")
+    aid = str(data.get("id") or "")
+    if not arms.exists(aid):
+        return jsonify({"ok": False, "error": "no such arm"}), 404
+    if act == "activate":
+        if arms.activate(aid):
+            # Show the arm picked in Robot Settings like a click on its cursor.
+            wp.select_scene_object(arms.cid("sim_cursor", aid))
+        ok = True
+    elif act == "remove":
+        if rr.edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        ok = arms.remove_arm(aid)
+    elif act == "rename":
+        ok = arms.rename(aid, data.get("name"))
+    else:
+        return jsonify({"ok": False, "error": "unknown action"}), 400
+    _status_dirty.set()
+    return jsonify({"ok": bool(ok), "arms": arms.listing(), "active_arm": arms.active()})
 
 
 @app.route("/api/add_camera_component", methods=["POST"])
@@ -573,11 +737,15 @@ def api_object_props():
         return jsonify({"ok": bool(ok)})
     if any(k in data for k in ("pos", "wxyz", "scale", "space", "name", "camera", "remove_camera")):
         oid = data.get("id") or getattr(wp, "selected_obj_id", None)
-        if data.get("kind") == "bot" or oid == "sim_bot":
-            # Aubo Arm: only its pose is editable (moves both arms).
-            if (data.get("pos") is not None or data.get("wxyz") is not None) and hasattr(wp, "set_sim_bot_pose"):
-                wp._push_history()
-                wp.set_sim_bot_pose(data.get("pos"), data.get("wxyz"), ask=True)
+        base, aid = arms.split_id(oid)
+        if data.get("kind") == "bot" or base == "sim_bot":
+            # Aubo Arm: its name and pose are editable (the pose moves both arms).
+            with arms.using(aid or arms.active()):
+                if data.get("name") is not None:
+                    arms.rename(arms.current(), data.get("name"))
+                if (data.get("pos") is not None or data.get("wxyz") is not None) and hasattr(wp, "set_sim_bot_pose"):
+                    wp._push_history()
+                    wp.set_sim_bot_pose(data.get("pos"), data.get("wxyz"), ask=True)
         elif data.get("kind") == "sim" or oid == "sim":
             if data.get("remove_camera"):
                 wp.sim_camera = None
@@ -780,35 +948,32 @@ def api_simulate():
     data = request.get_json(silent=True) or {}
     loops = data.get("loops", data.get("repeat", 0))
     delay = data.get("delay", 0.0)
-    ok = False
-    if hasattr(rr, "enter_simulation_mode"):
-        ok = bool(rr.enter_simulation_mode(loops=loops, delay=delay))
-    else:
-        viewer_main.sim_requests.append(data.get("duration"))
-        ok = True
-    st = rr.sim_status() if hasattr(rr, "sim_status") else {}
-    return jsonify({"ok": bool(ok), "sim": st})
+    # Every arm with a path plays it, on one clock.
+    res = _each_arm(lambda: bool(_arm_has_path() and rr.enter_simulation_mode(loops=loops, delay=delay)))
+    ok = any(r for _aid, r in res)
+    return jsonify({"ok": bool(ok), "sim": _sim_status_all()})
 
 
 @app.route("/api/sim/pause", methods=["POST"])
 def api_sim_pause():
-    paused = rr.toggle_sim_pause()
-    return jsonify({"ok": True, "paused": bool(paused), "sim": rr.sim_status()})
+    res = _each_arm(lambda: rr.toggle_sim_pause() if rr._pb.get("active") else None)
+    paused = any(r for _aid, r in res if r is not None)
+    return jsonify({"ok": True, "paused": bool(paused), "sim": _sim_status_all()})
 
 
 @app.route("/api/real/upload", methods=["POST"])
 def api_real_upload():
     data = request.get_json(silent=True) or {}
-    ok = False
-    if hasattr(rr, "upload_real_path"):
-        ok = bool(rr.upload_real_path(
+    def _up():
+        if rr.robot is None or not _arm_has_path():
+            return False
+        return bool(rr.upload_real_path(
             # The UI sends "repeat" (same field Simulate reads).
             loops=data.get("loops", data.get("repeat")) or 0,
             delay=data.get("delay") or 0.0,
         ))
-    elif hasattr(rr, "plan_joint_path"):
-        ok = bool(rr.plan_joint_path())
-    st = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
+    ok = any(r for _aid, r in _each_arm(_up))
+    st = _real_status_all()
     return jsonify({"ok": bool(ok), "real": st, "error": None if ok else (st.get("phase") or "upload not started")})
 
 
@@ -816,16 +981,21 @@ def api_real_upload():
 def api_real_start():
     ok = False
     err = None
-    if hasattr(rr, "fire_real_path"):
+
+    def _fire():
+        if rr.robot is None or not (rr._rp.get("uploaded") or rr._rp.get("uploading")):
+            return None
         try:
-            ok = bool(rr.fire_real_path())
+            return bool(rr.fire_real_path())
         except Exception as e:
-            err = str(e)
-            print("real start failed", e)
-    else:
-        viewer_main.real_requests.append(("start", None))
-        ok = True
-    st = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
+            print("real start failed", arms.name_of(), e)
+            return str(e)
+    for _aid, r in _each_arm(_fire):
+        if r is True:
+            ok = True
+        elif isinstance(r, str):
+            err = r
+    st = _real_status_all()
     if not ok and not err:
         if st.get("uploading"):
             err = "still uploading"
@@ -847,8 +1017,8 @@ def api_real_pause():
 @app.route("/api/real/stop", methods=["POST"])
 def api_real_stop():
     # Stop here, not on the viewer queue: a busy viewer loop must not delay it.
-    rr.stop_real_path()
-    return jsonify({"ok": True, "real": rr.real_path_status()})
+    _each_arm(rr.stop_real_path)
+    return jsonify({"ok": True, "real": _real_status_all()})
 
 
 @app.route("/api/robot_model", methods=["POST"])
@@ -862,8 +1032,12 @@ def api_robot_model():
         return jsonify({"ok": False, "needs_confirm": True, "waypoints": n_wp})
     if n_wp > 0 and hasattr(wp, "clear_waypoints"):
         wp.clear_waypoints()
-    st = save_settings({"robot_model": mid})
-    apply_settings(st)
+    if arms.is_default():
+        st = save_settings({"robot_model": mid})
+        apply_settings(st)
+    else:
+        st = load_settings()
+        rr.set_robot_model(mid)
     reloaded = False
     if hasattr(rr, "reload_robot_models"):
         try:
@@ -891,8 +1065,8 @@ def api_snap_sim_to_real():
 
 @app.route("/api/halt", methods=["POST"])
 def api_halt():
-    rr.request_halt()
-    return jsonify({"ok": True, "sim": rr.sim_status(), "real": rr.real_path_status()})
+    _each_arm(rr.request_halt)
+    return jsonify({"ok": True, "sim": _sim_status_all(), "real": _real_status_all()})
 
 
 @app.route("/api/file/new", methods=["POST"])
@@ -979,6 +1153,11 @@ def api_file_export():
 
 @app.route("/api/delete_selected", methods=["POST"])
 def api_delete_selected():
+    if getattr(wp, "selection_kind", None) == "bot" and not arms.is_default() and not rr.edits_locked():
+        # An added Aubo Arm, its waypoints and saved points (the default arm stays).
+        arms.remove_arm(arms.active())
+        _status_dirty.set()
+        return jsonify({"ok": True, "removed_arm": True})
     if hasattr(wp, "delete_selected"):
         wp.delete_selected()
     return jsonify({"ok": True})

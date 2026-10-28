@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 import app_paths
+import arms
 import waypoints as wp
 import path_bake as bake
 import robot_runtime as rr
@@ -54,7 +55,7 @@ def _doc_has_work(data):
         return False
     if data.get("sim_camera") or data.get("sim_offset") or data.get("sim_collider"):
         return True
-    for key in ("waypoints", "objects", "sim_poses", "tracks", "points"):
+    for key in ("waypoints", "objects", "sim_poses", "tracks", "points", "arms"):
         val = data.get(key)
         if isinstance(val, list) and len(val) > 0:
             return True
@@ -62,6 +63,8 @@ def _doc_has_work(data):
 
 
 def scene_is_empty():
+    if len(arms.each()) > 1:
+        return False
     n_wp = len(getattr(wp, "waypoints", None) or [])
     n_obj = len(getattr(wp, "scene_objects", None) or [])
     n_pose = len([p for p in (getattr(wp, "sim_poses", None) or []) if not p.get("builtin")])
@@ -314,7 +317,40 @@ def _speeds_from_samples(recs):
     return speeds
 
 
+# Per-arm parts of a project file; the default arm's sit at the top level,
+# each added arm's in doc["arms"]. Objects, tracks and saved paths are shared.
+ARM_DOC_KEYS = (
+    "points", "total_pts", "estimated_seconds_per_lap", "robot_type", "cursor",
+    "sim_track", "arm_base", "sim_poses", "sim_camera", "sim_offset",
+    "sim_collider", "sim_comp_order", "look_bars", "waypoints", "bake", "format",
+)
+
+
 def build_motion_doc(include_waypoint_flag=False, tracks=None):
+    """Export (no flag): the active arm's motion. Project file: every arm."""
+    if not include_waypoint_flag:
+        return _build_doc_one(False, tracks)
+    with arms.using(arms.DEFAULT_ID):
+        doc = _build_doc_one(True, tracks)
+    extra = []
+    for aid in arms.each():
+        if aid == arms.DEFAULT_ID:
+            continue
+        with arms.using(aid):
+            one = _build_doc_one(True, tracks)
+            rec = {k: one[k] for k in ARM_DOC_KEYS if k in one}
+            rec["id"] = aid
+            rec["name"] = arms.name_of(aid)
+            rec["robot_ip"] = rr._robot_addr.get("ip")
+            rec["robot_port"] = rr._robot_addr.get("port")
+            extra.append(rec)
+    if extra:
+        doc["arms"] = extra
+        doc["active_arm"] = arms.active()
+    return doc
+
+
+def _build_doc_one(include_waypoint_flag=False, tracks=None):
     recs = bake._iter_motion_samples()
     stored = getattr(bake, "baked_points", None) or []
     speeds = []
@@ -667,6 +703,34 @@ def parse_project_doc(data):
 
 def apply_loaded_doc(data):
     data = parse_project_doc(data)
+    # Added arms first, so objects parented to their cursors find them.
+    arms.activate(arms.DEFAULT_ID)
+    arms.remove_extra_arms()
+    recs = [r for r in (data.get("arms") or []) if isinstance(r, dict)]
+    for r in recs:
+        base = r.get("arm_base") or {}
+        r["id"] = arms.add_arm(
+            name=r.get("name"), aid=r.get("id"), pos=base.get("pos"), wxyz=base.get("wxyz"),
+            model=r.get("robot_type"), ip=r.get("robot_ip"), port=r.get("robot_port"),
+            activate_it=False)
+    out = _apply_doc_one(data)
+    for r in recs:
+        with arms.using(r["id"]):
+            try:
+                _apply_arm_points(r)
+                _apply_arm_comps(r)
+                _apply_arm_rest(r)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print("load arm failed", r.get("name"), e)
+    if data.get("active_arm") and arms.exists(data.get("active_arm")):
+        arms.activate(data.get("active_arm"))
+    return out
+
+
+def _apply_arm_points(data):
+    """One arm's base, waypoints / motion points and saved points (as that arm)."""
     # Before waypoints: IK values in the file are relative to the arm base.
     _restore_arm_base(data.get("arm_base"))
     fmt = str(data.get("format") or "").lower()
@@ -697,6 +761,12 @@ def apply_loaded_doc(data):
             wps = [pts[0], pts[-1]] if len(pts) >= 2 else list(pts)
             samples = pts[1:-1] if len(pts) > 2 else []
         wp.load_from_motion_points(wps, samples)
+    _load_sim_poses(data.get("sim_poses"))
+    return pts
+
+
+def _apply_doc_one(data):
+    pts = _apply_arm_points(data)
     raw_tracks = data.get("tracks")
     loaded_tracks = []
     if isinstance(raw_tracks, list):
@@ -710,7 +780,6 @@ def apply_loaded_doc(data):
                 loaded_tracks.append(rec)
             else:
                 loaded_tracks.append({"name": str(tr)})
-    _load_sim_poses(data.get("sim_poses"))
     if isinstance(data.get("saved_paths"), list):
         wp.saved_paths = [dict(p) for p in data.get("saved_paths") if isinstance(p, dict)]
         seq = 0
@@ -729,6 +798,22 @@ def apply_loaded_doc(data):
     except Exception:
         pass
     _load_scene_objects(data.get("objects"))
+    _apply_arm_comps(data)
+    # Set tracks only now: restoring objects re-syncs camera tracks, and a sync
+    # that runs before the camera objects exist drops their cam_<id> keys.
+    wp.extra_tracks = loaded_tracks
+    if hasattr(wp, "sync_camera_tracks"):
+        wp.sync_camera_tracks()
+    if bake.import_raw_json:
+        # Raw JSON times are off-grid: turn snap off for this session only.
+        # Do not write it to settings.json, which is the user's preference.
+        wp.snap_to_grid = False
+    _apply_arm_rest(data)
+    return {"ok": True, "waypoints": len(wp.waypoints), "points": len(pts)}
+
+
+def _apply_arm_comps(data):
+    """The arm's sim cursor components."""
     if data.get("sim_camera"):
         wp.sim_camera = dict(data.get("sim_camera") or {})
         if hasattr(wp, "refresh_sim_camera_viz"):
@@ -742,17 +827,13 @@ def apply_loaded_doc(data):
     wp.sim_collider = wp.colliders.clean_sim_collider(data.get("sim_collider"))
     wp.sim_comp_order = [str(k) for k in (data.get("sim_comp_order") or [])]
     wp.look_bars = [dict(b) for b in (data.get("look_bars") or []) if isinstance(b, dict)]
-    # Set tracks only now: restoring objects re-syncs camera tracks, and a sync
-    # that runs before the camera objects exist drops their cam_<id> keys.
-    wp.extra_tracks = loaded_tracks
-    if hasattr(wp, "sync_camera_tracks"):
-        wp.sync_camera_tracks()
+
+
+def _apply_arm_rest(data):
+    """The arm's bake, cursor and Look At, after its waypoints and the objects."""
     if bake.import_raw_json:
         for w in getattr(wp, "waypoints", []) or []:
             w["force_fk"] = False
-        # Raw JSON times are off-grid: turn snap off for this session only.
-        # Do not write it to settings.json, which is the user's preference.
-        wp.snap_to_grid = False
     if hasattr(wp, "draw_path"):
         wp.draw_path()
     baked = data.get("bake")
@@ -784,7 +865,11 @@ def apply_loaded_doc(data):
             print("restore cursor failed:", e)
     # After objects and cursor: the Track target must exist and the pin is the cursor.
     _restore_sim_track(data.get("sim_track"))
-    return {"ok": True, "waypoints": len(wp.waypoints), "points": len(pts)}
+    for oid in (arms.cid("sim_bot"), arms.cid("sim_cursor")):
+        try:
+            wp._propagate_children(oid)
+        except Exception:
+            pass
 
 
 def _arm_base_record():
@@ -1005,6 +1090,8 @@ def new_project():
     # One full reset, on this thread only. /api/file/new used to also queue
     # reset_document on the viewer thread, so both cleared the same lists at
     # once and a swallowed error could leave objects in the scene.
+    arms.activate(arms.DEFAULT_ID)
+    arms.remove_extra_arms()
     _restore_arm_base(None)
     wp.sim_camera = None
     wp.sim_offset = None

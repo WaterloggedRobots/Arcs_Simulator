@@ -14,6 +14,7 @@ import time
 import numpy as np
 import webbrowser
 import inspect
+import arms
 import keymap
 import scene_background as sceneBG
 import waypoints as wp
@@ -223,208 +224,243 @@ def start_viewer():
         reset_camera=lambda: rr.apply_camera_view("front"),
     )
 
-    try:
-        while viewer.is_active:
-            while add_requests:
-                req = add_requests.pop(0)
-                try:
-                    replace = True
-                    if isinstance(req, str):
-                        src, t = req, playhead_t
-                    else:
-                        src, t = req.get("source", "real"), req.get("t", playhead_t)
-                        replace = bool(req.get("replace", True))
-                    if src == "sim":
-                        pose = rr.get_sim_cursor_pose()
-                        wp.add_waypoint(pose, mode="arc", q=_joints_of("sim"), t=t if t is not None else playhead_t, replace=replace)
-                    else:
-                        pose = rr.get_real_cursor_pose()
-                        wp.add_waypoint(pose, mode="arc", q=_joints_of("real"), t=t if t is not None else playhead_t, replace=replace)
-                    item = wp.waypoints[-1] if wp.waypoints else None
-                    if item is not None:
-                        item["added_from"] = src
-                        item["track_object"] = None
-                        if src == "sim" and hasattr(rr, "waypoint_track_record"):
-                            item["track_object"] = rr.waypoint_track_record()
-                except Exception as e:
-                    print("add_waypoint failed:", e)
-            while delete_requests:
-                delete_requests.pop(0)
-                try:
-                    wp.delete_selected()
-                except Exception as e:
-                    print("delete_selected failed:", e)
-            while select_requests:
-                req = select_requests.pop(0)
-                try:
-                    if isinstance(req, dict):
-                        idx, mode = req.get("index"), req.get("mode") or "replace"
-                    else:
-                        idx, mode = req, "replace"
-                    if idx is None:
-                        wp.deselect_all()
-                    elif 0 <= int(idx) < len(wp.waypoints):
-                        wp.select_waypoint(int(idx), mode=mode)
-                except Exception as e:
-                    print("select_waypoint failed:", e)
-            while gizmo_space_requests:
-                mode = gizmo_space_requests.pop(0)
-                try:
-                    wp.apply_gizmo_space(mode)
-                    print("gizmo space", mode)
-                except Exception as e:
-                    print("gizmo space failed:", e)
-            while real_requests:
-                item = real_requests.pop(0)
-                kind = item[0] if isinstance(item, (tuple, list)) else item
-                try:
-                    if kind == "goto":
-                        rr.start_goto_path_start()
-                    elif kind == "start":
-                        if hasattr(rr, "fire_real_path"):
-                            rr.fire_real_path()
-                        else:
-                            rr.start_real_path()
-                    elif kind == "pause":
-                        rr.pause_real_path()
-                    elif kind == "stop":
-                        rr.stop_real_path()
-                except Exception as e:
-                    print("real path request failed", e)
-            while move_requests:
-                kind, payload = move_requests.pop(0)
-                try:
-                    if kind == "start":
-                        rr.start_hold_move(
-                            ik=payload.get("ik"),
-                            q=payload.get("q"),
-                            mode=payload.get("mode", "ik"),
-                        )
-                    elif kind == "stop":
-                        rr.stop_hold_move()
-                except Exception as e:
-                    print("move request failed", e)
-            while prop_requests:
-                kind, payload = prop_requests.pop(0)
-                try:
-                    if kind == "ik":
-                        rr.apply_selected_ik(payload)
-                    elif kind == "q":
-                        rr.apply_selected_q(payload)
-                except Exception as e:
-                    print("prop apply failed", e)
-            while file_requests:
-                kind, payload = file_requests.pop(0)
-                try:
-                    if kind == "new":
-                        if hasattr(wp, "reset_document"):
-                            wp.reset_document()
-                        else:
-                            wp.clear_waypoints()
-                            wp.extra_tracks = []
-                            wp.sim_poses = []
-                            if hasattr(wp, "ensure_builtin_sim_poses"):
-                                wp.ensure_builtin_sim_poses()
-                    elif kind == "load":
-                        payload = payload or {}
-                        if isinstance(payload, dict) and payload.get("doc"):
-                            fman.apply_loaded_doc(payload.get("doc"))
-                        elif isinstance(payload, dict) and payload.get("path") and not payload.get("waypoints") and not payload.get("points"):
-                            fman.load_from_path(payload.get("path"))
-                        else:
-                            fman.apply_loaded_doc(payload)
-                    elif kind == "undo":
-                        wp.undo()
-                    elif kind == "redo":
-                        wp.redo()
-                except Exception as e:
-                    print("file request failed", kind, e)
-            while reset_requests:
-                reset_requests.pop(0)
-                try:
-                    rr.reset_sim_to_real()
-                except Exception as e:
-                    print("reset sim failed:", e)
-            while bake_requests:
-                sp = bake_requests.pop(0)
-                _bake(sp)
-            while sim_requests:
-                dur = sim_requests.pop(0)
-                try:
-                    if not hasattr(bake, "joint_path"):
-                        raise RuntimeError(
-                            "path_bake.joint_path missing — replace robot_sim/path_bake.py "
-                            "with the project copy (loaded %s)" % getattr(bake, "__file__", bake)
-                        )
-                    qs = bake.joint_path()
-                    if len(qs) < 2:
-                        print("simulate: bake a path first")
-                    else:
-                        dt = max(0.5, float(dur) if dur else max(1.0, 0.05 * len(qs)))
-                        rr.trigger_simulation(qs, duration=dt, delay_after=0.3)
-                        print("simulate:", len(qs), "samples in", dt, "s")
-                except Exception as e:
-                    print("simulate failed:", e)
-            playing = bool(getattr(rr, "_pb", {}).get("active")) and not bool(
-                getattr(rr, "_pb", {}).get("paused")
-            )
-            real_playing = bool(getattr(rr, "_rp", {}).get("active")) and not bool(
-                getattr(rr, "_rp", {}).get("paused")
-            )
-            if not playing and not real_playing and hasattr(wp, "snap_global_gizmos_idle"):
-                wp.snap_global_gizmos_idle()
-            if not playing and not real_playing and hasattr(wp, "flush_idle_path_rebuild"):
-                wp.flush_idle_path_rebuild()
-            # One failing tick must not kill this loop: nothing else would
-            # then end a finished sim/run, follow the path window or redraw.
-            for _tick in ("tick_simulation", "tick_real_path", "tick_track_object"):
-                fn = getattr(rr, _tick, None)
-                if fn is None:
-                    continue
-                try:
-                    fn()
-                except Exception as e:
-                    _report_tick_error(_tick, e)
+    def _tick_locked():
+        """One viewer-loop pass, under arms.LOCK. Requests run as the
+        active arm; ticks run as every arm in turn."""
+        global playhead_t
+        while add_requests:
+            req = add_requests.pop(0)
             try:
-                wp.offsets.tick_offsets()
-                wp.ensure_sim_bot_marker()
+                replace = True
+                if isinstance(req, str):
+                    src, t = req, playhead_t
+                else:
+                    src, t = req.get("source", "real"), req.get("t", playhead_t)
+                    replace = bool(req.get("replace", True))
+                if src == "sim":
+                    pose = rr.get_sim_cursor_pose()
+                    wp.add_waypoint(pose, mode="arc", q=_joints_of("sim"), t=t if t is not None else playhead_t, replace=replace)
+                else:
+                    pose = rr.get_real_cursor_pose()
+                    wp.add_waypoint(pose, mode="arc", q=_joints_of("real"), t=t if t is not None else playhead_t, replace=replace)
+                item = wp.waypoints[-1] if wp.waypoints else None
+                if item is not None:
+                    item["added_from"] = src
+                    item["track_object"] = None
+                    if src == "sim" and hasattr(rr, "waypoint_track_record"):
+                        item["track_object"] = rr.waypoint_track_record()
             except Exception as e:
-                _report_tick_error("tick_offsets", e)
+                print("add_waypoint failed:", e)
+        while delete_requests:
+            delete_requests.pop(0)
             try:
-                wp.colliders.tick_colliders()
+                wp.delete_selected()
             except Exception as e:
-                _report_tick_error("tick_colliders", e)
+                print("delete_selected failed:", e)
+        while select_requests:
+            req = select_requests.pop(0)
             try:
-                t_win = playhead_t
+                if isinstance(req, dict):
+                    idx, mode = req.get("index"), req.get("mode") or "replace"
+                else:
+                    idx, mode = req, "replace"
+                if idx is None:
+                    wp.deselect_all()
+                elif 0 <= int(idx) < len(wp.waypoints):
+                    wp.select_waypoint(int(idx), mode=mode)
+            except Exception as e:
+                print("select_waypoint failed:", e)
+        while gizmo_space_requests:
+            mode = gizmo_space_requests.pop(0)
+            try:
+                wp.apply_gizmo_space(mode)
+                print("gizmo space", mode)
+            except Exception as e:
+                print("gizmo space failed:", e)
+        while real_requests:
+            item = real_requests.pop(0)
+            kind = item[0] if isinstance(item, (tuple, list)) else item
+            # Every arm with a controller runs its own path together.
+            for aid in arms.each():
+                with arms.using(aid):
+                    if rr.robot is None:
+                        continue
+                    try:
+                        if kind == "goto":
+                            rr.start_goto_path_start()
+                        elif kind == "start":
+                            if hasattr(rr, "fire_real_path"):
+                                rr.fire_real_path()
+                            else:
+                                rr.start_real_path()
+                        elif kind == "pause":
+                            rr.pause_real_path()
+                        elif kind == "stop":
+                            rr.stop_real_path()
+                    except Exception as e:
+                        print("real path request failed", arms.name_of(), e)
+        while move_requests:
+            kind, payload = move_requests.pop(0)
+            try:
+                if kind == "start":
+                    rr.start_hold_move(
+                        ik=payload.get("ik"),
+                        q=payload.get("q"),
+                        mode=payload.get("mode", "ik"),
+                    )
+                elif kind == "stop":
+                    rr.stop_hold_move()
+            except Exception as e:
+                print("move request failed", e)
+        while prop_requests:
+            kind, payload = prop_requests.pop(0)
+            try:
+                if kind == "ik":
+                    rr.apply_selected_ik(payload)
+                elif kind == "q":
+                    rr.apply_selected_q(payload)
+            except Exception as e:
+                print("prop apply failed", e)
+        while file_requests:
+            kind, payload = file_requests.pop(0)
+            try:
+                if kind == "new":
+                    if hasattr(wp, "reset_document"):
+                        wp.reset_document()
+                    else:
+                        wp.clear_waypoints()
+                        wp.extra_tracks = []
+                        wp.sim_poses = []
+                        if hasattr(wp, "ensure_builtin_sim_poses"):
+                            wp.ensure_builtin_sim_poses()
+                elif kind == "load":
+                    payload = payload or {}
+                    if isinstance(payload, dict) and payload.get("doc"):
+                        fman.apply_loaded_doc(payload.get("doc"))
+                    elif isinstance(payload, dict) and payload.get("path") and not payload.get("waypoints") and not payload.get("points"):
+                        fman.load_from_path(payload.get("path"))
+                    else:
+                        fman.apply_loaded_doc(payload)
+                elif kind == "undo":
+                    wp.undo()
+                elif kind == "redo":
+                    wp.redo()
+            except Exception as e:
+                print("file request failed", kind, e)
+        while reset_requests:
+            reset_requests.pop(0)
+            try:
+                rr.reset_sim_to_real()
+            except Exception as e:
+                print("reset sim failed:", e)
+        while bake_requests:
+            sp = bake_requests.pop(0)
+            for aid in arms.each():
+                with arms.using(aid):
+                    if len(getattr(wp, "waypoints", None) or []) >= 2 or aid == arms.active():
+                        _bake(sp)
+        while sim_requests:
+            dur = sim_requests.pop(0)
+            try:
+                if not hasattr(bake, "joint_path"):
+                    raise RuntimeError(
+                        "path_bake.joint_path missing — replace robot_sim/path_bake.py "
+                        "with the project copy (loaded %s)" % getattr(bake, "__file__", bake)
+                    )
+                qs = bake.joint_path()
+                if len(qs) < 2:
+                    print("simulate: bake a path first")
+                else:
+                    dt = max(0.5, float(dur) if dur else max(1.0, 0.05 * len(qs)))
+                    rr.trigger_simulation(qs, duration=dt, delay_after=0.3)
+                    print("simulate:", len(qs), "samples in", dt, "s")
+                # The other arms play their own baked paths on the same clock.
+                for aid in arms.each():
+                    if aid == arms.active():
+                        continue
+                    with arms.using(aid):
+                        if len(getattr(wp, "waypoints", None) or []) >= 2:
+                            rr.enter_simulation_mode()
+            except Exception as e:
+                print("simulate failed:", e)
+        playing = real_playing = False
+        for aid in arms.each():
+            with arms.using(aid):
+                playing = playing or (bool(rr._pb.get("active")) and not bool(rr._pb.get("paused")))
+                real_playing = real_playing or (bool(rr._rp.get("active")) and not bool(rr._rp.get("paused")))
+        if not playing and not real_playing and hasattr(wp, "snap_global_gizmos_idle"):
+            wp.snap_global_gizmos_idle()
+        if not playing and not real_playing and hasattr(wp, "flush_idle_path_rebuild"):
+            for aid in arms.each():
+                with arms.using(aid):
+                    wp.flush_idle_path_rebuild()
+        # One failing tick must not kill this loop: nothing else would
+        # then end a finished sim/run, follow the path window or redraw.
+        t_play = None
+        for aid in arms.each():
+            with arms.using(aid):
+                for _tick in ("tick_simulation", "tick_real_path", "tick_track_object"):
+                    fn = getattr(rr, _tick, None)
+                    if fn is None:
+                        continue
+                    try:
+                        fn()
+                    except Exception as e:
+                        _report_tick_error(_tick, e)
+                try:
+                    wp.ensure_sim_bot_marker()
+                except Exception as e:
+                    _report_tick_error("sim_bot_marker", e)
                 st = rr.sim_status() if hasattr(rr, "sim_status") else {}
                 rt = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
-                if st.get("active"):
-                    t_win = float(st.get("t") or 0.0)
-                elif rt.get("active"):
-                    t_win = float(rt.get("t") or 0.0)
-                playhead_t = t_win
-                if hasattr(wp, "follow_path_window"):
-                    wp.follow_path_window(t_win)
-            except Exception:
-                pass
-            try:
-                if hasattr(wp, "tick_cameras"):
-                    wp.tick_cameras()
-            except Exception:
-                pass
-            if playing:
-                try:
-                    viewer.redraw()
-                except Exception:
-                    pass
-                time.sleep(0.008)
-            else:
-                try:
-                    rr.update_cursors()
-                    viewer.redraw()
-                except Exception as e:
-                    _report_tick_error("update_cursors", e)
-                time.sleep(0.03)
+                if t_play is None and st.get("active"):
+                    t_play = float(st.get("t") or 0.0)
+                elif t_play is None and rt.get("active"):
+                    t_play = float(rt.get("t") or 0.0)
+        try:
+            wp.offsets.tick_offsets()
+        except Exception as e:
+            _report_tick_error("tick_offsets", e)
+        try:
+            wp.colliders.tick_colliders()
+        except Exception as e:
+            _report_tick_error("tick_colliders", e)
+        try:
+            t_win = playhead_t if t_play is None else t_play
+            playhead_t = t_win
+            if hasattr(wp, "follow_path_window"):
+                for aid in arms.each():
+                    with arms.using(aid):
+                        wp.follow_path_window(t_win)
+        except Exception:
+            pass
+        try:
+            if hasattr(wp, "tick_cameras"):
+                wp.tick_cameras()
+        except Exception:
+            pass
+        if not playing:
+            for aid in arms.each():
+                with arms.using(aid):
+                    try:
+                        rr.update_cursors()
+                    except Exception as e:
+                        _report_tick_error("update_cursors", e)
+        try:
+            viewer.redraw()
+        except Exception:
+            pass
+        return playing
+
+    def _sleep_after_tick(playing):
+        time.sleep(0.008 if playing else 0.03)
+
+    try:
+        while viewer.is_active:
+            with arms.LOCK:
+                arms.ensure_active_loaded()
+                playing = _tick_locked()
+            _sleep_after_tick(playing)
     except KeyboardInterrupt:
         print("Shutting down...")
         rr.shutdown()

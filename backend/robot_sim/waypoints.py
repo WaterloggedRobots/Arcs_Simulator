@@ -5,6 +5,8 @@ import time
 import threading
 import numpy as np
 
+import arms
+
 
 def _pb_mod():
     import path_bake as m
@@ -1011,7 +1013,7 @@ def draw_path():
         except Exception:
             clear_path()
     h = server.scene.add_line_segments(
-        name="/path/current",
+        name="/path%s/current" % arms.ns(),
         points=points,
         colors=colors,
         line_width=3.0,
@@ -1045,25 +1047,25 @@ def show_dotted_for_selection(idx):
             pass
     if not hide_out and wp.get("out_ctrl") is not None and wp.get("out_ctrl_pos") is not None:
         wp["dotted_out"] = make_dotted_line(
-            wp["pos"], wp["out_ctrl_pos"], name=f"/dot/{idx}/out"
+            wp["pos"], wp["out_ctrl_pos"], name=f"/dot{arms.ns()}/{idx}/out"
         )
     if not hide_in and wp.get("in_ctrl") is not None and wp.get("in_ctrl_pos") is not None:
         wp["dotted_in"] = make_dotted_line(
-            wp["pos"], wp["in_ctrl_pos"], name=f"/dot/{idx}/in"
+            wp["pos"], wp["in_ctrl_pos"], name=f"/dot{arms.ns()}/{idx}/in"
         )
 
     if idx > 0 and waypoints[idx]["mode"] == "arc" and not waypoints[idx - 1].get("force_fk"):
         prev = waypoints[idx - 1]
         if prev.get("out_ctrl") is not None and prev.get("out_ctrl_pos") is not None:
             prev["dotted_out"] = make_dotted_line(
-                prev["pos"], prev["out_ctrl_pos"], name=f"/dot/{idx - 1}/out"
+                prev["pos"], prev["out_ctrl_pos"], name=f"/dot{arms.ns()}/{idx - 1}/out"
             )
 
     if idx < len(waypoints) - 1 and waypoints[idx + 1]["mode"] == "arc" and not wp.get("force_fk"):
         nxt = waypoints[idx + 1]
         if nxt.get("in_ctrl") is not None and nxt.get("in_ctrl_pos") is not None:
             nxt["dotted_in"] = make_dotted_line(
-                nxt["pos"], nxt["in_ctrl_pos"], name=f"/dot/{idx + 1}/in"
+                nxt["pos"], nxt["in_ctrl_pos"], name=f"/dot{arms.ns()}/{idx + 1}/in"
             )
         try:
             if nxt.get("in_ctrl") is not None:
@@ -2063,7 +2065,7 @@ def refresh_pose_markers():
                     except Exception:
                         pass
             continue
-        if not shown or item_vis.get("pose:%s" % pid, True) is False:
+        if not shown or item_vis.get(_vis_key("pose", pid), True) is False:
             pack = _pose_markers.get(pid)
             if pack:
                 for h in pack.values() if isinstance(pack, dict) else [pack]:
@@ -2079,7 +2081,7 @@ def refresh_pose_markers():
         wxyz = _stored_point_wxyz(p)
         keep.add(pid)
         pack = _pose_markers.get(pid)
-        name = "/stored/%s" % pid
+        name = "/stored%s/%s" % (arms.ns(), pid)
         if not isinstance(pack, dict) or pack.get("sphere") is None:
             if pack is not None and not isinstance(pack, dict):
                 try:
@@ -2146,12 +2148,23 @@ def set_list_visible(kind, on=None):
     kind = str(kind or "")
     if kind not in list_vis:
         list_vis[kind] = True
-    list_vis[kind] = (not list_vis[kind]) if on is None else bool(on)
+    on = (not list_vis[kind]) if on is None else bool(on)
+    if kind in ("wp", "pose"):
+        # Every arm's waypoints / saved points, not only the listed arm's.
+        for aid in arms.each():
+            with arms.using(aid):
+                _set_list_visible(kind, on)
+        return list_vis[kind]
+    return _set_list_visible(kind, on)
+
+
+def _set_list_visible(kind, on):
+    list_vis[kind] = bool(on)
     if kind == "pose":
         set_show_pose_markers(list_vis["pose"])
     elif kind == "wp":
         for i, item in enumerate(waypoints):
-            shown = list_vis["wp"] and item_vis.get("wp:%s" % i, True)
+            shown = list_vis["wp"] and item_vis.get(_vis_key("wp", i), True)
             item["visible"] = shown
             for key in ("sphere", "arrow", "side", "halo", "gizmo"):
                 h = item.get(key)
@@ -2175,12 +2188,14 @@ def set_list_visible(kind, on=None):
             pass
     elif kind == "obj":
         shown_list = list_vis["obj"]
-        try:
-            import robot_runtime as rr
-            if rr._cursor_sim is not None:
-                rr._cursor_sim.visible = shown_list and item_vis.get("obj:sim_cursor", True)
-        except Exception:
-            pass
+        for aid in arms.each():
+            with arms.using(aid):
+                try:
+                    import robot_runtime as rr
+                    if rr._cursor_sim is not None:
+                        rr._cursor_sim.visible = shown_list and item_vis.get("obj:%s" % arms.cid("sim_cursor"), True)
+                except Exception:
+                    pass
         for obj in scene_objects:
             shown = shown_list and item_vis.get("obj:%s" % obj.get("id"), True)
             h = obj.get("handle")
@@ -3392,13 +3407,13 @@ def _sync_selection_globals():
     selection_kind = None
     for kind, key in _selection:
         if kind == "sim":
-            selected_obj_ids.append("sim_cursor")
+            selected_obj_ids.append(arms.cid("sim_cursor"))
             selection_kind = "sim"
         elif kind == "bot":
-            selected_obj_ids.append("sim_bot")
+            selected_obj_ids.append(arms.cid("sim_bot"))
             selection_kind = "bot"
         elif kind == "real":
-            selected_obj_ids.append("real_cursor")
+            selected_obj_ids.append(arms.cid("real_cursor"))
             selection_kind = "real"
         elif kind == "obj":
             selected_obj_ids.append(key)
@@ -3534,8 +3549,34 @@ def set_item_vis(kind, oid, on=None):
     return set_item_visible(kind, oid, on)
 
 
+def _vis_key(kind, oid):
+    """item_vis key. Waypoint and saved point ids repeat between arms, so
+    those keys carry the arm; objects (and arm ids like sim_cursor@arm2) do not."""
+    if kind in ("wp", "pose"):
+        return "%s%s:%s" % (kind, arms.ns(), oid)
+    return "%s:%s" % (kind, oid)
+
+
+def item_vis_view():
+    """item_vis as the page reads it: the listed arm's wp/pose keys without the arm."""
+    out = {}
+    ns = arms.ns()
+    for k, v in item_vis.items():
+        kind, _, rest = k.partition(":")
+        if kind in ("wp" + ns, "pose" + ns):
+            out["%s:%s" % (kind[:len(kind) - len(ns)], rest)] = v
+        elif kind.split("_")[0] not in ("wp", "pose"):
+            out[k] = v
+    return out
+
+
 def set_item_visible(kind, oid, on=None):
-    key = "%s:%s" % (kind, oid)
+    if kind == "obj":
+        base, aid = arms.split_id(oid)
+        if aid is not None and aid != arms.current():
+            with arms.using(aid):
+                return set_item_visible(kind, oid, on)
+    key = _vis_key(kind, oid)
     if kind == "pose" and str(oid) == "real":
         item_vis[key] = False
         refresh_pose_markers()
@@ -3578,16 +3619,17 @@ def set_item_visible(kind, oid, on=None):
         except Exception:
             pass
     elif kind == "obj":
-        if str(oid) == "sim_bot":
+        base, aid = arms.split_id(oid)
+        if aid is not None and base == "sim_bot":
             simulatorview.set_sim_bot_visible(shown)
-        elif str(oid) == "sim_cursor":
+        elif aid is not None and base == "sim_cursor":
             try:
                 import robot_runtime as rr
                 if rr._cursor_sim is not None:
                     rr._cursor_sim.visible = shown
             except Exception:
                 pass
-        elif str(oid) == "real_cursor":
+        elif aid is not None and base == "real_cursor":
             try:
                 import robot_runtime as rr
                 if rr._cursor_real is not None:

@@ -7,6 +7,7 @@ import numpy as np
 from enum import Enum, auto
 from skrobot.model import RobotModel
 import arcscontrol
+import arms
 from scipy.spatial.transform import Rotation as R
 import waypoints as wp
 
@@ -391,22 +392,43 @@ _robot_addr = {"ip": None, "port": None}
 
 
 def set_robot_address(ip=None, port=None):
+    """This arm's controller address. The default arm falls back to
+    arcscontrol.robot_ip / robot_port; an added arm has no controller (sim
+    only) until it gets an IP."""
+    global robot
     _robot_addr["ip"] = str(ip).strip() if ip not in (None, "") else None
     _robot_addr["port"] = int(port) if port not in (None, "") else None
-    if robot is not None and hasattr(robot, "set_address"):
-        robot.set_address(_robot_addr["ip"] or arcscontrol.robot_ip, _robot_addr["port"] or arcscontrol.robot_port)
+    if arms.is_default():
+        if robot is not None and hasattr(robot, "set_address"):
+            robot.set_address(_robot_addr["ip"] or arcscontrol.robot_ip, _robot_addr["port"] or arcscontrol.robot_port)
+    elif _robot_addr["ip"] is None:
+        if robot is not None:
+            print("robot address cleared:", arms.name_of(), "is sim only")
+        robot = None
+    elif robot is None:
+        robot = arcscontrol.RobotArcs(
+            ip=_robot_addr["ip"], port=_robot_addr["port"] or arcscontrol.robot_port, block=False)
+    elif hasattr(robot, "set_address"):
+        robot.set_address(_robot_addr["ip"], _robot_addr["port"] or arcscontrol.robot_port)
     return robot_address()
 
 
 def robot_address():
-    ip = getattr(robot, "ip", None) or _robot_addr["ip"] or getattr(arcscontrol, "robot_ip", "")
-    port = getattr(robot, "port", None) or _robot_addr["port"] or getattr(arcscontrol, "robot_port", 30004)
-    return {"ip": str(ip), "port": int(port), "default_ip": str(getattr(arcscontrol, "robot_ip", "")),
-            "default_port": int(getattr(arcscontrol, "robot_port", 30004))}
+    if arms.is_default():
+        default_ip = str(getattr(arcscontrol, "robot_ip", ""))
+    else:
+        default_ip = ""
+    default_port = int(getattr(arcscontrol, "robot_port", 30004))
+    ip = getattr(robot, "ip", None) or _robot_addr["ip"] or default_ip
+    port = getattr(robot, "port", None) or _robot_addr["port"] or default_port
+    return {"ip": str(ip or ""), "port": int(port), "default_ip": default_ip,
+            "default_port": default_port, "arm": arms.current(), "arm_name": arms.name_of(),
+            "set_ip": _robot_addr["ip"] or "", "set_port": _robot_addr["port"] or ""}
 
 
 def init(viser_viewer, urdf_path=URDF_PATH):
     global viewer, robot
+    arms.capture_defaults()
     viewer = viser_viewer
     robot = arcscontrol.RobotArcs(
         ip=_robot_addr["ip"] or arcscontrol.robot_ip,
@@ -422,6 +444,87 @@ def init(viser_viewer, urdf_path=URDF_PATH):
         reset_sim_to_home()
     start_threads()
     bind_default_camera()
+
+
+def setup_extra_arm(pos=None, wxyz=None, model=None, ip=None, port=None):
+    """Build an added Aubo Arm, run as that arm (arms.add_arm). Its robots,
+    cursors and saved points start like the default arm's at launch."""
+    global _base_pos, _base_wxyz
+    if model:
+        set_robot_model(model)
+    if pos is not None:
+        _base_pos = np.asarray(pos, dtype=float).reshape(3)
+    if wxyz is not None:
+        q = np.asarray(wxyz, dtype=float).reshape(4)
+        _base_wxyz = q / (float(np.linalg.norm(q)) or 1.0)
+    set_robot_address(ip, port)
+    import_robots(URDF_PATH, URDF_SIM_PATH)
+    set_hide_real_robot(True)
+    reset_sim_to_home()
+    srv = getattr(wp, "server", None)
+    init_cursors(srv)
+    hide_sim_gizmo()
+    set_hide_real_robot(True)
+    try:
+        if hasattr(wp, "ensure_builtin_sim_poses"):
+            wp.ensure_builtin_sim_poses()
+        wp.refresh_pose_markers()
+    except Exception as e:
+        print("extra arm poses", e)
+    try:
+        wp.ensure_sim_bot_marker()
+    except Exception as e:
+        print("extra arm marker", e)
+
+
+def teardown_arm():
+    """Remove everything an added arm drew (run as that arm)."""
+    global robot, _cursors_ready
+    try:
+        exit_simulation_mode()
+    except Exception:
+        pass
+    try:
+        if hasattr(wp, "clear_waypoints"):
+            wp.clear_waypoints()
+    except Exception as e:
+        print("teardown waypoints", e)
+    try:
+        import path_bake as bake
+        bake.invalidate_from(0, drop_all=True)
+        bake.clear_sample_dots()
+    except Exception:
+        pass
+    hide_sim_gizmo()
+    for h in (_cursor_sim, _arrow_sim, _arrow_sim_side, _cursor_real, _arrow_real, _arrow_real_side, _burn_line):
+        if h is None:
+            continue
+        try:
+            h.remove()
+        except Exception:
+            pass
+    for pack in list((getattr(wp, "_pose_markers", None) or {}).values()):
+        for h in (pack.values() if isinstance(pack, dict) else [pack]):
+            try:
+                h.remove()
+            except Exception:
+                pass
+    try:
+        wp._pose_markers.clear()
+    except Exception:
+        pass
+    try:
+        import simulatorview as sv
+        sv.drop_sim_bot_gizmo()
+        for h in list(sv._sim_bot_viz.values()):
+            h.remove()
+        sv._sim_bot_viz.clear()
+    except Exception:
+        pass
+    for model in (robot_actual, robot_sim):
+        _drop_viser_robot(model)
+    robot = None
+    _cursors_ready = False
 
 
 CAM_LOOK = (0.35, 0.0, 0.30)
@@ -833,7 +936,7 @@ def _snap_sim_cursor_to_ee():
         _make_sim_gizmo(srv, pos, wxyz, resume=False)
     try:
         if hasattr(wp, "_propagate_children"):
-            wp._propagate_children("sim_cursor")
+            wp._propagate_children(arms.cid("sim_cursor"))
     except Exception:
         pass
 
@@ -1157,7 +1260,7 @@ def get_sim_cursor_pose():
 
 def _make_real_cursor(server):
     sph = server.scene.add_icosphere(
-        name="/cursor_real/sphere",
+        name="/cursor_real%s/sphere" % arms.ns(),
         radius=CURSOR_R,
         color=REAL_CURSOR_RGB,
         position=(0.35, 0.0, 0.35),
@@ -1318,7 +1421,7 @@ def _track_target_pos(name):
 
 def _cursor_children():
     """Objects parented straight to the sim cursor: the swappable EE tools."""
-    return [o for o in (getattr(wp, "scene_objects", None) or []) if str(o.get("parent_id") or "") == "sim_cursor"]
+    return [o for o in (getattr(wp, "scene_objects", None) or []) if str(o.get("parent_id") or "") == arms.cid("sim_cursor")]
 
 
 def _tool_offsets(obj):
@@ -1539,7 +1642,7 @@ def tick_track_object():
     # Children of the cursor follow the new heading now, not on their next move.
     try:
         if hasattr(wp, "_propagate_children"):
-            wp._propagate_children("sim_cursor")
+            wp._propagate_children(arms.cid("sim_cursor"))
         if hasattr(wp, "refresh_sim_camera_viz"):
             wp.refresh_sim_camera_viz()
     except Exception:
@@ -1590,7 +1693,7 @@ def _make_sim_gizmo(server, pos, wxyz, resume=True):
     giz_wxyz = tuple(float(v) for v in _sim_wxyz) if space == "local" else (1.0, 0.0, 0.0, 0.0)
     _gizmo_serial += 1
     kwargs = dict(
-        name="/cursor_sim/gizmo_%s_%d" % (space, _gizmo_serial),
+        name="/cursor_sim%s/gizmo_%s_%d" % (arms.ns(), space, _gizmo_serial),
         position=xyz,
         scale=_GIZMO_SCALE_ON,
         wxyz=giz_wxyz,
@@ -1637,7 +1740,7 @@ def _make_sim_gizmo(server, pos, wxyz, resume=True):
             pass
         try:
             if hasattr(wp, "_propagate_children"):
-                wp._propagate_children("sim_cursor")
+                wp._propagate_children(arms.cid("sim_cursor"))
         except Exception:
             pass
 
@@ -1660,7 +1763,7 @@ def init_cursors(server):
         xyz = tuple(float(v) for v in pos)
 
         _cursor_sim = server.scene.add_icosphere(
-            name="/cursor_sim/sphere",
+            name="/cursor_sim%s/sphere" % arms.ns(),
             radius=CURSOR_R,
             color=SIM_CURSOR_RGB,
             position=xyz,
@@ -1766,9 +1869,9 @@ def _draw_sim_dir(pos=None):
         except Exception:
             pass
     with _dir_lock:
-        _arrow_sim = _set_line(_arrow_sim, "/cursor_sim/dir", pos, _sim_wxyz, SIM_CURSOR_RGB)
+        _arrow_sim = _set_line(_arrow_sim, "/cursor_sim%s/dir" % arms.ns(), pos, _sim_wxyz, SIM_CURSOR_RGB)
         _arrow_sim_side = _set_line(
-            _arrow_sim_side, "/cursor_sim/dir_side", pos, _sim_wxyz, SIM_CURSOR_RGB,
+            _arrow_sim_side, "/cursor_sim%s/dir_side" % arms.ns(), pos, _sim_wxyz, SIM_CURSOR_RGB,
             axis="right", scale=0.70,
         )
 
@@ -1786,9 +1889,9 @@ def update_cursors():
         back_r = _dir_from_wxyz(wxyz_r)
         _cursor_real.position = (float(pos_r[0]), float(pos_r[1]), float(pos_r[2]))
         with _dir_lock:
-            _arrow_real = _set_line(_arrow_real, "/cursor_real/dir", pos_r, wxyz_r, REAL_CURSOR_RGB)
+            _arrow_real = _set_line(_arrow_real, "/cursor_real%s/dir" % arms.ns(), pos_r, wxyz_r, REAL_CURSOR_RGB)
             _arrow_real_side = _set_line(
-                _arrow_real_side, "/cursor_real/dir_side", pos_r, wxyz_r, REAL_CURSOR_RGB,
+                _arrow_real_side, "/cursor_real%s/dir_side" % arms.ns(), pos_r, wxyz_r, REAL_CURSOR_RGB,
                 axis="right", scale=0.70,
             )
 
@@ -2402,91 +2505,105 @@ def hold_move_status():
     }
 
 
-def real_robot_updater():
-    global _start_snap_done, _rpc_probe_ready
-    time.sleep(3.0)
-    _rpc_probe_ready = True
-    last_ok = robot_connected()
-    if last_ok and not _start_snap_done:
+# Per arm: was its controller up on the last pass, and failed passes since.
+_real_link = {"last_ok": None, "miss": 0}
+REAL_RECONNECT_MISSES = 40  # ~2 s of failed passes between reconnect tries
+
+
+def _probe_joints(bot):
+    """Joints of a live, powered controller, else None. No arm state touched,
+    so it runs without arms.LOCK (an RPC can take a while)."""
+    if bot is None or not _rpc_probe_ready:
+        return None
+    try:
+        if not bot.hasConnected():
+            return None
+        q = _flat(bot.GetJoints(), 6)
+    except Exception:
+        return None
+    if q is None or len(q) < 6 or all(abs(float(v)) < 1e-9 for v in q[:6]):
+        return None
+    return q
+
+
+def _on_real_up(first):
+    global _start_snap_done
+    set_hide_real_robot(False)
+    if not _start_snap_done:
         try:
             reset_sim_to_real()
             _start_snap_done = True
-            print("startup snap sim = real")
+            print("startup snap sim = real", arms.name_of())
         except Exception as e:
             print("startup snap failed", e)
-    miss = 0
-    while not stop_flag.is_set():
+    if not first:
         try:
-            if not robot_connected():
-                if last_ok:
-                    print("robot dropped — hiding real arm")
-                    set_hide_real_robot(True)
-                    last_ok = False
-                    try:
-                        wp.refresh_pose_markers()
-                    except Exception:
-                        pass
-                miss += 1
-                if miss >= 8:
-                    miss = 0
-                    # robot_connected() also needs a non-zero (powered) pose,
-                    # so a live RPC link alone is not a reconnect.
-                    if robot is not None and robot.reconnect() and robot_connected():
-                        print("robot reconnected")
-                        set_hide_real_robot(False)
-                        if not _start_snap_done:
-                            try:
-                                reset_sim_to_real()
-                                _start_snap_done = True
-                                print("startup snap sim = real")
-                            except Exception as e:
-                                print("startup snap failed", e)
-                        try:
-                            import path_bake as bake
-                            bake.clear_bake()
-                            print("bake cleared after reconnect")
-                        except Exception as e:
-                            print("bake clear failed", e)
-                        try:
-                            wp.refresh_pose_markers()
-                        except Exception:
-                            pass
-                        last_ok = True
-                time.sleep(0.25)
-                continue
-            miss = 0
-            if not last_ok:
-                set_hide_real_robot(False)
-                if not _start_snap_done:
-                    try:
-                        reset_sim_to_real()
-                        _start_snap_done = True
-                        print("startup snap sim = real")
-                    except Exception as e:
-                        print("startup snap failed", e)
-                try:
-                    import path_bake as bake
-                    bake.clear_bake()
-                    print("bake cleared after reconnect")
-                except Exception as e:
-                    print("bake clear failed", e)
+            import path_bake as bake
+            bake.clear_bake()
+            print("bake cleared after reconnect", arms.name_of())
+        except Exception as e:
+            print("bake clear failed", e)
+    try:
+        wp.refresh_pose_markers()
+    except Exception:
+        pass
+
+
+def _real_step(aid):
+    """One pass of the real-robot updater for one arm."""
+    with arms.using(aid):
+        bot = robot
+        link = _real_link
+    q = _probe_joints(bot)
+    if q is None:
+        with arms.using(aid):
+            if link.get("last_ok"):
+                print("robot dropped — hiding real arm", arms.name_of())
+                set_hide_real_robot(True)
                 try:
                     wp.refresh_pose_markers()
                 except Exception:
                     pass
-                last_ok = True
-            current_q = _flat(robot.GetJoints(), 6)
-            if robot_actual is not None and current_q is not None:
-                robot_actual.angle_vector(np.array(current_q, dtype=float))
+            link["last_ok"] = False
+        link["miss"] = int(link.get("miss") or 0) + 1
+        if bot is not None and link["miss"] >= REAL_RECONNECT_MISSES:
+            link["miss"] = 0
+            # reconnect() can wait seconds: never on this loop, never under the lock.
+            threading.Thread(target=bot.reconnect, daemon=True).start()
+        return
+    link["miss"] = 0
+    with arms.using(aid):
+        if robot is not bot:
+            return  # address changed meanwhile
+        if not link.get("last_ok"):
+            if link.get("last_ok") is False:
+                print("robot reconnected", arms.name_of())
+            _on_real_up(first=link.get("last_ok") is None)
+            link["last_ok"] = True
+        try:
+            if robot_actual is not None:
+                robot_actual.angle_vector(np.array(q, dtype=float))
             try:
                 ee, _ = _ee_frame(robot_actual)
-                _note_motion("real", current_q, ee)
+                _note_motion("real", q, ee)
             except Exception:
-                _note_motion("real", current_q, None)
+                _note_motion("real", q, None)
             poll_hold_move()
         except Exception as e:
             print("Real pose update error:", e)
-            last_ok = False
+            link["last_ok"] = False
+
+
+def real_robot_updater():
+    global _rpc_probe_ready
+    time.sleep(3.0)
+    _rpc_probe_ready = True
+    while not stop_flag.is_set():
+        for aid in arms.each():
+            try:
+                _real_step(aid)
+            except Exception as e:
+                print("Real pose update error:", e)
         time.sleep(0.05)
 
 
@@ -2667,7 +2784,7 @@ def exit_simulation_mode():
                 _make_sim_gizmo(wp.server, _pb["saved_pos"], _sim_wxyz)
             try:
                 if hasattr(wp, "_propagate_children"):
-                    wp._propagate_children("sim_cursor")
+                    wp._propagate_children(arms.cid("sim_cursor"))
             except Exception:
                 pass
     except Exception as e:
@@ -2711,7 +2828,7 @@ def set_sim_time(t):
     _apply_q_at_t(t)
     _snap_sim_cursor_to_ee()
     try:
-        wp._propagate_children("sim_cursor")
+        wp._propagate_children(arms.cid("sim_cursor"))
     except Exception:
         pass
     return t
@@ -2765,7 +2882,7 @@ def tick_simulation(dt=None):
             _force_sim_heading(ee_wxyz)
             try:
                 if hasattr(wp, "_propagate_children"):
-                    wp._propagate_children("sim_cursor")
+                    wp._propagate_children(arms.cid("sim_cursor"))
             except Exception:
                 pass
             # Only score speed on ticks that moved the arm; the ticks between
@@ -3449,7 +3566,7 @@ def tick_afterburner():
     try:
         if _burn_line is None:
             _burn_line = wp.server.scene.add_line_segments(
-                name="/afterburner",
+                name="/afterburner%s" % arms.ns(),
                 points=arr.reshape(-1, 2, 3) if False else np.stack([arr[:-1], arr[1:]], axis=1),
                 colors=(180, 80, 180),
             )
@@ -3460,7 +3577,7 @@ def tick_afterburner():
     except Exception:
         try:
             _burn_line = wp.server.scene.add_spline_catmull_rom(
-                name="/afterburner", positions=arr, color=(180, 80, 180), line_width=3.0,
+                name="/afterburner%s" % arms.ns(), positions=arr, color=(180, 80, 180), line_width=3.0,
             )
         except Exception:
             pass

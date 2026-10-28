@@ -17,6 +17,7 @@ from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
 import app_paths
+import arms
 import waypoints as wp
 import robot_runtime as rr
 
@@ -698,7 +699,7 @@ def _draw_sample_dots():
             # any higher name an earlier draw left behind.
             for k in range(n, _dots_high):
                 try:
-                    srv.scene.remove_by_name(f"/bake_pt/{k}")
+                    srv.scene.remove_by_name(f"/bake_pt{arms.ns()}/{k}")
                 except Exception:
                     pass
         _dots_high = n
@@ -732,7 +733,7 @@ def _draw_sample_dots_locked():
                 color = COLOR_FAIL
             try:
                 h = wp.server.scene.add_icosphere(
-                    name=f"/bake_pt/{k}",
+                    name=f"/bake_pt{arms.ns()}/{k}",
                     radius=0.006,
                     color=color,
                     position=tuple(float(v) for v in sm["pos"]),
@@ -745,7 +746,7 @@ def _draw_sample_dots_locked():
             sm = samples[fail_i]
             try:
                 h = wp.server.scene.add_icosphere(
-                    name=f"/bake_pt/{k}",
+                    name=f"/bake_pt{arms.ns()}/{k}",
                     radius=0.009,
                     color=COLOR_FAIL,
                     position=tuple(float(v) for v in sm["pos"]),

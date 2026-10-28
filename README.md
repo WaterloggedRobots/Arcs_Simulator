@@ -82,6 +82,7 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
 
 - The simulated robot appears as the **sim cursor** — the draggable handle that stands in for the real arm's end effector.
 - **Aubo Arm** is the robot base, shown as a blue marker at the foot of the arm. The **Sim cursor** and, while the robot is connected, the **Real cursor** sit under it in the hierarchy. Select it to get a gizmo at the base, or type its position and rotation in Properties: both the real and the sim arm move with it, and the sim cursor keeps its joint angles. IK values, MoveL targets and the IK fields stay relative to the arm's base, as on the teach pendant; saved points (Bookmarks) always move with the arm. After a move, if there are waypoints, the app asks whether they should **move with the arm** or **stay in place**. Waypoints that stay turn red and lose their joint angles; the next bake solves them again and turns each one white once IK is found. The base pose is saved with the project and can be undone (together with the waypoint choice).
+- **More Aubo Arms.** *Add object > Aubo Arm* adds another arm, named **Aubo Arm 1**, **Aubo Arm 2** and so on, placed beside the last one (the first arm keeps the name **Aubo Arm**). Each arm has its own base, Sim and Real cursors, IK (relative to its own base), saved points and waypoints. Objects, cameras and saved paths are shared, in one world frame. Selecting an arm's cursor or base, clicking its timeline row, or picking it in *Preferences > Robot Settings* makes it the **active arm**: the Waypoints and Saved Points lists then show that arm, with its name in brackets in the list header. Double-click an arm in the object list to rename it; select an added arm and press Delete to remove it (the first arm stays). Bake, Simulate and Run work on every arm that has a path, on one clock.
 - Add simple primitives, or import custom **`.stl`** meshes to build a simulation environment around the robot.
 - **Empty** objects are drawn as grey, see-through waypoint markers (sphere with forward and side arrows), so their orientation is visible.
 - Add advanced objects such as **cameras**, to reproduce a real camera's position in the simulated world.
@@ -314,7 +315,7 @@ Components in the properties panel are listed in the order they were added, newe
 ## Miscellaneous features
 
 - **File save and load**, with **autosave and automatic backup**.
-- **Settings menu** for robot type and joint limits.
+- **Settings menu** for robot type and joint limits. *Robot Settings* holds the robot IP and port for one arm, chosen in its **Aubo Arm** select (it follows the active arm both ways). The first arm falls back to the address in `arcscontrol.py`, so scripts run on their own keep working; an added arm is sim only until it gets an IP. Robot type, IP and port are per arm; the first arm's are kept in `settings.json`, added arms' in the project file.
 - **Automatic reconnection** to the robot.
 - **Multi-camera handling** — the simulator, computer webcams and Sony cameras are handled separately, with split-screen views and an individual recording track for each.
 - **View console** for debugging.
@@ -361,6 +362,7 @@ The following are known to be rough or incomplete at this stage:
 | Live target tracking during a run | Not available; tracking is computed before baking. Real-arm face tracking is in progress. |
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
+| Several Aubo Arms | Undo and redo belong to the active arm. Joint limits and timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
 
 ---
 

@@ -1176,6 +1176,8 @@
     #addSim.hier-add, #poseAddSim.hier-add { background: var(--azure); color: var(--on-bright); }
     #poseAdd.hier-add, #addObjBtn.hier-add { background: #3a3b44; color: var(--on-bright); }
     .hier-count { color: #8a8a92; font-weight: 500; font-size: 12px; margin-left: 6px; }
+    .hier-arm { color: #8a8a92; font-weight: 500; font-size: 12px; margin-left: 4px; }
+    .hier-arm:empty { display: none; }
     .cam-tabs { display: flex; gap: 0; flex: 1; min-width: 0; height: 100%; align-items: flex-end; overflow: hidden; padding-top: 4px; }
     .cam-ctrl-row { display: flex !important; align-items: center; gap: 8px; }
     .cam-ctrl-row #camIndexRow { display: inline-flex; align-items: center; gap: 6px; }
@@ -1748,6 +1750,8 @@
               <p style="font-size:11px;color:#8a8a92;margin:0;">Always use Aubo IK: sim cursor drag and bake IK need a connected arm. Use Backup IK: local solver only while disconnected. Reconnect clears the bake.</p>
             </div>
             <div class="ctrl-pane" id="pane-robot" hidden>
+              <label class="field">Aubo Arm</label>
+              <select id="robotArm" title="The arm these settings belong to. Selecting one of its cursors picks it too."></select>
               <label class="field">Robot IP</label>
               <input id="robotIp" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.2.124" />
               <label class="field">Port</label>
@@ -1818,6 +1822,7 @@
               <button type="button" data-act="add-cube">Cube</button>
               <button type="button" data-act="add-camera">Camera</button>
               <button type="button" data-act="add-import">Import object</button>
+              <button type="button" data-act="add-aubo_arm">Aubo Arm</button>
             </div>
           </div>
         </div>
@@ -1826,7 +1831,7 @@
       <div class="hier-split" id="hierSplit" title="Drag to resize object / waypoint lists"></div>
       <div class="hier-sec waypoints" data-hsec="waypoints">
         <div class="hier-head">
-          <span>Waypoints <span class="hier-count" id="wpCount"></span></span>
+          <span>Waypoints <span class="hier-arm" id="wpArm"></span> <span class="hier-count" id="wpCount"></span></span>
           <div class="hier-head-btns">
             <button type="button" class="hier-eye" data-list-eye="wp" title="Toggle waypoints">👁</button>
             <button type="button" id="addReal" class="hier-add" title="Add waypoint on real robot (E)">+</button>
@@ -1838,7 +1843,7 @@
       <div class="hier-split" id="hierSplit2" title="Drag to resize waypoint / stored lists"></div>
       <div class="hier-sec stored" data-hsec="saved">
         <div class="hier-head">
-          <span>Saved Points <span class="hier-count" id="poseCount"></span></span>
+          <span>Saved Points <span class="hier-arm" id="poseArm"></span> <span class="hier-count" id="poseCount"></span></span>
           <div class="hier-head-btns">
             <button type="button" class="hier-eye" data-list-eye="pose" title="Toggle saved points">👁</button>
             <button type="button" id="poseAddReal" class="hier-add" title="Add saved point at real cursor">+</button>
@@ -2691,7 +2696,23 @@
         custom: true,
         keys: tr.keys || [],
       }));
-      return CORE_TRACKS.concat(extras);
+      return armTracks().concat(CORE_TRACKS.slice(1), extras);
+    }
+    // One row per Aubo Arm. The active arm's row is the editable "arm" track;
+    // the others show their waypoints read-only, and a click makes that arm active.
+    function armTracks() {
+      const rows = window.__armRows || [];
+      if (rows.length < 2) return [CORE_TRACKS[0]];
+      return rows.map((r) => r.active
+        ? { id: "arm", name: r.name, simple: true }
+        : { id: "arm@" + r.id, name: r.name, simple: true, armRow: r });
+    }
+    function hitArmRow(clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const y = clientY - rect.top;
+      const row = Math.floor((y - RULER_H) / TRACK_H);
+      const tr = visibleTracks()[row];
+      return tr && tr.armRow ? tr.armRow : null;
     }
     function visibleTracks() {
       const all = allTracks();
@@ -3063,6 +3084,39 @@
           }
         });
       }
+
+      vis.forEach((tr, row) => {
+        if (!tr.armRow) return;
+        // Another arm's waypoints: dimmed, not editable from here.
+        const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+        const dimCol = {
+          fail: "#e25b5b", too_fast: "#f08a3a", ok: "#6ee08a", fk: "#4aa3ff", force_fk: "#4aa3ff",
+        };
+        ctx.globalAlpha = 0.5;
+        (tr.armRow.spans || []).forEach((sp) => {
+          if (sp.t0 == null || sp.t1 == null || !sp.status || sp.status === "pending") return;
+          ctx.strokeStyle = lockEdits ? "#555" : (dimCol[sp.status] || "#8d8e96");
+          ctx.lineWidth = 5;
+          ctx.beginPath();
+          ctx.moveTo(timeToX(Number(sp.t0)), cy);
+          ctx.lineTo(timeToX(Number(sp.t1)), cy);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        });
+        (tr.armRow.keyframes || []).forEach((kf) => {
+          if (kf.t == null) return;
+          const x = timeToX(Number(kf.t));
+          ctx.fillStyle = lockEdits ? "#666" : (dimCol[kf.status] || "#f2f2f2");
+          ctx.beginPath();
+          ctx.moveTo(x, cy - 10);
+          ctx.lineTo(x + 9, cy);
+          ctx.lineTo(x, cy + 10);
+          ctx.lineTo(x - 9, cy);
+          ctx.closePath();
+          ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+      });
 
       vis.forEach((tr, row) => {
         if (tr.id !== "look_sim") return;
@@ -3879,6 +3933,18 @@
 
     scrollEl.addEventListener("pointerdown", (e) => {
       if (e.button === 2) return;
+      const otherArm = hitArmRow(e.clientY);
+      if (otherArm) {
+        // Edit that arm: its row becomes the editable one, its lists show.
+        e.preventDefault();
+        e.stopPropagation();
+        fetch("/api/arm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "activate", id: otherArm.id }),
+        }).then(refresh, refresh);
+        return;
+      }
       const kfFirst = hitKeyframe(e.clientX, e.clientY);
       const smHit = kfFirst >= 0 ? null : hitSample(e.clientX, e.clientY);
       if (smHit && !lockEdits) {
@@ -5408,12 +5474,27 @@
       const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
       // Built-ins. With SIM_BOT_ENABLED: Aubo Arm (robot base) with the Sim cursor and,
       // while the robot is connected, the Real cursor under it.
-      const realLinked = !!(d.real && d.real.connected);
-      const objRows = (SIM_BOT_ENABLED
-        ? [{ id: "sim_bot", name: "Aubo Arm" }, { id: "sim_cursor", name: "Sim cursor", parent_id: "sim_bot" }]
-            .concat(realLinked ? [{ id: "real_cursor", name: "Real cursor", parent_id: "sim_bot" }] : [])
-        : [{ id: "sim_cursor", name: "Sim cursor" }]).concat(d.scene_objects || []);
-      const builtIn = (id) => id === "sim_cursor" || id === "sim_bot" || id === "real_cursor";
+      // Every Aubo Arm gets its own group; a Real cursor shows only while that arm's robot is connected.
+      const armList = (d.arms && d.arms.length) ? d.arms
+        : [{ id: "arm0", name: "Aubo Arm", active: true, sim_id: "sim_cursor", bot_id: "sim_bot", real_id: "real_cursor", real_connected: !!(d.real && d.real.connected) }];
+      const builtInIds = {};
+      let armRows = [];
+      armList.forEach((a) => {
+        builtInIds[a.sim_id] = builtInIds[a.bot_id] = builtInIds[a.real_id] = 1;
+        armRows = armRows.concat(SIM_BOT_ENABLED
+          ? [{ id: a.bot_id, name: a.name, arm: 1 }, { id: a.sim_id, name: "Sim cursor", parent_id: a.bot_id }]
+              .concat(a.real_connected ? [{ id: a.real_id, name: "Real cursor", parent_id: a.bot_id }] : [])
+          : [{ id: a.sim_id, name: "Sim cursor", arm: 1 }]);
+      });
+      const objRows = armRows.concat(d.scene_objects || []);
+      const builtIn = (id) => !!builtInIds[id];
+      window.__armBuiltIns = builtInIds;
+      const activeArm = armList.find((a) => a.active) || armList[0];
+      const armTag = armList.length > 1 ? "(" + activeArm.name + ")" : "";
+      const wpArm = document.getElementById("wpArm");
+      if (wpArm) wpArm.textContent = armTag;
+      const poseArm = document.getElementById("poseArm");
+      if (poseArm) poseArm.textContent = armTag;
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
       function eyeOn(kind, id) {
@@ -5435,7 +5516,7 @@
       });
       const byParent = {};
       objRows.forEach((o) => {
-        const p = (o.id === "sim_bot" || ((o.id === "sim_cursor" || o.id === "real_cursor") && !SIM_BOT_ENABLED)) ? "" : (o.parent_id || "");
+        const p = o.arm ? "" : (o.parent_id || "");
         if (!byParent[p]) byParent[p] = [];
         byParent[p].push(o);
       });
@@ -5516,7 +5597,8 @@
       const row = e.target.closest("[data-oid]");
       if (!row) return;
       const oid = row.getAttribute("data-oid");
-      if (!oid || oid === "sim_cursor" || oid === "sim_bot" || oid === "real_cursor") return;
+      // Arms can be renamed; their cursors cannot.
+      if (!oid || ((window.__armBuiltIns || {})[oid] && oid.split("@")[0] !== "sim_bot")) return;
       e.preventDefault();
       e.stopPropagation();
       const label = row.querySelector(".hier-label") || row.querySelector("span:not(.hier-eye)");
@@ -5581,7 +5663,7 @@
       let dragId = null;
       list.addEventListener("dragstart", (e) => {
         const row = e.target.closest("[data-oid]");
-        if (!row || row.getAttribute("data-oid") === "sim_cursor" || row.getAttribute("data-oid") === "sim_bot" || row.getAttribute("data-oid") === "real_cursor") { e.preventDefault(); return; }
+        if (!row || (window.__armBuiltIns || {})[row.getAttribute("data-oid")]) { e.preventDefault(); return; }
         dragId = row.getAttribute("data-oid");
         e.dataTransfer.setData("text/plain", dragId);
       });
@@ -6055,6 +6137,19 @@
       if (Array.isArray(d.sim_poses)) applySimPoses(d.sim_poses);
       else if (Array.isArray(d.pose_markers) && d.pose_markers.length) applySimPoses(d.pose_markers);
       fillHierarchy(d);
+      if (Array.isArray(d.arm_rows)) window.__armRows = d.arm_rows;
+      if (d.active_arm && d.active_arm !== window.__activeArm) {
+        // A cursor of another arm was selected: Robot Settings follow it.
+        const first = window.__activeArm == null;
+        window.__activeArm = d.active_arm;
+        const cs = document.getElementById("ctrlSettings");
+        if (!first && cs && !cs.hidden) {
+          fetch("/api/settings").then((r) => r.json()).then((x) => fillLimitInputs(x.settings || {}));
+        } else {
+          const armSel = document.getElementById("robotArm");
+          if (armSel) armSel.value = d.active_arm;
+        }
+      }
       const amm = document.getElementById("armMoveModal");
       if (amm && !window.__armMoveAsking) amm.hidden = !d.arm_move_pending;
       const wrap = document.querySelector(".viewer-wrap");
@@ -6804,16 +6899,28 @@
       const ra = (s && s.robot_address) || null;
       const ipEl = document.getElementById("robotIp");
       const portEl = document.getElementById("robotPort");
+      // Robot Settings belong to one arm: the select follows the active arm both ways.
+      const armSel = document.getElementById("robotArm");
+      if (armSel && s && s.arms) {
+        armSel.innerHTML = s.arms.map((a) => "<option value=\"" + a.id + "\">" + a.name + "</option>").join("");
+        armSel.value = s.active_arm || (s.arms[0] && s.arms[0].id) || "";
+        armSel.dataset.cur = armSel.value;
+      }
       if (ipEl && document.activeElement !== ipEl) {
-        ipEl.value = (s && s.robot_ip) || "";
-        if (ra && ra.default_ip) ipEl.placeholder = ra.default_ip;
+        ipEl.value = ra ? String(ra.set_ip || "") : ((s && s.robot_ip) || "");
+        ipEl.placeholder = (ra && ra.default_ip) || (ra ? "Sim only: no robot" : ipEl.placeholder);
       }
       if (portEl && document.activeElement !== portEl) {
-        portEl.value = (s && s.robot_port) || "";
+        portEl.value = ra ? String(ra.set_port || "") : ((s && s.robot_port) || "");
         if (ra && ra.default_port) portEl.placeholder = String(ra.default_port);
       }
       const an = document.getElementById("robotAddrNote");
-      if (an && ra) an.textContent = "Now using " + ra.ip + ":" + ra.port + ". The app reconnects to a new address on its own. Leave empty to use the default from arcscontrol.py (" + ra.default_ip + ":" + ra.default_port + ").";
+      if (an && ra) {
+        an.textContent = ra.default_ip
+          ? "Now using " + ra.ip + ":" + ra.port + ". The app reconnects to a new address on its own. Leave empty to use the default from arcscontrol.py (" + ra.default_ip + ":" + ra.default_port + ")."
+          : (ra.ip ? "Now using " + ra.ip + ":" + ra.port + ". The app reconnects to a new address on its own. Leave empty to keep this arm sim only."
+            : "No robot: this arm is sim only until you enter its IP.");
+      }
       if (s && s.auto_sample != null) {
         autoSampleOn = !!s.auto_sample;
         const btn = document.getElementById("optomise");
@@ -6894,6 +7001,16 @@
           if (el) el.addEventListener("change", saveCtrlSettings);
         });
       }
+      const armSel = document.getElementById("robotArm");
+      if (armSel) armSel.addEventListener("change", () => {
+        const id = armSel.value;
+        fetch("/api/arm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "activate", id: id }),
+        }).then(() => fetch("/api/settings")).then((r) => r.json())
+          .then((d) => { window.__activeArm = (d.settings || {}).active_arm; fillLimitInputs(d.settings || {}); refresh(); });
+      });
       ["robotIp", "robotPort"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("change", () => {
@@ -6956,7 +7073,7 @@
         const kind = act.replace("add-", "");
         menu.hidden = true;
         if (kind === "import" || kind === "mesh") { pickImportObject(); return; }
-        if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera") return;
+        if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera" && kind !== "aubo_arm") return;
         fetch("/api/add_object", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
