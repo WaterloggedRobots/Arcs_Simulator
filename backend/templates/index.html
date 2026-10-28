@@ -1474,7 +1474,6 @@
           <button data-act="undo">Undo<span class="hintk">Ctrl+Z</span></button>
           <button data-act="redo">Redo<span class="hintk">Ctrl+Shift+Z</span></button>
           <button data-act="settings">Preferences</button>
-          <button data-act="robot-type">Robot type</button>
         </div>
       </div>
       <div class="menu" id="menuAdd">
@@ -1693,6 +1692,7 @@
           <div class="ctrl-body">
           <div class="ctrl-side">
             <button type="button" class="ctrl-tab on" data-tab="speed">Robot speed</button>
+            <button type="button" class="ctrl-tab" data-tab="robot">Robot Settings</button>
             <button type="button" class="ctrl-tab" data-tab="wps">Waypoints</button>
             <button type="button" class="ctrl-tab" data-tab="pwin">Path window</button>
             <button type="button" class="ctrl-tab" data-tab="tl">Timeline</button>
@@ -1701,11 +1701,11 @@
           </div>
           <div class="ctrl-main">
             <div class="ctrl-pane" id="pane-speed">
-              <label class="field">Robot model</label>
+              <label class="field">Robot type</label>
               <select id="robotModel" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
                 <option value="aubo_i5">aubo i5</option>
               </select>
-              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Restart Flask after changing model. Joint speed/accel below apply immediately to bake and hold moves.</p>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Changing the type reloads the arm (timeline waypoints are cleared after a confirm). Joint speed/accel below apply immediately to bake and hold moves.</p>
               <div class="lim-head"><span></span><span>Speed (°/s)</span><span>Accel (°/s²)</span></div>
               <div class="lim-row"><label>J1</label><input id="limV0" type="number" step="1"><input id="limA0" type="number" step="1"></div>
               <div class="lim-row"><label>J2</label><input id="limV1" type="number" step="1"><input id="limA1" type="number" step="1"></div>
@@ -1746,6 +1746,13 @@
                 <option value="always_aubo">Always use Aubo IK</option>
               </select>
               <p style="font-size:11px;color:#8a8a92;margin:0;">Always use Aubo IK: sim cursor drag and bake IK need a connected arm. Use Backup IK: local solver only while disconnected. Reconnect clears the bake.</p>
+            </div>
+            <div class="ctrl-pane" id="pane-robot" hidden>
+              <label class="field">Robot IP</label>
+              <input id="robotIp" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.2.124" />
+              <label class="field">Port</label>
+              <input id="robotPort" type="number" min="1" max="65535" step="1" placeholder="30004" />
+              <p id="robotAddrNote" style="font-size:11px;color:#8a8a92;margin:8px 0 0;">The app reconnects to the new address on its own. Leave empty to use the default from arcscontrol.py.</p>
             </div>
             <div class="ctrl-pane" id="pane-dev" hidden>
               <label class="field">Password</label>
@@ -6792,7 +6799,21 @@
           }).join("");
         }
         rm.value = cur;
+        rm.dataset.cur = cur;
       }
+      const ra = (s && s.robot_address) || null;
+      const ipEl = document.getElementById("robotIp");
+      const portEl = document.getElementById("robotPort");
+      if (ipEl && document.activeElement !== ipEl) {
+        ipEl.value = (s && s.robot_ip) || "";
+        if (ra && ra.default_ip) ipEl.placeholder = ra.default_ip;
+      }
+      if (portEl && document.activeElement !== portEl) {
+        portEl.value = (s && s.robot_port) || "";
+        if (ra && ra.default_port) portEl.placeholder = String(ra.default_port);
+      }
+      const an = document.getElementById("robotAddrNote");
+      if (an && ra) an.textContent = "Now using " + ra.ip + ":" + ra.port + ". The app reconnects to a new address on its own. Leave empty to use the default from arcscontrol.py (" + ra.default_ip + ":" + ra.default_port + ").";
       if (s && s.auto_sample != null) {
         autoSampleOn = !!s.auto_sample;
         const btn = document.getElementById("optomise");
@@ -6823,7 +6844,9 @@
         grid_spacing: Math.max(0.001, Number(document.getElementById("tlGrid") && document.getElementById("tlGrid").value || gridSpacing || 0.01)),
         snap_to_grid: !!snapToGrid,
         dev_mode: !!devMode,
-        robot_model: (document.getElementById("robotModel") && document.getElementById("robotModel").value) || "aubo_i5",
+        robot_model: (document.getElementById("robotModel") && (document.getElementById("robotModel").dataset.cur || document.getElementById("robotModel").value)) || "aubo_i5",
+        robot_ip: ((document.getElementById("robotIp") || {}).value || "").trim(),
+        robot_port: ((document.getElementById("robotPort") || {}).value || "").trim(),
       };
     }
     function applyDevMode(on) {
@@ -6859,7 +6882,7 @@
         tab.onclick = () => {
           ctrlSettings.querySelectorAll(".ctrl-tab").forEach((t) => t.classList.remove("on"));
           tab.classList.add("on");
-          ["speed", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
+          ["speed", "robot", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
             const pane = document.getElementById("pane-" + id);
             if (pane) pane.hidden = tab.getAttribute("data-tab") !== id;
           });
@@ -6871,6 +6894,16 @@
           if (el) el.addEventListener("change", saveCtrlSettings);
         });
       }
+      ["robotIp", "robotPort"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", () => {
+          saveCtrlSettings();
+          setTimeout(() => fetch("/api/settings").then((r) => r.json()).then((d) => fillLimitInputs(d.settings || {})), 300);
+        });
+      });
+      const rmSel = document.getElementById("robotModel");
+      // Robot type lives here now (was Edit > Robot type): same switch + confirm.
+      if (rmSel) rmSel.addEventListener("change", () => applyRobotType(rmSel.value, false));
     }
     fetch("/api/settings").then((r) => r.json()).then((d) => fillLimitInputs(d.settings || {})).catch(() => {});
     function pickImportObject() {
@@ -6942,7 +6975,6 @@
       if (act === "undo") await fetch("/api/undo", { method: "POST" });
       if (act === "redo") await fetch("/api/redo", { method: "POST" });
       if (act === "settings") openCtrlSettings();
-      if (act === "robot-type") openRobotTypeModal();
       setTimeout(refresh, 150);
     });
     async function loadProjectDoc(doc, name) {
@@ -7610,6 +7642,8 @@
       }
       const typeModal = document.getElementById("robotTypeModal");
       if (typeModal) typeModal.hidden = true;
+      const rmNow = document.getElementById("robotModel");
+      if (rmNow && d.ok) rmNow.dataset.cur = id;
       statusEl.textContent = d.ok
         ? ("Robot type " + id + (d.reloaded ? " loaded" : " saved"))
         : ("Robot type failed: " + (d.error || r.status));
@@ -7626,6 +7660,8 @@
     const warnCancel = document.getElementById("robotTypeWarnCancel");
     if (warnCancel) warnCancel.onclick = () => {
       _pendingRobotType = null;
+      const rmBack = document.getElementById("robotModel");
+      if (rmBack && rmBack.dataset.cur) rmBack.value = rmBack.dataset.cur;
       const w = document.getElementById("robotTypeWarn");
       if (w) w.hidden = true;
     };

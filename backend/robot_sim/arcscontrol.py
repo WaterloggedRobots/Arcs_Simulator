@@ -114,6 +114,18 @@ class RobotArcs:
             return False
         return bool(box["ok"])
 
+    def set_address(self, ip=None, port=None):
+        """Point at another controller (Robot Settings in the UI). The next
+        reconnect() from the runtime updater uses the new address."""
+        ip = str(ip or "").strip() or self.ip
+        port = int(port) if port not in (None, "") else self.port
+        if ip == self.ip and port == self.port:
+            return False
+        print("arcscontrol: robot address", self.ip, "->", ip, port)
+        self.ip, self.port = ip, port
+        self._drop_client()
+        return True
+
     def reconnect(self):
         if self.hasConnected():
             return True

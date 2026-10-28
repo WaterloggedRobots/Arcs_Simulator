@@ -385,10 +385,33 @@ def robot_connected():
         return False
 
 
+# Robot Settings (UI) override for the controller address; None keeps the
+# defaults in arcscontrol.py, which a script run on its own still uses.
+_robot_addr = {"ip": None, "port": None}
+
+
+def set_robot_address(ip=None, port=None):
+    _robot_addr["ip"] = str(ip).strip() if ip not in (None, "") else None
+    _robot_addr["port"] = int(port) if port not in (None, "") else None
+    if robot is not None and hasattr(robot, "set_address"):
+        robot.set_address(_robot_addr["ip"] or arcscontrol.robot_ip, _robot_addr["port"] or arcscontrol.robot_port)
+    return robot_address()
+
+
+def robot_address():
+    ip = getattr(robot, "ip", None) or _robot_addr["ip"] or getattr(arcscontrol, "robot_ip", "")
+    port = getattr(robot, "port", None) or _robot_addr["port"] or getattr(arcscontrol, "robot_port", 30004)
+    return {"ip": str(ip), "port": int(port), "default_ip": str(getattr(arcscontrol, "robot_ip", "")),
+            "default_port": int(getattr(arcscontrol, "robot_port", 30004))}
+
+
 def init(viser_viewer, urdf_path=URDF_PATH):
     global viewer, robot
     viewer = viser_viewer
-    robot = arcscontrol.RobotArcs(block=False)
+    robot = arcscontrol.RobotArcs(
+        ip=_robot_addr["ip"] or arcscontrol.robot_ip,
+        port=_robot_addr["port"] or arcscontrol.robot_port,
+        block=False)
     import_robots(urdf_path)
     if robot_connected():
         set_hide_real_robot(False)

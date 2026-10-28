@@ -177,6 +177,11 @@ def apply_settings(data):
             wp.load_global_saved_paths(data.get("stored_paths") or [])
         except Exception:
             pass
+    if "robot_ip" in data or "robot_port" in data:
+        try:
+            rr.set_robot_address(data.get("robot_ip"), data.get("robot_port"))
+        except Exception as e:
+            print("apply robot address failed", e)
     mid = data.get("robot_model") or "aubo_i5"
     try:
         if hasattr(rr, "set_robot_model"):
@@ -464,6 +469,10 @@ def api_settings():
         if not st.get("robot_models"):
             st["robot_models"] = list(SETTINGS_DEFAULT.get("robot_models") or [])
         st["robot_model"] = getattr(rr, "_MODEL_ID", None) or st.get("robot_model") or "aubo_i5"
+        try:
+            st["robot_address"] = rr.robot_address()
+        except Exception:
+            pass
         return jsonify({"ok": True, "settings": st})
     data = request.get_json(silent=True) or {}
     st = save_settings(data)
