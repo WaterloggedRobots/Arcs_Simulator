@@ -459,6 +459,23 @@ def _arm_rows():
     return rows
 
 
+def _arm_wps():
+    """Every arm's waypoint rows for the shared Waypoints panel. Each arm keeps
+    its own waypoints; the page groups them under the arm's name."""
+    out = []
+    for aid in arms.each():
+        with arms.using(aid):
+            try:
+                rows = [r for r in wp.list_merged_points() if r.get("kind") == "wp"]
+            except Exception:
+                rows = []
+            vis = wp.item_vis_view() if hasattr(wp, "item_vis_view") else {}
+            for r in rows:
+                r["visible"] = vis.get("wp:%s" % r.get("index")) is not False
+            out.append({"id": aid, "name": arms.name_of(aid), "active": aid == arms.active(), "rows": rows})
+    return out
+
+
 _status_last_req = 0.0
 # Set by timeline edits so the next status build runs at once, not on the
 # 0.25 s cadence; a stale build made dropped frames jump back.
@@ -570,6 +587,7 @@ def api_status():
         "item_vis": wp.item_vis_view() if hasattr(wp, "item_vis_view") else (getattr(wp, "item_vis", {}) or {}),
         "list_vis": getattr(wp, "list_vis", {}) or {},
         "merged_points": wp.list_merged_points() if hasattr(wp, "list_merged_points") else [],
+        "arm_wps": _arm_wps(),
         "tracked_points": wp.cam_target_list() if hasattr(wp, "cam_target_list") else [],
         "arm_move_pending": bool(wp.arm_move_pending()) if hasattr(wp, "arm_move_pending") else False,
         "gizmo_space": getattr(wp, "gizmo_space", "local"),
@@ -1268,8 +1286,11 @@ def api_list_vis():
 @app.route("/api/vis", methods=["POST"])
 def api_vis():
     data = request.get_json(silent=True) or {}
+    # A waypoint row of an arm that is not active names its arm.
+    aid = data.get("arm") if data.get("arm") in arms.each() else arms.current()
     if hasattr(wp, "set_item_vis"):
-        wp.set_item_vis(data.get("kind"), data.get("id"), data.get("on"))
+        with arms.using(aid):
+            wp.set_item_vis(data.get("kind"), data.get("id"), data.get("on"))
     return jsonify({"ok": True})
 
 

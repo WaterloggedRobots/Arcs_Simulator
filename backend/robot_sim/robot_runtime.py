@@ -1411,9 +1411,10 @@ def _track_target_pos(name):
                 return np.asarray(p, dtype=float).reshape(3)
             except Exception:
                 return None
-        ik = rec.get("ik")
-        if ik is not None and len(ik) >= 3:
-            return np.asarray(ik[:3], dtype=float).reshape(3)
+        if not rec.get("builtin") and rec.get("id") != "home":
+            xyz = wp._stored_point_xyz(rec)
+            if xyz is not None:
+                return np.asarray(xyz, dtype=float).reshape(3)
         q = rec.get("q")
         if q is None and rec.get("q_deg") is not None:
             q = np.deg2rad(np.asarray(rec["q_deg"], dtype=float))

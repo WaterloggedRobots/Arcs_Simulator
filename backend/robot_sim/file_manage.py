@@ -321,7 +321,7 @@ def _speeds_from_samples(recs):
 # each added arm's in doc["arms"]. Objects, tracks and saved paths are shared.
 ARM_DOC_KEYS = (
     "points", "total_pts", "estimated_seconds_per_lap", "robot_type", "cursor",
-    "sim_track", "arm_base", "sim_poses", "sim_camera", "sim_offset",
+    "sim_track", "arm_base", "sim_camera", "sim_offset",
     "sim_collider", "sim_comp_order", "look_bars", "waypoints", "bake", "format",
 )
 
@@ -763,12 +763,13 @@ def _apply_arm_points(data):
             wps = [pts[0], pts[-1]] if len(pts) >= 2 else list(pts)
             samples = pts[1:-1] if len(pts) > 2 else []
         wp.load_from_motion_points(wps, samples)
-    _load_sim_poses(data.get("sim_poses"))
     return pts
 
 
 def _apply_doc_one(data):
     pts = _apply_arm_points(data)
+    # Saved points are shared by every arm (relative to each arm's base).
+    _load_sim_poses(data.get("sim_poses"))
     raw_tracks = data.get("tracks")
     loaded_tracks = []
     if isinstance(raw_tracks, list):

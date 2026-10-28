@@ -15,7 +15,8 @@ swapped into the modules:
 
 Everything that reads or writes arm state holds LOCK, so two threads never
 see a half-swapped arm. Scene objects, saved paths, selection of objects and
-timeline extras stay shared by all arms (world coordinates).
+timeline extras stay shared by all arms (world coordinates). Saved points
+are shared too, but relative to the base: each arm draws its own copy.
 
 The default arm keeps the old ids ("sim_cursor", "sim_bot", "real_cursor")
 and scene node names, so files and code written for one arm still work.
@@ -47,7 +48,7 @@ PER_ARM = {
         "_burn_pts", "_burn_line", "_real_link",
     ],
     "waypoints": [
-        "waypoints", "sim_poses", "_sim_pose_seq", "_pose_markers",
+        "waypoints", "_pose_markers",
         "sim_camera", "sim_offset", "sim_collider", "sim_comp_order", "look_bars",
         "path_handles", "selected_idx", "selected_ctrl", "selected_wp_idxs",
         "selected_pose_ids", "_dotted_handles", "_pending_rebuild_idx",

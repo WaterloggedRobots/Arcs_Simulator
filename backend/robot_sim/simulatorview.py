@@ -154,20 +154,10 @@ def _arm_delta(from_pose, to_pose):
 
 
 def _carry_saved_points(move):
-    """Saved points (Bookmarks) belong to the arm: they follow every base move.
-    Home and Real pose come from the arm's own FK and follow by themselves."""
-    for p in list(getattr(wp, "sim_poses", None) or []):
-        if p.get("builtin") or str(p.get("id")) in ("home", "real") or p.get("pos") is None:
-            continue
-        try:
-            np_, nq = move(p.get("pos"), p.get("wxyz"))
-            p["pos"] = [float(v) for v in np_]
-            if nq is not None:
-                p["wxyz"] = [float(v) for v in nq]
-        except Exception:
-            pass
+    """Saved points (Bookmarks) are stored relative to the base (their IK), so
+    they follow every base move: only this arm's markers need redrawing."""
     try:
-        wp.refresh_pose_markers()
+        wp.refresh_pose_markers(arms.current())
     except Exception:
         pass
 
@@ -449,8 +439,7 @@ def _item_pos(kind, key):
     if kind == "pose":
         for p in wp.sim_poses or []:
             if str(p.get("id")) == str(key):
-                ik = p.get("ik") or [0, 0, 0]
-                return np.array([float(ik[0]), float(ik[1]), float(ik[2])], dtype=float)
+                return wp._stored_point_xyz(p)
         return None
     return None
 

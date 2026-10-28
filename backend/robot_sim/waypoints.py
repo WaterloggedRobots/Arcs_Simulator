@@ -1902,7 +1902,10 @@ def go_to_point(data=None):
     if rec is None:
         return {"ok": False, "error": "no pose"}
     q = rec.get("q")
-    pos, wxyz = rec.get("pos"), rec.get("wxyz")
+    # Relative to this arm's base, like its marker.
+    pos, wxyz = _stored_point_world(rec)
+    if pos is None:
+        pos, wxyz = rec.get("pos"), rec.get("wxyz")
     cur_model = str(getattr(rr, "_MODEL_ID", "") or "")
     tagged = str(rec.get("robot_model") or "")
     model_mismatch = bool(tagged) and tagged != cur_model
@@ -1955,9 +1958,29 @@ def rename_waypoint(idx, name):
     return name
 
 
+def _stored_point_world(p):
+    """A saved point's world pose for the arm being run as. Saved points are
+    shared by every arm and kept relative to the base (their IK), so each arm
+    finds its own copy in front of it."""
+    pid = str((p or {}).get("id") or "")
+    ik = (p or {}).get("ik") or []
+    if pid in ("home", "real") or (p or {}).get("builtin") or len(ik) < 6:
+        return None, None
+    try:
+        pos, wxyz = _pb_mod()._pos_wxyz_from_ik(ik)
+    except Exception:
+        return None, None
+    if pos is None:
+        return None, None
+    return np.asarray(pos, dtype=float).reshape(3), (None if wxyz is None else np.asarray(wxyz, dtype=float).reshape(4))
+
+
 def _stored_point_xyz(p):
+    pos, _w = _stored_point_world(p)
+    if pos is not None:
+        return pos
     raw = (p or {}).get("pos")
-    if raw is not None:
+    if raw is not None and str((p or {}).get("id") or "") not in ("home", "real"):
         try:
             return np.asarray(raw, dtype=float).reshape(3)
         except Exception:
@@ -1994,6 +2017,9 @@ def _stored_point_xyz(p):
 
 
 def _stored_point_wxyz(p):
+    _p, w = _stored_point_world(p)
+    if w is not None:
+        return w
     pid = str((p or {}).get("id") or "")
     if pid == "home":
         qdeg = (p or {}).get("q_deg") or [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]
@@ -2038,7 +2064,17 @@ def _stored_point_wxyz(p):
     return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
 
 
-def refresh_pose_markers():
+def refresh_pose_markers(aid=None):
+    """Draw the shared saved points once per arm (or for arm `aid` only)."""
+    if server is None:
+        return
+    ensure_builtin_sim_poses()
+    for a in ([aid] if aid else arms.each()):
+        with arms.using(a):
+            _refresh_pose_markers_one()
+
+
+def _refresh_pose_markers_one():
     global _pose_markers
     if server is None:
         return
@@ -3550,22 +3586,23 @@ def set_item_vis(kind, oid, on=None):
 
 
 def _vis_key(kind, oid):
-    """item_vis key. Waypoint and saved point ids repeat between arms, so
-    those keys carry the arm; objects (and arm ids like sim_cursor@arm2) do not."""
-    if kind in ("wp", "pose"):
+    """item_vis key. Waypoint ids repeat between arms, so those keys carry the
+    arm; saved points (shared by every arm) and objects (and arm ids like
+    sim_cursor@arm2) do not."""
+    if kind == "wp":
         return "%s%s:%s" % (kind, arms.ns(), oid)
     return "%s:%s" % (kind, oid)
 
 
 def item_vis_view():
-    """item_vis as the page reads it: the listed arm's wp/pose keys without the arm."""
+    """item_vis as the page reads it: the listed arm's waypoint keys without the arm."""
     out = {}
     ns = arms.ns()
     for k, v in item_vis.items():
         kind, _, rest = k.partition(":")
-        if kind in ("wp" + ns, "pose" + ns):
-            out["%s:%s" % (kind[:len(kind) - len(ns)], rest)] = v
-        elif kind.split("_")[0] not in ("wp", "pose"):
+        if kind == "wp" + ns:
+            out["wp:%s" % rest] = v
+        elif kind.split("_")[0] != "wp":
             out[k] = v
     return out
 

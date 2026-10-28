@@ -1178,6 +1178,9 @@
     .hier-count { color: #8a8a92; font-weight: 500; font-size: 12px; margin-left: 6px; }
     .hier-arm { color: #8a8a92; font-weight: 500; font-size: 12px; margin-left: 4px; }
     .hier-arm:empty { display: none; }
+    .hier-group { color: #8a8a92; font-size: 12px; font-weight: 500; padding: 4px 8px 2px; cursor: pointer; }
+    .hier-group.on { color: inherit; }
+    .hier-row.other-arm .hier-label { opacity: 0.7; }
     .cam-tabs { display: flex; gap: 0; flex: 1; min-width: 0; height: 100%; align-items: flex-end; overflow: hidden; padding-top: 4px; }
     .cam-ctrl-row { display: flex !important; align-items: center; gap: 8px; }
     .cam-ctrl-row #camIndexRow { display: inline-flex; align-items: center; gap: 6px; }
@@ -1843,7 +1846,7 @@
       <div class="hier-split" id="hierSplit2" title="Drag to resize waypoint / stored lists"></div>
       <div class="hier-sec stored" data-hsec="saved">
         <div class="hier-head">
-          <span>Saved Points <span class="hier-arm" id="poseArm"></span> <span class="hier-count" id="poseCount"></span></span>
+          <span>Saved Points <span class="hier-count" id="poseCount"></span></span>
           <div class="hier-head-btns">
             <button type="button" class="hier-eye" data-list-eye="pose" title="Toggle saved points">👁</button>
             <button type="button" id="poseAddReal" class="hier-add" title="Add saved point at real cursor">+</button>
@@ -5493,8 +5496,6 @@
       const armTag = armList.length > 1 ? "(" + activeArm.name + ")" : "";
       const wpArm = document.getElementById("wpArm");
       if (wpArm) wpArm.textContent = armTag;
-      const poseArm = document.getElementById("poseArm");
-      if (poseArm) poseArm.textContent = armTag;
       const itemVis = d.item_vis || {};
       const listVis = d.list_vis || { obj: true, wp: true, pose: true };
       function eyeOn(kind, id) {
@@ -5539,7 +5540,8 @@
       const wpRows = merged.filter((r) => r.kind === "wp");
       const poseRows = merged.filter((r) => r.kind === "pose");
       const wc = document.getElementById("wpCount");
-      if (wc) wc.textContent = "(" + wpRows.length + ")";
+      const armWps = d.arm_wps || [];
+      if (wc) wc.textContent = "(" + (armWps.length > 1 ? armWps.reduce((n, a) => n + (a.rows || []).length, 0) : wpRows.length) + ")";
       const pc = document.getElementById("poseCount");
       if (pc) pc.textContent = "(" + poseRows.length + ")";
       objs.innerHTML = tree;
@@ -5554,7 +5556,23 @@
         const key = r.kind === "wp" ? ("data-wi='" + r.index + "'") : ("data-pid='" + r.pid + "'");
         return "<div class='" + cls + "' draggable='true' data-pk='" + r.id + "' data-store='" + (r.store || "") + "' data-cango='" + (canGo ? "1" : "0") + "' " + key + "><span class='hier-label'>" + (r.name || r.id) + "</span>" + go + eye + "</div>";
       }
-      wps.innerHTML = wpRows.map(pointRow).join("") || "<div class='hier-row muted'>No waypoints</div>";
+      // One panel for every arm's waypoints, kept apart under each arm's name.
+      // Rows of an arm that is not active carry data-arm; using one makes that
+      // arm active first.
+      function otherWpRow(a, r) {
+        const on = r.visible !== false;
+        const eye = "<span class='hier-eye" + (on ? "" : " off") + "' data-eye='wp' data-id='" + r.index + "' data-arm='" + a.id + "' title='" + (on ? "Hide" : "Show") + "'>" + (on ? "👁" : "🚫") + "</span>";
+        return "<div class='hier-row other-arm' data-arm='" + a.id + "' data-wi='" + r.index + "'><span class='hier-label'>" + (r.name || r.id) + "</span>" + eye + "</div>";
+      }
+      if (armWps.length > 1) {
+        wps.innerHTML = armWps.map((a) => {
+          const head = "<div class='hier-group" + (a.active ? " on" : "") + "' data-arm-group='" + a.id + "'>" + a.name + "</div>";
+          const body = a.active ? wpRows.map(pointRow).join("") : (a.rows || []).map((r) => otherWpRow(a, r)).join("");
+          return head + (body || "<div class='hier-row muted'>No waypoints</div>");
+        }).join("");
+      } else {
+        wps.innerHTML = wpRows.map(pointRow).join("") || "<div class='hier-row muted'>No waypoints</div>";
+      }
       if (poses) poses.innerHTML = poseRows.map(pointRow).join("") || "<div class='hier-row muted'>No saved points</div>";
       const pathsEl = document.getElementById("hierPaths");
       const pathRows = d.saved_paths || [];
@@ -5815,6 +5833,32 @@
         finish(true);
       }, { once: true });
     }
+    function activateArm(aid) {
+      return fetch("/api/arm", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "activate", id: aid }) });
+    }
+    ["click", "dblclick", "contextmenu"].forEach((type) => {
+      document.getElementById("hierWps").addEventListener(type, (e) => {
+        const group = e.target.closest("[data-arm-group]");
+        const other = e.target.closest("[data-arm]");
+        if (!group && !other) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (type === "dblclick") return;
+        if (group) { activateArm(group.getAttribute("data-arm-group")).then(refresh, refresh); return; }
+        const aid = other.getAttribute("data-arm");
+        if (other.hasAttribute("data-eye")) {
+          fetch("/api/vis", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "wp", id: other.getAttribute("data-id"), arm: aid }) }).then(refresh);
+          return;
+        }
+        activateArm(aid).then(() => fetch("/api/select_waypoint", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index: Number(other.getAttribute("data-wi")), mode: "replace" }),
+        })).then(refresh, refresh);
+      }, true);
+    });
     document.getElementById("hierWps").addEventListener("dblclick", (e) => {
       if (e.target.closest("[data-eye]") || e.target.closest(".hier-go")) return;
       const row = e.target.closest("[data-pk]");
