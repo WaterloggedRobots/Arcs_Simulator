@@ -1351,7 +1351,8 @@
       display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px;
     }
     input[type="password"],
-    input[type="number"] {
+    input[type="number"],
+    #robotIp {
       width: 100%; padding: 8px 10px; margin-bottom: 8px;
       border: 1px solid #111; border-radius: 6px;
       background: #1c1d21; color: var(--text); font-size: 14px;
@@ -1693,8 +1694,7 @@
           <div class="ctrl-title">Preferences</div>
           <div class="ctrl-body">
           <div class="ctrl-side">
-            <button type="button" class="ctrl-tab on" data-tab="speed">Robot speed</button>
-            <button type="button" class="ctrl-tab" data-tab="robot">Robot Settings</button>
+            <button type="button" class="ctrl-tab on" data-tab="robot">Robot Settings</button>
             <button type="button" class="ctrl-tab" data-tab="wps">Waypoints</button>
             <button type="button" class="ctrl-tab" data-tab="pwin">Path window</button>
             <button type="button" class="ctrl-tab" data-tab="tl">Timeline</button>
@@ -1702,25 +1702,6 @@
             <button type="button" class="ctrl-tab" data-tab="dev">Developer Mode</button>
           </div>
           <div class="ctrl-main">
-            <div class="ctrl-pane" id="pane-speed">
-              <label class="field">Aubo Arm</label>
-              <select id="robotArmSpeed" class="arm-select" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;" title="The arm these settings belong to. Selecting one of its cursors picks it too."></select>
-              <label class="field">Robot type</label>
-              <select id="robotModel" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
-                <option value="aubo_i5">aubo i5</option>
-              </select>
-              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Changing the type reloads the arm (timeline waypoints are cleared after a confirm). Joint speed/accel below belong to the arm picked above and apply immediately to its bake and hold moves.</p>
-              <div class="lim-head"><span></span><span>Speed (°/s)</span><span>Accel (°/s²)</span></div>
-              <div class="lim-row"><label>J1</label><input id="limV0" type="number" step="1"><input id="limA0" type="number" step="1"></div>
-              <div class="lim-row"><label>J2</label><input id="limV1" type="number" step="1"><input id="limA1" type="number" step="1"></div>
-              <div class="lim-row"><label>J3</label><input id="limV2" type="number" step="1"><input id="limA2" type="number" step="1"></div>
-              <div class="lim-row"><label>J4</label><input id="limV3" type="number" step="1"><input id="limA3" type="number" step="1"></div>
-              <div class="lim-row"><label>J5</label><input id="limV4" type="number" step="1"><input id="limA4" type="number" step="1"></div>
-              <div class="lim-row"><label>J6</label><input id="limV5" type="number" step="1"><input id="limA5" type="number" step="1"></div>
-              <hr style="border:0;border-top:1px solid #2a2b32;margin:12px 0;">
-              <label class="field">Move robot to pose linear speed (m/s)</label>
-              <input id="holdLinMps" type="number" min="0.001" step="0.001" value="0.05" />
-            </div>
             <div class="ctrl-pane" id="pane-wps" hidden>
               <label class="field">Bake spacing (m)</label>
               <input id="spacing" type="number" min="0.01" max="1" step="0.01" value="0.05" />
@@ -1751,14 +1732,31 @@
               </select>
               <p style="font-size:11px;color:#8a8a92;margin:0;">Always use Aubo IK: sim cursor drag and bake IK need a connected arm. Use Backup IK: local solver only while disconnected. Reconnect clears the bake.</p>
             </div>
-            <div class="ctrl-pane" id="pane-robot" hidden>
+            <div class="ctrl-pane" id="pane-robot">
               <label class="field">Aubo Arm</label>
               <select id="robotArm" class="arm-select" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;" title="The arm these settings belong to. Selecting one of its cursors picks it too."></select>
+              <label class="field">Robot type</label>
+              <select id="robotModel" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;margin-bottom:8px;">
+                <option value="aubo_i5">aubo i5</option>
+              </select>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">URDF from aubo_description. Changing the type reloads the arm (timeline waypoints are cleared after a confirm).</p>
               <label class="field">Robot IP</label>
               <input id="robotIp" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.2.124" />
               <label class="field">Port</label>
               <input id="robotPort" type="number" min="1" max="65535" step="1" placeholder="30004" />
               <p id="robotAddrNote" style="font-size:11px;color:#8a8a92;margin:8px 0 0;">The app reconnects to the new address on its own. Leave empty to use the default from arcscontrol.py.</p>
+              <hr style="border:0;border-top:1px solid #2a2b32;margin:12px 0;">
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">Joint speed/accel belong to the arm picked above and apply immediately to its bake and hold moves.</p>
+              <div class="lim-head"><span></span><span>Speed (°/s)</span><span>Accel (°/s²)</span></div>
+              <div class="lim-row"><label>J1</label><input id="limV0" type="number" step="1"><input id="limA0" type="number" step="1"></div>
+              <div class="lim-row"><label>J2</label><input id="limV1" type="number" step="1"><input id="limA1" type="number" step="1"></div>
+              <div class="lim-row"><label>J3</label><input id="limV2" type="number" step="1"><input id="limA2" type="number" step="1"></div>
+              <div class="lim-row"><label>J4</label><input id="limV3" type="number" step="1"><input id="limA3" type="number" step="1"></div>
+              <div class="lim-row"><label>J5</label><input id="limV4" type="number" step="1"><input id="limA4" type="number" step="1"></div>
+              <div class="lim-row"><label>J6</label><input id="limV5" type="number" step="1"><input id="limA5" type="number" step="1"></div>
+              <hr style="border:0;border-top:1px solid #2a2b32;margin:12px 0;">
+              <label class="field">Move robot to pose linear speed (m/s)</label>
+              <input id="holdLinMps" type="number" min="0.001" step="0.001" value="0.05" />
             </div>
             <div class="ctrl-pane" id="pane-dev" hidden>
               <label class="field">Password</label>
@@ -6989,7 +6987,7 @@
         tab.onclick = () => {
           ctrlSettings.querySelectorAll(".ctrl-tab").forEach((t) => t.classList.remove("on"));
           tab.classList.add("on");
-          ["speed", "robot", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
+          ["robot", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
             const pane = document.getElementById("pane-" + id);
             if (pane) pane.hidden = tab.getAttribute("data-tab") !== id;
           });
