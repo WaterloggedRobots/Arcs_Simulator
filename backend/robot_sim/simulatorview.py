@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 import app_paths
+import arms
 import waypoints as wp
 
 
@@ -93,7 +94,7 @@ def ensure_sim_bot_marker():
     if not SIM_BOT_ENABLED or wp.server is None or _sim_bot_viz.get("sphere") is not None:
         return
     pos, q = sim_bot_pose()
-    name = "/sim_bot"
+    name = "/sim_bot" + arms.ns()
     try:
         sphere = wp.server.scene.add_icosphere(
             name=name + "/sphere", radius=0.035, color=SIM_BOT_RGB,
@@ -108,7 +109,7 @@ def ensure_sim_bot_marker():
     @sphere.on_click
     def _(_e=None):
         mode = "add" if wp._select_ctrl else "replace"
-        select_scene_object(SIM_BOT_ID, mode=mode)
+        select_scene_object(arms.cid(SIM_BOT_ID), mode=mode)
 
 
 def _move_sim_bot_marker():
@@ -153,20 +154,10 @@ def _arm_delta(from_pose, to_pose):
 
 
 def _carry_saved_points(move):
-    """Saved points (Bookmarks) belong to the arm: they follow every base move.
-    Home and Real pose come from the arm's own FK and follow by themselves."""
-    for p in list(getattr(wp, "sim_poses", None) or []):
-        if p.get("builtin") or str(p.get("id")) in ("home", "real") or p.get("pos") is None:
-            continue
-        try:
-            np_, nq = move(p.get("pos"), p.get("wxyz"))
-            p["pos"] = [float(v) for v in np_]
-            if nq is not None:
-                p["wxyz"] = [float(v) for v in nq]
-        except Exception:
-            pass
+    """Saved points (Bookmarks) are stored relative to the base (their IK), so
+    they follow every base move: only this arm's markers need redrawing."""
     try:
-        wp.refresh_pose_markers()
+        wp.refresh_pose_markers(arms.current())
     except Exception:
         pass
 
@@ -243,8 +234,8 @@ def set_sim_bot_pose(pos=None, wxyz=None, ask=False, from_gizmo=False):
     _move_sim_bot_marker()
     if not from_gizmo:
         _place_sim_bot_gizmo()
-    _propagate_children(SIM_BOT_ID)
-    _propagate_children("sim_cursor")
+    _propagate_children(arms.cid(SIM_BOT_ID))
+    _propagate_children(arms.cid("sim_cursor"))
     return True
 
 
@@ -254,7 +245,7 @@ def show_sim_bot_gizmo():
     pos, q = sim_bot_pose()
     giz = _sim_bot_giz.get("gizmo")
     if giz is None:
-        giz = wp._new_transform_gizmo("/sim_bot/gizmo_%s" % wp.gizmo_space, pos, wp._gizmo_display_wxyz(q), 0.22, False, True)
+        giz = wp._new_transform_gizmo("/sim_bot%s/gizmo_%s" % (arms.ns(), wp.gizmo_space), pos, wp._gizmo_display_wxyz(q), 0.22, False, True)
         _sim_bot_giz["gizmo"] = giz
 
         @giz.on_update
@@ -315,8 +306,8 @@ def sim_bot_props():
     pos, q = sim_bot_pose()
     return {
         "kind": "bot",
-        "id": SIM_BOT_ID,
-        "name": SIM_BOT_NAME,
+        "id": arms.cid(SIM_BOT_ID),
+        "name": arms.name_of(),
         "editable": True,
         "pos": [float(v) for v in pos],
         "wxyz": [float(v) for v in q],
@@ -330,15 +321,20 @@ def _obj_parent(obj):
     pid = (obj or {}).get("parent_id")
     if not pid:
         return None
-    if str(pid) == SIM_BOT_ID:
+    base, aid = arms.split_id(pid)
+    if aid is not None and aid != arms.current():
+        # Another arm's base or cursor: read it as that arm.
+        with arms.using(aid):
+            return _obj_parent(obj)
+    if aid is not None and base == SIM_BOT_ID:
         pos, q = sim_bot_pose()
-        return {"id": SIM_BOT_ID, "pos": pos, "wxyz": q, "parent_id": None}
-    if str(pid) == "sim_cursor":
+        return {"id": str(pid), "pos": pos, "wxyz": q, "parent_id": None}
+    if aid is not None and base == "sim_cursor":
         try:
             import robot_runtime as rr
             pos, wxyz = rr.get_sim_cursor_pose()
             return {
-                "id": "sim_cursor",
+                "id": str(pid),
                 "pos": np.asarray(pos if pos is not None else [0, 0, 0], dtype=float).reshape(3),
                 "wxyz": np.asarray(wxyz if wxyz is not None else [1, 0, 0, 0], dtype=float).reshape(4),
                 "parent_id": None,
@@ -396,12 +392,14 @@ def _propagate_children(oid):
 
 def reparent_object(oid, parent_id=None):
     obj = _find_object(oid)
-    if obj is None or str(oid) == "sim_cursor":
+    if obj is None or arms.is_builtin(oid):
         return False
     pid = None if not parent_id or parent_id in ("", None) else str(parent_id)
-    if pid == "sim_cursor":
-        pid = "sim_cursor"
-    if pid == oid or pid == REAL_CURSOR_ID:
+    if pid is not None and arms.split_id(pid)[0] == REAL_CURSOR_ID:
+        return False
+    if pid is not None and arms.is_builtin(pid) is False and "@" in pid:
+        return False  # an arm that no longer exists
+    if pid == oid:
         return False
     walk = pid
     while walk:
@@ -441,8 +439,7 @@ def _item_pos(kind, key):
     if kind == "pose":
         for p in wp.sim_poses or []:
             if str(p.get("id")) == str(key):
-                ik = p.get("ik") or [0, 0, 0]
-                return np.array([float(ik[0]), float(ik[1]), float(ik[2])], dtype=float)
+                return wp._stored_point_xyz(p)
         return None
     return None
 
@@ -1041,14 +1038,21 @@ def select_scene_object(oid, mode="replace"):
     wp.note_scene_pick()
     import time as _t
     wp._obj_select_hold = _t.time() + 1.5
-    if str(oid) == "sim_cursor":
+    base, aid = arms.split_id(oid)
+    if aid is not None:
+        # An arm's own item: that arm becomes the one the lists show.
+        if arms.activate(aid):
+            mode = "replace"
+    if aid is not None and base == "sim_cursor":
         return wp.select_item("sim", None, mode=mode)
-    if str(oid) == SIM_BOT_ID:
+    if aid is not None and base == SIM_BOT_ID:
         if not SIM_BOT_ENABLED:
             return False
         return wp.select_item("bot", None, mode=mode)
-    if str(oid) == REAL_CURSOR_ID:
+    if aid is not None and base == REAL_CURSOR_ID:
         return wp.select_item("real", None, mode=mode)
+    if str(oid).partition("@")[0] in arms.BUILTIN_IDS:
+        return False  # an arm that was removed
     obj = _find_object(oid)
     if obj is None:
         return False
