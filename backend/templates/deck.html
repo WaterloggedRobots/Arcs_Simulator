@@ -20,7 +20,7 @@
       --btn-disabled-fg: #6a6b72;
       --bar-h: 36px;
       --left-w: 230px;
-      --props-w: 330px;
+      --props-w: 262px;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -136,12 +136,14 @@
       user-select: none;
     }
     #moveRobotPose.holding { background: var(--mint); }
-    .viewer-wrap { position: relative; min-width: 0; min-height: 0; }
-    /* Viser fills the pane; the properties panel covers its right edge,
-       where Viser's own control panel sits. */
+    .viewer-wrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+    /* The properties panel covers Viser's right edge, where its own control
+       panel sits. Viser starts as far left of the pane as the panel is wide,
+       so the robot is centred in the part you can see. */
     .viewer-wrap > iframe {
-      position: absolute; inset: 0;
-      width: 100%; height: 100%;
+      position: absolute; top: 0; bottom: 0;
+      left: calc(-1 * var(--props-w));
+      width: calc(100% + var(--props-w)); height: 100%;
       border: 0; background: #000;
     }
     .props {
@@ -179,10 +181,13 @@
       color: var(--text);
       border: 1px solid #33343b;
       border-radius: 4px;
-      padding: 4px 4px;
+      padding: 4px 3px;
       font: inherit;
       font-size: 12px;
+      -moz-appearance: textfield;
     }
+    .props input::-webkit-outer-spin-button,
+    .props input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     .props input:read-only { color: #c9c9cf; border-color: #23242a; }
     .lin { color: var(--muted); margin-top: 4px; }
     .offline { color: var(--muted); padding: 4px 0; }
@@ -506,6 +511,17 @@
         deck_rot_dps: $("setRot").value,
       }).then(() => { $("settingsModal").hidden = true; });
     };
+
+    // Right-drag in the viewer is a Back gesture in some browsers (Edge mouse
+    // gestures): keep this page instead of leaving it.
+    history.pushState({ deck: 1 }, "", location.href);
+    window.addEventListener("popstate", () => history.pushState({ deck: 1 }, "", location.href));
+    document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    // Centre the robot once Viser has connected (also after a reload).
+    document.querySelector(".viewer-wrap > iframe").addEventListener("load", () => {
+      setTimeout(() => post("/api/camera", { view: "iso" }), 1500);
+    });
 
     poll();
   </script>

@@ -13,6 +13,8 @@ and back buttons then jog the sim cursor (deck/pad.py).
 from __future__ import annotations
 
 import math
+import os
+import subprocess
 import threading
 import time
 
@@ -214,6 +216,25 @@ def api_deck_settings():
     return jsonify({"ok": True, "settings": _settings_payload()})
 
 
+def _open_deck_ui(url="http://127.0.0.1:5000"):
+    """Open the page as an app window (Edge / Chrome --app): no tabs, no Back,
+    so a right-drag Back gesture cannot leave the page. Else the default browser."""
+    time.sleep(2)
+    if os.name == "nt":
+        roots = [os.environ.get(k) for k in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+        rels = [r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"]
+        for root in filter(None, roots):
+            for rel in rels:
+                exe = os.path.join(root, rel)
+                if os.path.isfile(exe):
+                    try:
+                        subprocess.Popen([exe, "--app=" + url, "--start-maximized"])
+                        return
+                    except Exception as e:
+                        print("app window failed", exe, e)
+    webui._open_ui()
+
+
 def _load_deck_settings():
     try:
         _jog["rot_dps"] = max(0.1, float(webui.load_settings().get("deck_rot_dps") or ROT_DPS_DEFAULT))
@@ -230,7 +251,7 @@ if __name__ == "__main__":
     steam_profile.activate()
     pad.start(_jog_step)
     print("Deck UI  http://127.0.0.1:5000")
-    threading.Thread(target=webui._open_ui, daemon=True).start()
+    threading.Thread(target=_open_deck_ui, daemon=True).start()
     try:
         app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True,
                 request_handler=webui.QuietHandler)
