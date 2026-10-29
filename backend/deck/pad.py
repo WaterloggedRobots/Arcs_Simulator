@@ -21,6 +21,9 @@ import os
 import threading
 import time
 
+VERSION = "deck-1.5"
+MAPPING = "left stick up +x, left +y; L4/L5 +z/-z; right stick left +roll, up +pitch; R4/R5 +yaw/-yaw"
+
 LB = 0x0100
 RB = 0x0200
 # Buttons reported to on_button (pressed, not held).

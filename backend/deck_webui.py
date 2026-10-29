@@ -1,4 +1,4 @@
-# version: v_beta10.06
+# version: deck-1.5 (2026-10-29)
 """Steam Deck edition: a stripped-down controller for the real arm.
 
 Start with `python backend/deck_webui.py` (instead of webui.py). It runs the
@@ -31,6 +31,8 @@ import robot_sim_run as viewer_main
 import waypoints as wp
 from deck import pad, steam_profile
 
+# Keep equal to the first line; printed on start and shown in Settings.
+DECK_VERSION = "deck-1.5"
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1
@@ -448,6 +450,7 @@ def _settings_payload():
         "robot_models": st.get("robot_models") or webui.SETTINGS_DEFAULT["robot_models"],
         "hold_lin_mps": float(rr.HOLD_LIN_MPS),
         "deck_rot_dps": float(_jog["rot_dps"]),
+        "version": "%s / pad %s" % (DECK_VERSION, pad.VERSION),
         "deck_lin_mps": float(_jog["lin_mps"]),
         "deck_real_jog": _real["method"],
     }
@@ -608,6 +611,7 @@ def _load_deck_settings():
 
 
 if __name__ == "__main__":
+    print("Arcs Deck", DECK_VERSION, "| pad", pad.VERSION, "| sticks:", pad.MAPPING)
     webui.apply_settings(webui.load_settings())
     _load_deck_settings()
     webui.start_viewer_thread()

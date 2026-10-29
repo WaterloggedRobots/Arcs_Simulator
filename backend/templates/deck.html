@@ -317,7 +317,7 @@
 
   <div class="modal" id="settingsModal" hidden>
     <div class="modal-card">
-      <h2>Settings</h2>
+      <h2>Settings <small id="deckVersion" style="opacity:.6;font-weight:normal"></small></h2>
       <div class="field"><label>Robot IP</label><input id="setIp" type="text" placeholder="192.168.2.124"></div>
       <div class="field"><label>Robot port</label><input id="setPort" type="number" step="1"></div>
       <div class="field"><label>Robot type</label><select id="setModel"></select></div>
@@ -548,6 +548,7 @@
         $("setLin").value = s.hold_lin_mps;
         $("setRot").value = s.deck_rot_dps;
         $("setStick").value = s.deck_lin_mps;
+        $("deckVersion").textContent = s.version || "";
         $("setJog").value = s.deck_real_jog || "servoJoint";
         $("settingsModal").hidden = false;
       });
