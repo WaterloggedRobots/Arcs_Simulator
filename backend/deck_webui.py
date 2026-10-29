@@ -1,4 +1,4 @@
-# version: deck-1.5 (2026-10-29)
+# version: deck-1.6 (2026-10-29)
 """Steam Deck edition: a stripped-down controller for the real arm.
 
 Start with `python backend/deck_webui.py` (instead of webui.py). It runs the
@@ -32,7 +32,7 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
-DECK_VERSION = "deck-1.5"
+DECK_VERSION = "deck-1.6"
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1
@@ -111,10 +111,14 @@ REAL_JACC = 2.0     # rad/s^2 for speedJoint
 REAL_LOOKAHEAD_S = 0.25
 REAL_MAX_QD = 1.0   # rad/s, per joint, for speedJoint
 # servoJoint: lookahead (s) and gain as in the AUBO servo examples; the
-# target may lead the real TCP by at most REAL_SERVO_LEAD m.
+# target may lead the real TCP by REAL_SERVO_LEAD m, or REAL_SERVO_LEAD_S of
+# travel at the commanded speed if that is more (the arm lags the stream).
 REAL_SERVO_LOOKAHEAD = 0.1
 REAL_SERVO_GAIN = 200
 REAL_SERVO_LEAD = 0.03
+REAL_SERVO_LEAD_S = 0.6
+# While jogging, print the sticks and the stream once a second.
+REAL_LOG_S = 1.0
 # Commanded travel (m, or rad / 5) and time before saying the arm is not
 # following (the controller lags the command by a few tenths of a second).
 REAL_CHECK_AFTER = 0.03
@@ -206,10 +210,18 @@ def _servo_joint(bot, xd, dt):
     pose = _real["pose"]
     now = bot.GetTcpPose()
     lead = 0.0 if now is None else float(np.linalg.norm(np.asarray(pose[:3]) - np.asarray(list(now)[:3])))
-    if lead < REAL_SERVO_LEAD:
+    lead_max = max(REAL_SERVO_LEAD, REAL_SERVO_LEAD_S * float(np.linalg.norm(xd[:3])))
+    st = _real.setdefault("stats", {"ticks": 0, "ik_fail": 0, "lead_hold": 0, "lead": 0.0})
+    st["ticks"] += 1
+    st["lead"] = max(st["lead"], lead)
+    if lead < lead_max:
         target, q = _ik_ahead(bot, pose, xd, t, _real["q"])
         if q is not None:
             _real["pose"], _real["q"] = target, [float(x) for x in q]
+        else:
+            st["ik_fail"] += 1
+    else:
+        st["lead_hold"] += 1
     return bot.ServoJoint(_real["q"], t, REAL_SERVO_LOOKAHEAD, REAL_SERVO_GAIN)
 
 
@@ -298,7 +310,24 @@ def _real_jog(lin, rot, dt=0.03):
         _target["error"] = "%s returned %s" % (method, ret)
     _real["ret"] = ret
     _real_check(bot, xd, dt)
+    _real_log(lin, rot, xd)
     return True
+
+
+def _real_log(lin, rot, xd):
+    """One console line a second while jogging: sticks, base-frame speed and
+    for servoJoint how often the target could not advance."""
+    now = time.time()
+    if now - _real.get("log_t", 0.0) < REAL_LOG_S:
+        return
+    _real["log_t"] = now
+    st = _real.pop("stats", None) or {}
+    print("real jog: %s %s lin %s rot %s -> base v %s w %s%s" % (
+        _real["method"], getattr(wp, "gizmo_space", "local"),
+        np.round(lin, 2).tolist(), np.round(rot, 2).tolist(),
+        np.round(xd[:3], 3).tolist(), np.round(xd[3:6], 3).tolist(),
+        " | ticks %d, no IK %d, waiting for the arm %d, max lead %.3f m" % (
+            st["ticks"], st["ik_fail"], st["lead_hold"], st["lead"]) if st else ""))
 
 
 def _end_servo(bot):
@@ -614,6 +643,9 @@ if __name__ == "__main__":
     print("Arcs Deck", DECK_VERSION, "| pad", pad.VERSION, "| sticks:", pad.MAPPING)
     webui.apply_settings(webui.load_settings())
     _load_deck_settings()
+    # Sticks move along the robot base x / y / z until Axes Mode is switched to
+    # Local (the tool's own axes, which point elsewhere when the tool is turned).
+    wp.gizmo_space = "global"
     webui.start_viewer_thread()
     port = webui._wait_viewer()
     print("Viser    http://127.0.0.1:%s (iframe)" % port)

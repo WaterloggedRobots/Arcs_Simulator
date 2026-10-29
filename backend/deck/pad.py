@@ -21,7 +21,7 @@ import os
 import threading
 import time
 
-VERSION = "deck-1.5"
+VERSION = "deck-1.6"
 MAPPING = "left stick up +x, left +y; L4/L5 +z/-z; right stick left +roll, up +pitch; R4/R5 +yaw/-yaw"
 
 LB = 0x0100
