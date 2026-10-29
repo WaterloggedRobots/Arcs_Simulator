@@ -238,6 +238,28 @@ class RobotArcs:
         self.mc.clearPath()
         self.mc.startMove()
 
+    # Speed jogging (ARCS MotionControl speedLine / speedJoint). The arm keeps
+    # the commanded speed until a new one arrives, t runs out, or StopSpeed.
+    # Call again every control tick with a short t, so a lost caller stops it.
+    def SpeedLine(self, xd, acc=0.5, t=0.2):
+        """TCP velocity [vx, vy, vz, wx, wy, wz] (m/s, rad/s) in the base frame."""
+        return self.mc.speedLine([float(v) for v in xd[:6]], float(acc), float(t))
+
+    def SpeedJoint(self, qd, acc=1.0, t=0.2):
+        """Joint velocities (rad/s), acc in rad/s^2."""
+        return self.mc.speedJoint([float(v) for v in qd[:6]], float(acc), float(t))
+
+    def StopSpeed(self, acc=1.0, rot_acc=2.0, joint_acc=3.0):
+        """End a speed jog: decelerate (line and joint), no clearPath."""
+        try:
+            self.mc.stopLine(float(acc), float(rot_acc))
+        except Exception:
+            pass
+        try:
+            self.mc.stopJoint(float(joint_acc))
+        except Exception:
+            pass
+
     def Close(self):
         c = self.client
         self._drop_client()

@@ -83,10 +83,12 @@ def _move_sim_cursor(lin, rot, dt):
     return True
 
 
-# Which arm the sticks drive: "sim" moves only the sim cursor; "real" moves
-# the sim cursor as the target and the real arm follows it (MoveJ, re-aimed
-# every FOLLOW_REAL_S and once more when the sticks are let go).
-_target = {"mode": "sim", "error": ""}
+# Which arm the sticks drive: "sim" moves only the sim cursor; "real" jogs the
+# real arm directly with ARCS speedLine (RobotArcs.SpeedLine), re-sent every
+# pad tick with a short timeout, and snaps the sim to it when let go.
+_target = {"mode": "sim", "error": "", "jogging": False}
+REAL_SPEED_T = 0.2  # s the controller keeps a speed without a newer one
+REAL_ACC = 0.5      # m/s^2 (and rad/s^2) to reach / change the speed
 
 
 def _set_target(mode):
@@ -99,19 +101,61 @@ def _set_target(mode):
         # Start from where the real arm is, so the first move is not a jump.
         rr.reset_sim_to_real()
         _jog["dirty"] = False
-    elif _target["mode"] == "real" and not _hold["beat"]:
-        rr.stop_hold_move()
+    elif _target["mode"] == "real":
+        _real_stop()
     _target["mode"] = mode
     print("deck: sticks drive the", mode, "bot")
     return mode
 
 
-def _follow_real(force=False):
-    """Hold to move aims at the sim pose when pressed; keep it on the jogged
-    pose. In Real mode the real arm follows the sticks without the button."""
-    if not _jog["dirty"]:
+def _real_twist(lin, rot):
+    """Stick values to a base-frame TCP velocity for speedLine. Local = the
+    real TCP's axes (from its pose), Global = world axes."""
+    v = np.asarray(lin, dtype=float) * float(rr.HOLD_LIN_MPS)
+    w = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"])
+    if getattr(wp, "gizmo_space", "local") == "local":
+        pose = rr.robot.GetTcpPose()
+        if pose is None:
+            return None
+        r = R.from_euler("xyz", [float(x) for x in list(pose)[3:6]])
+    else:
+        r = rr._base_rot().inv()
+    return [float(x) for x in np.concatenate([r.apply(v), r.apply(w)])]
+
+
+def _real_jog(lin, rot):
+    """One pad tick of Real control. RPCs run outside arms.LOCK."""
+    bot = rr.robot
+    if bot is None or not hasattr(bot, "SpeedLine"):
+        return False
+    if not _target["jogging"]:
+        try:
+            bot.SetSpeed(1.0)  # the speed is in the command itself
+        except Exception:
+            pass
+        _target["jogging"] = True
+    xd = _real_twist(lin, rot)
+    if xd is None:
+        return False
+    bot.SpeedLine(xd, REAL_ACC, REAL_SPEED_T)
+    return True
+
+
+def _real_stop():
+    if not _target["jogging"]:
         return
-    if not (getattr(rr, "_hold_move", False) or _target["mode"] == "real"):
+    _target["jogging"] = False
+    bot = rr.robot
+    try:
+        if bot is not None and hasattr(bot, "StopSpeed"):
+            bot.StopSpeed()
+    except Exception as e:
+        print("real jog stop failed", e)
+
+
+def _follow_real(force=False):
+    """Hold to move aims at the sim pose when pressed; keep it on the jogged pose."""
+    if not _jog["dirty"] or not getattr(rr, "_hold_move", False):
         return
     now = time.time()
     if not force and now - _jog["last_follow"] < FOLLOW_REAL_S:
@@ -158,6 +202,9 @@ def _hold_watchdog():
 
 
 def _jog_step(lin, rot, dt):
+    if _target["mode"] == "real" or _target["jogging"]:
+        _real_step(lin, rot)
+        return
     with arms.LOCK:
         arms.ensure_active_loaded()
         if lin is None:
@@ -167,15 +214,32 @@ def _jog_step(lin, rot, dt):
             return
         if rr.edits_locked() or not rr.ik_allowed():
             return
-        if _target["mode"] == "real" and not rr.robot_connected():
-            _target["mode"] = "sim"
-            _target["error"] = "robot disconnected: back to Sim"
-            return
         ok = _move_sim_cursor(lin, rot, dt)
         _jog["ik_fail"] = not ok
         if ok:
             _jog["dirty"] = True
             _follow_real()
+
+
+def _real_step(lin, rot):
+    if lin is None or _target["mode"] != "real":
+        _real_stop()
+        with arms.LOCK:
+            arms.ensure_active_loaded()
+            if rr.robot_connected():
+                # Show where the real arm stopped.
+                rr.reset_sim_to_real()
+        return
+    if not rr.robot_connected():
+        _real_stop()
+        _target["mode"] = "sim"
+        _target["error"] = "robot disconnected: back to Sim"
+        return
+    try:
+        _real_jog(lin, rot)
+    except Exception as e:
+        print("real jog failed", e)
+        _real_stop()
 
 
 def _flat6(v):

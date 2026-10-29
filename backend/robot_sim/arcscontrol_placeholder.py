@@ -40,6 +40,15 @@ class RobotArcs:
     def StartMove(self):
         return None
 
+    def SpeedLine(self, xd, acc=0.5, t=0.2):
+        return None
+
+    def SpeedJoint(self, qd, acc=1.0, t=0.2):
+        return None
+
+    def StopSpeed(self, acc=1.0, rot_acc=2.0, joint_acc=3.0):
+        return None
+
     def Close(self):
         return None
 
