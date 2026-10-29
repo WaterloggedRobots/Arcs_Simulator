@@ -40,6 +40,12 @@ class RobotArcs:
     def StartMove(self):
         return None
 
+    def PrepareJog(self):
+        return {}
+
+    def JogState(self):
+        return {}
+
     def SpeedLine(self, xd, acc=0.5, t=0.2):
         return None
 
@@ -52,7 +58,7 @@ class RobotArcs:
     def Close(self):
         return None
 
-    def GetIK(self):
+    def GetIK(self, targetPose=None, seed=None, verbose=True):
         return None
 
     def SetSpeed(self,new_speed):

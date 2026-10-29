@@ -321,8 +321,10 @@
       <div class="field"><label>Robot IP</label><input id="setIp" type="text" placeholder="192.168.2.124"></div>
       <div class="field"><label>Robot port</label><input id="setPort" type="number" step="1"></div>
       <div class="field"><label>Robot type</label><select id="setModel"></select></div>
-      <div class="field"><label>Linear speed (m/s)</label><input id="setLin" type="number" step="0.01" min="0.001"></div>
+      <div class="field"><label>Hold to move speed (m/s)</label><input id="setLin" type="number" step="0.01" min="0.001"></div>
+      <div class="field"><label>Stick speed (m/s)</label><input id="setStick" type="number" step="0.01" min="0.001" max="0.5"></div>
       <div class="field"><label>Rotation speed (deg/s)</label><input id="setRot" type="number" step="1" min="0.1"></div>
+      <div class="field"><label>Real jog command</label><select id="setJog"><option value="auto">Auto</option><option value="speedLine">speedLine</option><option value="speedJoint">speedJoint</option></select></div>
       <div class="keys">
         <b>Left stick</b> move x / y &nbsp; <b>L4 / L5</b> up / down<br>
         <b>Right stick</b> roll / pitch &nbsp; <b>R4 / R5</b> yaw<br>
@@ -545,6 +547,8 @@
         sel.value = s.robot_model || "";
         $("setLin").value = s.hold_lin_mps;
         $("setRot").value = s.deck_rot_dps;
+        $("setStick").value = s.deck_lin_mps;
+        $("setJog").value = s.deck_real_jog || "auto";
         $("settingsModal").hidden = false;
       });
     }
@@ -557,6 +561,8 @@
         robot_model: $("setModel").value,
         hold_lin_mps: $("setLin").value,
         deck_rot_dps: $("setRot").value,
+        deck_lin_mps: $("setStick").value,
+        deck_real_jog: $("setJog").value,
       }).then(() => { $("settingsModal").hidden = true; });
     };
 

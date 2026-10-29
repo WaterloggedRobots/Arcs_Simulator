@@ -65,14 +65,14 @@ def _load_xinput():
     return None
 
 
-def _axis(v):
-    """-32768..32767 to -1..1 with a deadzone and a squared response for fine moves."""
+def _axis(v, power=2.0):
+    """-32768..32767 to -1..1 with a deadzone; power 2 (squared) for fine moves."""
     x = max(-1.0, min(1.0, float(v) / 32767.0))
     a = abs(x)
     if a < DEADZONE:
         return 0.0
     a = (a - DEADZONE) / (1.0 - DEADZONE)
-    return math.copysign(a * a, x)
+    return math.copysign(a ** power, x)
 
 
 def read():
@@ -96,7 +96,8 @@ def read():
             "buttons": int(g.wButtons),
             # stick right = +x, stick up = +y; right stick up / down = roll
             # (about x), left / right = pitch (about y)
-            "lin": [_axis(g.sThumbLX), _axis(g.sThumbLY), up],
+            # left stick linear: half tilt is half speed
+            "lin": [_axis(g.sThumbLX, 1.0), _axis(g.sThumbLY, 1.0), up],
             "rot": [_axis(g.sThumbRY), _axis(g.sThumbRX), yaw],
         }
     _status["connected"] = False

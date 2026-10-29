@@ -32,10 +32,13 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 ROT_DPS_DEFAULT = 20.0
+# Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
+LIN_MPS_DEFAULT = 0.1
+LIN_MPS_MAX = 0.5
 # While Hold to move is held, re-aim the real arm at the jogged sim pose this often.
 FOLLOW_REAL_S = 0.25
 
-_jog = {"rot_dps": ROT_DPS_DEFAULT, "ik_fail": False, "dirty": False, "last_follow": 0.0}
+_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "ik_fail": False, "dirty": False, "last_follow": 0.0}
 
 
 def _wxyz(rot):
@@ -50,7 +53,7 @@ def _move_sim_cursor(lin, rot, dt):
     pos, wxyz = rr.get_sim_cursor_pose()
     pos = np.asarray(pos, dtype=float).reshape(3)
     r0 = R.from_quat(rr.wxyz_to_xyzw(wxyz))
-    d = np.asarray(lin, dtype=float) * float(rr.HOLD_LIN_MPS) * dt
+    d = np.asarray(lin, dtype=float) * float(_jog["lin_mps"]) * dt
     rv = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"]) * dt
     local = getattr(wp, "gizmo_space", "local") == "local"
     if local:
@@ -84,11 +87,23 @@ def _move_sim_cursor(lin, rot, dt):
 
 
 # Which arm the sticks drive: "sim" moves only the sim cursor; "real" jogs the
-# real arm directly with ARCS speedLine (RobotArcs.SpeedLine), re-sent every
-# pad tick with a short timeout, and snaps the sim to it when let go.
+# real arm directly with an ARCS speed command, re-sent every pad tick with a
+# short timeout, and snaps the sim to it when let go.
+#   speedLine   TCP velocity (RobotArcs.SpeedLine)
+#   speedJoint  joint velocities toward the controller's IK of a pose a little
+#               ahead on the same twist (RobotArcs.SpeedJoint)
+#   auto        speedLine, then speedJoint if the arm does not move
 _target = {"mode": "sim", "error": "", "jogging": False}
+_real = {"setting": "auto", "method": "speedLine", "ret": None, "q0": None,
+         "cmd": 0.0, "moved": False, "checked": False}
+REAL_METHODS = ("auto", "speedLine", "speedJoint")
 REAL_SPEED_T = 0.2  # s the controller keeps a speed without a newer one
 REAL_ACC = 0.5      # m/s^2 (and rad/s^2) to reach / change the speed
+REAL_JACC = 2.0     # rad/s^2 for speedJoint
+REAL_LOOKAHEAD_S = 0.25
+REAL_MAX_QD = 1.0   # rad/s, per joint, for speedJoint
+# Commanded travel (m, or rad / 5) before deciding the arm is not following.
+REAL_CHECK_AFTER = 0.01
 
 
 def _set_target(mode):
@@ -111,7 +126,7 @@ def _set_target(mode):
 def _real_twist(lin, rot):
     """Stick values to a base-frame TCP velocity for speedLine. Local = the
     real TCP's axes (from its pose), Global = world axes."""
-    v = np.asarray(lin, dtype=float) * float(rr.HOLD_LIN_MPS)
+    v = np.asarray(lin, dtype=float) * float(_jog["lin_mps"])
     w = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"])
     if getattr(wp, "gizmo_space", "local") == "local":
         pose = rr.robot.GetTcpPose()
@@ -123,21 +138,91 @@ def _real_twist(lin, rot):
     return [float(x) for x in np.concatenate([r.apply(v), r.apply(w)])]
 
 
-def _real_jog(lin, rot):
+def _real_begin(bot):
+    """First tick of a jog: un-pause the motion queue, note where the arm is."""
+    st = {}
+    try:
+        st = bot.PrepareJog() if hasattr(bot, "PrepareJog") else {}
+    except Exception as e:
+        print("real jog: prepare failed", e)
+    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=bot.GetJoints())
+    print("real jog: start with", _real["method"], st)
+
+
+def _speed_joint(bot, xd):
+    """speedJoint toward the controller's IK of the TCP moved REAL_LOOKAHEAD_S
+    along the twist xd (base frame)."""
+    q = bot.GetJoints()
+    pose = bot.GetTcpPose()
+    if q is None or pose is None:
+        return "no robot state"
+    q = np.asarray(list(q)[:6], dtype=float)
+    pose = [float(x) for x in list(pose)[:6]]
+    la = REAL_LOOKAHEAD_S
+    p = np.asarray(pose[:3]) + np.asarray(xd[:3]) * la
+    r = R.from_rotvec(np.asarray(xd[3:6]) * la) * R.from_euler("xyz", pose[3:6])
+    qt = bot.GetIK(list(p) + list(r.as_euler("xyz")), seed=list(q), verbose=False)
+    if qt is None:
+        return "no IK ahead"
+    dq = (np.asarray(qt, dtype=float) - q + math.pi) % (2.0 * math.pi) - math.pi
+    qd = dq / la
+    top = float(np.max(np.abs(qd)))
+    if top > REAL_MAX_QD:
+        qd *= REAL_MAX_QD / top
+    return bot.SpeedJoint(list(qd), REAL_JACC, REAL_SPEED_T)
+
+
+def _real_check(bot, xd, dt):
+    """Once enough motion was asked for, check the joints moved; if not, say
+    so with the controller state, and in auto try the other command."""
+    if _real["checked"]:
+        return
+    _real["cmd"] += (np.linalg.norm(xd[:3]) + np.linalg.norm(xd[3:6]) / 5.0) * dt
+    if _real["cmd"] < REAL_CHECK_AFTER:
+        return
+    _real["checked"] = True
+    q = bot.GetJoints()
+    q0 = _real["q0"]
+    if q is None or q0 is None:
+        return
+    moved = float(np.max(np.abs(np.asarray(list(q)[:6]) - np.asarray(list(q0)[:6]))))
+    if moved > 0.002:
+        _real["moved"] = True
+        print("real jog: %s moves the arm (%.3f rad)" % (_real["method"], moved))
+        if _target["error"].startswith("speedLine did not"):
+            _target["error"] = ""
+        return
+    st = bot.JogState() if hasattr(bot, "JogState") else {}
+    print("real jog: %s sent (ret %s) but the arm did not move; controller %s"
+          % (_real["method"], _real["ret"], st))
+    if _real["setting"] == "auto" and _real["method"] == "speedLine":
+        _real["method"] = "speedJoint"
+        _target["error"] = "speedLine did not move the arm, trying speedJoint"
+        _real_begin(bot)
+        return
+    _target["error"] = "%s did not move the arm (ret %s): see the console" % (_real["method"], _real["ret"])
+
+
+def _real_jog(lin, rot, dt=0.03):
     """One pad tick of Real control. RPCs run outside arms.LOCK."""
     bot = rr.robot
     if bot is None or not hasattr(bot, "SpeedLine"):
         return False
     if not _target["jogging"]:
-        try:
-            bot.SetSpeed(1.0)  # the speed is in the command itself
-        except Exception:
-            pass
         _target["jogging"] = True
+        _real_begin(bot)
     xd = _real_twist(lin, rot)
     if xd is None:
         return False
-    bot.SpeedLine(xd, REAL_ACC, REAL_SPEED_T)
+    if _real["method"] == "speedJoint":
+        ret = _speed_joint(bot, xd)
+    else:
+        ret = bot.SpeedLine(xd, REAL_ACC, REAL_SPEED_T)
+    if ret not in (None, 0) and ret != _real["ret"]:
+        print("real jog:", _real["method"], "returned", ret)
+        _target["error"] = "%s returned %s" % (_real["method"], ret)
+    _real["ret"] = ret
+    _real_check(bot, xd, dt)
     return True
 
 
@@ -203,7 +288,7 @@ def _hold_watchdog():
 
 def _jog_step(lin, rot, dt):
     if _target["mode"] == "real" or _target["jogging"]:
-        _real_step(lin, rot)
+        _real_step(lin, rot, dt)
         return
     with arms.LOCK:
         arms.ensure_active_loaded()
@@ -221,7 +306,7 @@ def _jog_step(lin, rot, dt):
             _follow_real()
 
 
-def _real_step(lin, rot):
+def _real_step(lin, rot, dt=0.03):
     if lin is None or _target["mode"] != "real":
         _real_stop()
         with arms.LOCK:
@@ -236,7 +321,7 @@ def _real_step(lin, rot):
         _target["error"] = "robot disconnected: back to Sim"
         return
     try:
-        _real_jog(lin, rot)
+        _real_jog(lin, rot, dt)
     except Exception as e:
         print("real jog failed", e)
         _real_stop()
@@ -274,6 +359,8 @@ def _settings_payload():
         "robot_models": st.get("robot_models") or webui.SETTINGS_DEFAULT["robot_models"],
         "hold_lin_mps": float(rr.HOLD_LIN_MPS),
         "deck_rot_dps": float(_jog["rot_dps"]),
+        "deck_lin_mps": float(_jog["lin_mps"]),
+        "deck_real_jog": _real["setting"],
     }
 
 
@@ -372,6 +459,15 @@ def api_deck_settings():
         except Exception:
             pass
         save["deck_rot_dps"] = _jog["rot_dps"]
+    if data.get("deck_lin_mps") not in (None, ""):
+        try:
+            _jog["lin_mps"] = min(LIN_MPS_MAX, max(0.001, float(data.get("deck_lin_mps"))))
+        except Exception:
+            pass
+        save["deck_lin_mps"] = _jog["lin_mps"]
+    if data.get("deck_real_jog") in REAL_METHODS:
+        _set_real_method(data.get("deck_real_jog"))
+        save["deck_real_jog"] = _real["setting"]
     if save:
         webui.save_settings(save)
     mid = str(data.get("robot_model") or "").strip()
@@ -404,11 +500,22 @@ def _open_deck_ui(url="http://127.0.0.1:5000"):
     webui._open_ui()
 
 
+def _set_real_method(name):
+    _real["setting"] = name if name in REAL_METHODS else "auto"
+    _real["method"] = "speedJoint" if _real["setting"] == "speedJoint" else "speedLine"
+
+
 def _load_deck_settings():
+    st = webui.load_settings()
     try:
-        _jog["rot_dps"] = max(0.1, float(webui.load_settings().get("deck_rot_dps") or ROT_DPS_DEFAULT))
+        _jog["rot_dps"] = max(0.1, float(st.get("deck_rot_dps") or ROT_DPS_DEFAULT))
     except Exception:
         _jog["rot_dps"] = ROT_DPS_DEFAULT
+    try:
+        _jog["lin_mps"] = min(LIN_MPS_MAX, max(0.001, float(st.get("deck_lin_mps") or LIN_MPS_DEFAULT)))
+    except Exception:
+        _jog["lin_mps"] = LIN_MPS_DEFAULT
+    _set_real_method(st.get("deck_real_jog") or "auto")
 
 
 if __name__ == "__main__":
