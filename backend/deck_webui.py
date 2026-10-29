@@ -1,4 +1,4 @@
-# version: deck-1.7 (2026-10-29)
+# version: deck-1.8 (2026-10-29)
 """Steam Deck edition: a stripped-down controller for the real arm.
 
 Start with `python backend/deck_webui.py` (instead of webui.py). It runs the
@@ -32,7 +32,7 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
-DECK_VERSION = "deck-1.7"
+DECK_VERSION = "deck-1.8"
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1
@@ -112,13 +112,17 @@ REAL_STEP = 0.1     # stick change (of full tilt) that re-sends a speed
 REAL_JACC = 2.0     # rad/s^2 for speedJoint
 REAL_LOOKAHEAD_S = 0.25
 REAL_MAX_QD = 1.0   # rad/s, per joint, for speedJoint
-# servoJoint: lookahead (s) and gain as in the AUBO servo examples; the
-# target may lead the real TCP by REAL_SERVO_LEAD m, or REAL_SERVO_LEAD_S of
-# travel at the commanded speed if that is more (the arm lags the stream).
+# servoJoint runs on its own thread at a fixed REAL_SERVO_PERIOD (the pad loop
+# only sets the wanted speed): every tick moves the target pose by exactly one
+# period of the ramped speed and sends it with t = the period, so the
+# controller gets evenly spaced, evenly sized steps. Lookahead and gain as in
+# the AUBO servo examples. The target is held only if it gets more than
+# REAL_SERVO_LEAD_MAX m ahead of the real TCP (checked every few ticks).
+REAL_SERVO_PERIOD = 0.02
 REAL_SERVO_LOOKAHEAD = 0.1
 REAL_SERVO_GAIN = 200
-REAL_SERVO_LEAD = 0.03
-REAL_SERVO_LEAD_S = 0.6
+REAL_SERVO_LEAD_MAX = 0.08
+REAL_SERVO_LEAD_EVERY = 10
 # While jogging, print the sticks and the stream once a second.
 REAL_LOG_S = 1.0
 # Commanded travel (m, or rad / 5) and time before saying the arm is not
@@ -190,7 +194,7 @@ def _real_begin(bot):
         print("real jog: prepare failed", e)
     q0 = bot.GetJoints()
     pose = bot.GetTcpPose()
-    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0, t0=time.time(), v=np.zeros(6),
+    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0, t0=time.time(), v=np.zeros(6), hold=False,
                  blocked=_blocked(st),
                  sent=None, sent_t=0.0,
                  pose=[float(x) for x in list(pose)[:6]] if pose is not None else None,
@@ -225,27 +229,93 @@ def _ik_ahead(bot, pose, xd, dt, seed):
     return target, q
 
 
-def _servo_joint(bot, xd, dt):
-    """Move the servo target along the twist and stream its joints."""
+_stream = {"want": None, "thread": None}
+
+
+def _servo_tick(bot, xd, t, check_lead):
+    """Move the servo target one period along xd and send its joints."""
     if _real["pose"] is None or _real["q"] is None:
         return "no robot state"
-    t = max(0.01, min(0.1, dt))
-    pose = _real["pose"]
-    now = bot.GetTcpPose()
-    lead = 0.0 if now is None else float(np.linalg.norm(np.asarray(pose[:3]) - np.asarray(list(now)[:3])))
-    lead_max = max(REAL_SERVO_LEAD, REAL_SERVO_LEAD_S * float(np.linalg.norm(xd[:3])))
-    st = _real.setdefault("stats", {"ticks": 0, "ik_fail": 0, "lead_hold": 0, "lead": 0.0})
+    st = _real.setdefault("stats", {"ticks": 0, "ik_fail": 0, "lead_hold": 0, "lead": 0.0, "late": 0})
     st["ticks"] += 1
-    st["lead"] = max(st["lead"], lead)
-    if lead < lead_max:
-        target, q = _ik_ahead(bot, pose, xd, t, _real["q"])
+    if check_lead:
+        now = bot.GetTcpPose()
+        lead = 0.0 if now is None else float(np.linalg.norm(np.asarray(_real["pose"][:3]) - np.asarray(list(now)[:3])))
+        st["lead"] = max(st["lead"], lead)
+        _real["hold"] = lead > REAL_SERVO_LEAD_MAX
+    if _real.get("hold"):
+        st["lead_hold"] += 1
+    elif any(abs(v) > 1e-9 for v in xd):
+        target, q = _ik_ahead(bot, _real["pose"], xd, t, _real["q"])
         if q is not None:
             _real["pose"], _real["q"] = target, [float(x) for x in q]
         else:
             st["ik_fail"] += 1
-    else:
-        st["lead_hold"] += 1
     return bot.ServoJoint(_real["q"], t, REAL_SERVO_LOOKAHEAD, REAL_SERVO_GAIN)
+
+
+def _fine_timer():
+    """Windows sleeps in ~15.6 ms steps unless asked for 1 ms timers."""
+    if os.name == "nt" and not _stream.get("timer"):
+        try:
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
+            _stream["timer"] = True
+        except Exception as e:
+            print("real jog: 1 ms timer failed", e)
+
+
+def _sleep_until(deadline):
+    while True:
+        left = deadline - time.perf_counter()
+        if left <= 0:
+            return
+        if left > 0.002:
+            time.sleep(left - 0.0015)
+
+
+def _stream_loop(bot):
+    """Servo stream: ramp toward the wanted speed each period; once the sticks
+    are let go and the speed is zero, leave servo mode and show the arm."""
+    period = REAL_SERVO_PERIOD
+    _fine_timer()
+    k = 0
+    nxt = time.perf_counter()
+    try:
+        while True:
+            want = _stream["want"]
+            xd = _ramp(want if want is not None else [0.0] * 6, period)
+            if want is None and float(np.linalg.norm(xd)) < 1e-5:
+                break
+            if not rr.robot_connected():
+                break
+            ret = _servo_tick(bot, xd, period, k % REAL_SERVO_LEAD_EVERY == 0)
+            if ret not in (None, 0) and ret != _real["ret"]:
+                print("real jog: servoJoint returned", ret)
+                _target["error"] = "servoJoint returned %s" % (ret,)
+            _real["ret"] = ret
+            _real_check(bot, xd, period)
+            _real_log(want, xd)
+            k += 1
+            nxt += period
+            if time.perf_counter() - nxt > period:
+                _real.setdefault("stats", {}).setdefault("late", 0)
+                _real["stats"]["late"] = _real["stats"].get("late", 0) + 1
+                nxt = time.perf_counter()
+            _sleep_until(nxt)
+    except Exception as e:
+        print("real jog: servo stream failed", e)
+    _real["v"] = np.zeros(6)
+    _stream["want"] = None
+    _end_servo(bot)
+    _target["jogging"] = False
+    try:
+        with arms.LOCK:
+            arms.ensure_active_loaded()
+            if rr.robot_connected():
+                rr.reset_sim_to_real()  # show where the real arm stopped
+    except Exception as e:
+        print("real jog: sim reset failed", e)
 
 
 def _changed(cmd):
@@ -321,11 +391,14 @@ def _real_jog(lin, rot, dt=0.03):
         return False
     method = _real["method"]
     if method == "servoJoint":
-        # The stream follows the ramped speed; the speed commands ramp on the
-        # controller with the same acceleration.
-        xd = _ramp(xd, dt)
-        ret = _servo_joint(bot, xd, dt)
-    elif not _changed(list(lin) + list(rot)):
+        # The stream thread ramps to this speed and sends at a fixed rate.
+        _stream["want"] = xd
+        t = _stream["thread"]
+        if t is None or not t.is_alive():
+            _stream["thread"] = threading.Thread(target=_stream_loop, args=(bot,), daemon=True, name="deck-servo")
+            _stream["thread"].start()
+        return True
+    if not _changed(list(lin) + list(rot)):
         ret = _real["ret"]
     elif method == "speedJoint":
         ret = _speed_joint(bot, xd)
@@ -336,38 +409,26 @@ def _real_jog(lin, rot, dt=0.03):
         _target["error"] = "%s returned %s" % (method, ret)
     _real["ret"] = ret
     _real_check(bot, xd, dt)
-    _real_log(lin, rot, xd)
+    _real_log(xd, xd)
     return True
 
 
-def _real_log(lin, rot, xd):
-    """One console line a second while jogging: sticks, base-frame speed and
-    for servoJoint how often the target could not advance."""
+def _real_log(want, xd):
+    """One console line a second while jogging: wanted and sent base-frame
+    speed, and for servoJoint how often the target could not advance."""
     now = time.time()
     if now - _real.get("log_t", 0.0) < REAL_LOG_S:
         return
     _real["log_t"] = now
     st = _real.pop("stats", None) or {}
-    print("real jog: %s %s lin %s rot %s -> base v %s w %s%s" % (
+    want = list(want) if want is not None else [0.0] * 6
+    print("real jog: %s %s want v %s w %s, sent v %s w %s%s" % (
         _real["method"], getattr(wp, "gizmo_space", "local"),
-        np.round(lin, 2).tolist(), np.round(rot, 2).tolist(),
+        np.round(want[:3], 3).tolist(), np.round(want[3:6], 3).tolist(),
         np.round(xd[:3], 3).tolist(), np.round(xd[3:6], 3).tolist(),
-        " | ticks %d, no IK %d, waiting for the arm %d, max lead %.3f m" % (
-            st["ticks"], st["ik_fail"], st["lead_hold"], st["lead"]) if st else ""))
-
-
-def _servo_decel(bot):
-    """After release keep streaming while the ramp brings the speed to zero."""
-    dt = pad.LOOP_S
-    n = int(max(0.05, float(_jog["ramp_s"])) / dt) + 10
-    try:
-        while n > 0 and float(np.linalg.norm(_real.get("v") if _real.get("v") is not None else 0.0)) > 1e-4:
-            _servo_joint(bot, _ramp([0.0] * 6, dt), dt)
-            time.sleep(dt)
-            n -= 1
-    except Exception as e:
-        print("real jog: slow down failed", e)
-    _real["v"] = np.zeros(6)
+        " | ticks %d, late %d, no IK %d, held %d, max lead %.3f m" % (
+            st.get("ticks", 0), st.get("late", 0), st.get("ik_fail", 0),
+            st.get("lead_hold", 0), st.get("lead", 0.0)) if st else ""))
 
 
 def _end_servo(bot):
@@ -378,8 +439,20 @@ def _end_servo(bot):
         print("real jog: servo off failed", e)
 
 
+def _stream_wait():
+    """Let go of the sticks and wait for the stream to slow down and end."""
+    _stream["want"] = None
+    t = _stream["thread"]
+    if t is not None and t.is_alive() and t is not threading.current_thread():
+        t.join(max(0.05, float(_jog["ramp_s"])) + 2.0)
+
+
 def _real_stop():
     if not _target["jogging"]:
+        return
+    if _real["method"] == "servoJoint" and not _real.get("blocked"):
+        _stream_wait()  # the stream clears jogging when it ends
+        _target["jogging"] = False
         return
     _target["jogging"] = False
     bot = rr.robot
@@ -388,9 +461,7 @@ def _real_stop():
     if _real.get("blocked"):
         return
     if _real["method"] == "servoJoint":
-        _servo_decel(bot)
-        # The arm stops on the last target; leave servo mode for other moves.
-        _end_servo(bot)
+        _stream_wait()
         return
     try:
         if hasattr(bot, "StopSpeed"):
@@ -469,6 +540,11 @@ def _jog_step(lin, rot, dt):
 
 
 def _real_step(lin, rot, dt=0.03):
+    if lin is None and _target["mode"] == "real" and _real["method"] == "servoJoint" \
+            and _target["jogging"] and not _real.get("blocked"):
+        # Let go: the stream decelerates, stops and shows the arm by itself.
+        _stream["want"] = None
+        return
     if lin is None or _target["mode"] != "real":
         _real_stop()
         with arms.LOCK:
