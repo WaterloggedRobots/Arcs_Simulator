@@ -1,4 +1,4 @@
-# version: deck-1.6 (2026-10-29)
+# version: deck-1.7 (2026-10-29)
 """Steam Deck edition: a stripped-down controller for the real arm.
 
 Start with `python backend/deck_webui.py` (instead of webui.py). It runs the
@@ -32,15 +32,18 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
-DECK_VERSION = "deck-1.6"
+DECK_VERSION = "deck-1.7"
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1
 LIN_MPS_MAX = 0.5
+# Real jog acceleration / deceleration: seconds from stop to full stick speed
+# (Settings > Real ramp time); the same rate slows the arm when you let go.
+RAMP_S_DEFAULT = 0.5
 # While Hold to move is held, re-aim the real arm at the jogged sim pose this often.
 FOLLOW_REAL_S = 0.25
 
-_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "ik_fail": False, "dirty": False, "last_follow": 0.0}
+_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "ramp_s": RAMP_S_DEFAULT, "ik_fail": False, "dirty": False, "last_follow": 0.0}
 
 
 def _wxyz(rot):
@@ -106,7 +109,6 @@ REAL_METHODS = ("servoJoint", "speedLine", "speedJoint")
 REAL_SPEED_T = 1.0  # s the controller keeps a speed without a newer one
 REAL_KEEP_S = 0.8   # re-send an unchanged speed this often
 REAL_STEP = 0.1     # stick change (of full tilt) that re-sends a speed
-REAL_ACC = 0.5      # m/s^2 (and rad/s^2) to reach / change the speed
 REAL_JACC = 2.0     # rad/s^2 for speedJoint
 REAL_LOOKAHEAD_S = 0.25
 REAL_MAX_QD = 1.0   # rad/s, per joint, for speedJoint
@@ -157,6 +159,27 @@ def _real_twist(lin, rot):
     return [float(x) for x in np.concatenate([r.apply(v), r.apply(w)])]
 
 
+def _accels():
+    """(m/s^2, rad/s^2) that reach the full stick speeds in the ramp time."""
+    ramp = max(0.05, float(_jog["ramp_s"]))
+    return float(_jog["lin_mps"]) / ramp, math.radians(_jog["rot_dps"]) / ramp
+
+
+def _ramp(xd, dt):
+    """Move the jog speed _real["v"] toward xd by at most the ramp's
+    acceleration over dt (linear and angular parts each); returns it."""
+    lin_a, ang_a = _accels()
+    v = np.asarray(_real.get("v") if _real.get("v") is not None else np.zeros(6), dtype=float)
+    out = v.copy()
+    for sl, a in ((slice(0, 3), lin_a), (slice(3, 6), ang_a)):
+        d = np.asarray(xd[sl], dtype=float) - v[sl]
+        n = float(np.linalg.norm(d))
+        top = a * max(dt, 0.0)
+        out[sl] = v[sl] + (d if n <= top else d * (top / n))
+    _real["v"] = out
+    return [float(x) for x in out]
+
+
 def _real_begin(bot):
     """First tick of a jog: un-pause the motion queue, note where the arm is,
     and for servoJoint enter servo mode with the target on the real TCP."""
@@ -167,7 +190,7 @@ def _real_begin(bot):
         print("real jog: prepare failed", e)
     q0 = bot.GetJoints()
     pose = bot.GetTcpPose()
-    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0, t0=time.time(),
+    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0, t0=time.time(), v=np.zeros(6),
                  blocked=_blocked(st),
                  sent=None, sent_t=0.0,
                  pose=[float(x) for x in list(pose)[:6]] if pose is not None else None,
@@ -298,13 +321,16 @@ def _real_jog(lin, rot, dt=0.03):
         return False
     method = _real["method"]
     if method == "servoJoint":
+        # The stream follows the ramped speed; the speed commands ramp on the
+        # controller with the same acceleration.
+        xd = _ramp(xd, dt)
         ret = _servo_joint(bot, xd, dt)
     elif not _changed(list(lin) + list(rot)):
         ret = _real["ret"]
     elif method == "speedJoint":
         ret = _speed_joint(bot, xd)
     else:
-        ret = bot.SpeedLine(xd, REAL_ACC, REAL_SPEED_T)
+        ret = bot.SpeedLine(xd, _accels()[0], REAL_SPEED_T)
     if ret not in (None, 0) and ret != _real["ret"]:
         print("real jog:", method, "returned", ret)
         _target["error"] = "%s returned %s" % (method, ret)
@@ -330,6 +356,20 @@ def _real_log(lin, rot, xd):
             st["ticks"], st["ik_fail"], st["lead_hold"], st["lead"]) if st else ""))
 
 
+def _servo_decel(bot):
+    """After release keep streaming while the ramp brings the speed to zero."""
+    dt = pad.LOOP_S
+    n = int(max(0.05, float(_jog["ramp_s"])) / dt) + 10
+    try:
+        while n > 0 and float(np.linalg.norm(_real.get("v") if _real.get("v") is not None else 0.0)) > 1e-4:
+            _servo_joint(bot, _ramp([0.0] * 6, dt), dt)
+            time.sleep(dt)
+            n -= 1
+    except Exception as e:
+        print("real jog: slow down failed", e)
+    _real["v"] = np.zeros(6)
+
+
 def _end_servo(bot):
     try:
         if hasattr(bot, "ServoMode"):
@@ -348,12 +388,14 @@ def _real_stop():
     if _real.get("blocked"):
         return
     if _real["method"] == "servoJoint":
+        _servo_decel(bot)
         # The arm stops on the last target; leave servo mode for other moves.
         _end_servo(bot)
         return
     try:
         if hasattr(bot, "StopSpeed"):
-            bot.StopSpeed()
+            lin_a, ang_a = _accels()
+            bot.StopSpeed(lin_a, ang_a)
     except Exception as e:
         print("real jog stop failed", e)
 
@@ -481,6 +523,7 @@ def _settings_payload():
         "deck_rot_dps": float(_jog["rot_dps"]),
         "version": "%s / pad %s" % (DECK_VERSION, pad.VERSION),
         "deck_lin_mps": float(_jog["lin_mps"]),
+        "deck_ramp_s": float(_jog["ramp_s"]),
         "deck_real_jog": _real["method"],
     }
 
@@ -586,6 +629,12 @@ def api_deck_settings():
         except Exception:
             pass
         save["deck_lin_mps"] = _jog["lin_mps"]
+    if data.get("deck_ramp_s") not in (None, ""):
+        try:
+            _jog["ramp_s"] = min(3.0, max(0.05, float(data.get("deck_ramp_s"))))
+        except Exception:
+            pass
+        save["deck_ramp_s"] = _jog["ramp_s"]
     if data.get("deck_real_jog") in REAL_METHODS:
         _set_real_method(data.get("deck_real_jog"))
         save["deck_real_jog"] = _real["method"]
@@ -636,6 +685,10 @@ def _load_deck_settings():
         _jog["lin_mps"] = min(LIN_MPS_MAX, max(0.001, float(st.get("deck_lin_mps") or LIN_MPS_DEFAULT)))
     except Exception:
         _jog["lin_mps"] = LIN_MPS_DEFAULT
+    try:
+        _jog["ramp_s"] = min(3.0, max(0.05, float(st.get("deck_ramp_s") or RAMP_S_DEFAULT)))
+    except Exception:
+        _jog["ramp_s"] = RAMP_S_DEFAULT
     _set_real_method(st.get("deck_real_jog"))
 
 
