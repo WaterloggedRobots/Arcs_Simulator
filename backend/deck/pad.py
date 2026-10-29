@@ -6,7 +6,7 @@ and L2 / R2 clicks are done by SteamController.exe itself, not here.
 
     left stick     move in x / y (horizontal)
     L4 / L5        move up / down (z)
-    right stick    roll (up / down) and pitch (left / right)
+    right stick    roll (left / right) and pitch (up / down)
     R4 / R5        yaw left / right
     X              switch the sticks between the sim bot and the real bot
 
@@ -94,11 +94,11 @@ def read():
         yaw = (1.0 if g.wButtons & RB else 0.0) - (1.0 if g.bRightTrigger >= TRIGGER_ON else 0.0)
         return {
             "buttons": int(g.wButtons),
-            # stick right = +x, stick up = +y; right stick up / down = roll
-            # (about x), left / right = pitch (about y)
+            # stick up = +x, stick right = +y; right stick left / right =
+            # roll (about x), up / down = pitch (about y)
             # left stick linear: half tilt is half speed
-            "lin": [_axis(g.sThumbLX, 1.0), _axis(g.sThumbLY, 1.0), up],
-            "rot": [_axis(g.sThumbRY), _axis(g.sThumbRX), yaw],
+            "lin": [_axis(g.sThumbLY, 1.0), _axis(g.sThumbLX, 1.0), up],
+            "rot": [_axis(g.sThumbRX), _axis(g.sThumbRY), yaw],
         }
     _status["connected"] = False
     _status["index"] = None

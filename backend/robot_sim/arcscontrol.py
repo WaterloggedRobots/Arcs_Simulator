@@ -285,6 +285,26 @@ class RobotArcs:
         """Joint velocities (rad/s), acc in rad/s^2."""
         return self.mc.speedJoint([float(v) for v in qd[:6]], float(acc), float(t))
 
+    # Servo streaming (ARCS setServoMode / servoJoint): send a joint target
+    # every t seconds; the controller leaves servo mode after ~5 t without one.
+    def ServoMode(self, on, timeout=0.5):
+        """Enter / leave servo mode; True once the controller reports it."""
+        try:
+            self.mc.setServoMode(bool(on))
+            t0 = time.time()
+            while bool(self.mc.isServoModeEnabled()) != bool(on):
+                if time.time() - t0 > timeout:
+                    print("arcscontrol: servo mode", on, "not confirmed")
+                    return False
+                time.sleep(0.01)
+            return True
+        except Exception as e:
+            print("arcscontrol: servo mode", on, "failed", e)
+            return False
+
+    def ServoJoint(self, q, t=0.03, lookahead=0.1, gain=200):
+        return self.mc.servoJoint([float(v) for v in q[:6]], 0.0, 0.0, float(t), float(lookahead), float(gain))
+
     def StopSpeed(self, acc=1.0, rot_acc=2.0, joint_acc=3.0):
         """End a speed jog: decelerate (line and joint), no clearPath."""
         try:

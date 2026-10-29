@@ -87,21 +87,33 @@ def _move_sim_cursor(lin, rot, dt):
 
 
 # Which arm the sticks drive: "sim" moves only the sim cursor; "real" jogs the
-# real arm directly with an ARCS speed command, re-sent every pad tick with a
-# short timeout, and snaps the sim to it when let go.
+# real arm directly, and snaps the sim to it when let go. Real jog commands:
+#   servoJoint  servo mode stream: each pad tick moves a target TCP pose along
+#               the stick twist and sends the controller's IK of it
 #   speedLine   TCP velocity (RobotArcs.SpeedLine)
 #   speedJoint  joint velocities toward the controller's IK of a pose a little
 #               ahead on the same twist (RobotArcs.SpeedJoint)
-#   auto        speedLine, then speedJoint if the arm does not move
+#   auto        servoJoint, then speedLine if the arm does not move
+# Every speed command restarts the controller's move, so speedLine and
+# speedJoint are re-sent only when the sticks change (in steps of
+# REAL_STEP) or every REAL_KEEP_S; sent each tick they jitter in place.
 _target = {"mode": "sim", "error": "", "jogging": False}
-_real = {"setting": "auto", "method": "speedLine", "ret": None, "q0": None,
-         "cmd": 0.0, "moved": False, "checked": False}
-REAL_METHODS = ("auto", "speedLine", "speedJoint")
-REAL_SPEED_T = 0.2  # s the controller keeps a speed without a newer one
+_real = {"setting": "auto", "method": "servoJoint", "ret": None, "q0": None,
+         "cmd": 0.0, "moved": False, "checked": False,
+         "sent": None, "sent_t": 0.0, "pose": None, "q": None}
+REAL_METHODS = ("auto", "servoJoint", "speedLine", "speedJoint")
+REAL_SPEED_T = 1.0  # s the controller keeps a speed without a newer one
+REAL_KEEP_S = 0.8   # re-send an unchanged speed this often
+REAL_STEP = 0.1     # stick change (of full tilt) that re-sends a speed
 REAL_ACC = 0.5      # m/s^2 (and rad/s^2) to reach / change the speed
 REAL_JACC = 2.0     # rad/s^2 for speedJoint
 REAL_LOOKAHEAD_S = 0.25
 REAL_MAX_QD = 1.0   # rad/s, per joint, for speedJoint
+# servoJoint: lookahead (s) and gain as in the AUBO servo examples; the
+# target may lead the real TCP by at most REAL_SERVO_LEAD m.
+REAL_SERVO_LOOKAHEAD = 0.1
+REAL_SERVO_GAIN = 200
+REAL_SERVO_LEAD = 0.03
 # Commanded travel (m, or rad / 5) before deciding the arm is not following.
 REAL_CHECK_AFTER = 0.01
 
@@ -139,14 +151,58 @@ def _real_twist(lin, rot):
 
 
 def _real_begin(bot):
-    """First tick of a jog: un-pause the motion queue, note where the arm is."""
+    """First tick of a jog: un-pause the motion queue, note where the arm is,
+    and for servoJoint enter servo mode with the target on the real TCP."""
     st = {}
     try:
         st = bot.PrepareJog() if hasattr(bot, "PrepareJog") else {}
     except Exception as e:
         print("real jog: prepare failed", e)
-    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=bot.GetJoints())
+    q0 = bot.GetJoints()
+    pose = bot.GetTcpPose()
+    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0,
+                 sent=None, sent_t=0.0,
+                 pose=[float(x) for x in list(pose)[:6]] if pose is not None else None,
+                 q=[float(x) for x in list(q0)[:6]] if q0 is not None else None)
+    if _real["method"] == "servoJoint":
+        ok = bot.ServoMode(True) if hasattr(bot, "ServoMode") else False
+        st["servo_on"] = ok
     print("real jog: start with", _real["method"], st)
+
+
+def _ik_ahead(bot, pose, xd, dt, seed):
+    """The controller's IK of pose moved dt along the base-frame twist xd."""
+    p = np.asarray(pose[:3]) + np.asarray(xd[:3]) * dt
+    r = R.from_rotvec(np.asarray(xd[3:6]) * dt) * R.from_euler("xyz", pose[3:6])
+    target = [float(x) for x in list(p) + list(r.as_euler("xyz"))]
+    q = bot.GetIK(target, seed=list(seed), verbose=False)
+    return target, q
+
+
+def _servo_joint(bot, xd, dt):
+    """Move the servo target along the twist and stream its joints."""
+    if _real["pose"] is None or _real["q"] is None:
+        return "no robot state"
+    t = max(0.01, min(0.1, dt))
+    pose = _real["pose"]
+    now = bot.GetTcpPose()
+    lead = 0.0 if now is None else float(np.linalg.norm(np.asarray(pose[:3]) - np.asarray(list(now)[:3])))
+    if lead < REAL_SERVO_LEAD:
+        target, q = _ik_ahead(bot, pose, xd, t, _real["q"])
+        if q is not None:
+            _real["pose"], _real["q"] = target, [float(x) for x in q]
+    return bot.ServoJoint(_real["q"], t, REAL_SERVO_LOOKAHEAD, REAL_SERVO_GAIN)
+
+
+def _changed(cmd):
+    """True when a speed command should be re-sent: the sticks moved a step,
+    or REAL_KEEP_S passed (the controller drops it after REAL_SPEED_T)."""
+    key = tuple(int(round(v / REAL_STEP)) for v in cmd)
+    now = time.time()
+    if key == _real["sent"] and now - _real["sent_t"] < REAL_KEEP_S:
+        return False
+    _real["sent"], _real["sent_t"] = key, now
+    return True
 
 
 def _speed_joint(bot, xd):
@@ -159,9 +215,7 @@ def _speed_joint(bot, xd):
     q = np.asarray(list(q)[:6], dtype=float)
     pose = [float(x) for x in list(pose)[:6]]
     la = REAL_LOOKAHEAD_S
-    p = np.asarray(pose[:3]) + np.asarray(xd[:3]) * la
-    r = R.from_rotvec(np.asarray(xd[3:6]) * la) * R.from_euler("xyz", pose[3:6])
-    qt = bot.GetIK(list(p) + list(r.as_euler("xyz")), seed=list(q), verbose=False)
+    _, qt = _ik_ahead(bot, pose, xd, la, q)
     if qt is None:
         return "no IK ahead"
     dq = (np.asarray(qt, dtype=float) - q + math.pi) % (2.0 * math.pi) - math.pi
@@ -173,8 +227,8 @@ def _speed_joint(bot, xd):
 
 
 def _real_check(bot, xd, dt):
-    """Once enough motion was asked for, check the joints moved; if not, say
-    so with the controller state, and in auto try the other command."""
+    """Once enough motion was asked for, check the TCP moved most of it; if
+    not, say so with the controller state, and in auto try speedLine."""
     if _real["checked"]:
         return
     _real["cmd"] += (np.linalg.norm(xd[:3]) + np.linalg.norm(xd[3:6]) / 5.0) * dt
@@ -189,15 +243,16 @@ def _real_check(bot, xd, dt):
     if moved > 0.002:
         _real["moved"] = True
         print("real jog: %s moves the arm (%.3f rad)" % (_real["method"], moved))
-        if _target["error"].startswith("speedLine did not"):
+        if " did not move" in _target["error"]:
             _target["error"] = ""
         return
     st = bot.JogState() if hasattr(bot, "JogState") else {}
     print("real jog: %s sent (ret %s) but the arm did not move; controller %s"
           % (_real["method"], _real["ret"], st))
-    if _real["setting"] == "auto" and _real["method"] == "speedLine":
-        _real["method"] = "speedJoint"
-        _target["error"] = "speedLine did not move the arm, trying speedJoint"
+    if _real["setting"] == "auto" and _real["method"] == "servoJoint":
+        _end_servo(bot)
+        _real["method"] = "speedLine"
+        _target["error"] = "servoJoint did not move the arm, trying speedLine"
         _real_begin(bot)
         return
     _target["error"] = "%s did not move the arm (ret %s): see the console" % (_real["method"], _real["ret"])
@@ -214,16 +269,29 @@ def _real_jog(lin, rot, dt=0.03):
     xd = _real_twist(lin, rot)
     if xd is None:
         return False
-    if _real["method"] == "speedJoint":
+    method = _real["method"]
+    if method == "servoJoint":
+        ret = _servo_joint(bot, xd, dt)
+    elif not _changed(list(lin) + list(rot)):
+        ret = _real["ret"]
+    elif method == "speedJoint":
         ret = _speed_joint(bot, xd)
     else:
         ret = bot.SpeedLine(xd, REAL_ACC, REAL_SPEED_T)
     if ret not in (None, 0) and ret != _real["ret"]:
-        print("real jog:", _real["method"], "returned", ret)
-        _target["error"] = "%s returned %s" % (_real["method"], ret)
+        print("real jog:", method, "returned", ret)
+        _target["error"] = "%s returned %s" % (method, ret)
     _real["ret"] = ret
     _real_check(bot, xd, dt)
     return True
+
+
+def _end_servo(bot):
+    try:
+        if hasattr(bot, "ServoMode"):
+            bot.ServoMode(False)
+    except Exception as e:
+        print("real jog: servo off failed", e)
 
 
 def _real_stop():
@@ -231,8 +299,14 @@ def _real_stop():
         return
     _target["jogging"] = False
     bot = rr.robot
+    if bot is None:
+        return
+    if _real["method"] == "servoJoint":
+        # The arm stops on the last target; leave servo mode for other moves.
+        _end_servo(bot)
+        return
     try:
-        if bot is not None and hasattr(bot, "StopSpeed"):
+        if hasattr(bot, "StopSpeed"):
             bot.StopSpeed()
     except Exception as e:
         print("real jog stop failed", e)
@@ -502,7 +576,7 @@ def _open_deck_ui(url="http://127.0.0.1:5000"):
 
 def _set_real_method(name):
     _real["setting"] = name if name in REAL_METHODS else "auto"
-    _real["method"] = "speedJoint" if _real["setting"] == "speedJoint" else "speedLine"
+    _real["method"] = "servoJoint" if _real["setting"] == "auto" else _real["setting"]
 
 
 def _load_deck_settings():

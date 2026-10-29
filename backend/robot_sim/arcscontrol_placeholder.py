@@ -49,6 +49,12 @@ class RobotArcs:
     def SpeedLine(self, xd, acc=0.5, t=0.2):
         return None
 
+    def ServoMode(self, on, timeout=0.5):
+        return False
+
+    def ServoJoint(self, q, t=0.03, lookahead=0.1, gain=200):
+        return None
+
     def SpeedJoint(self, qd, acc=1.0, t=0.2):
         return None
 
