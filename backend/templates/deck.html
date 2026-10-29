@@ -136,6 +136,8 @@
       user-select: none;
     }
     #moveRobotPose.holding { background: var(--mint); }
+    #moveMsg { min-height: 16px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+    #moveMsg.err { color: #f0a090; }
     .viewer-wrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
     /* The properties panel covers Viser's right edge, where its own control
        panel sits. Viser starts as far left of the pane as the panel is wide,
@@ -245,6 +247,7 @@
       <div class="move-block">
         <label>Move Robot to Pose:</label>
         <button type="button" id="moveRobotPose" disabled>Hold to move</button>
+        <div id="moveMsg"></div>
       </div>
     </aside>
     <div class="viewer-wrap">
@@ -313,7 +316,7 @@
       <div class="field"><label>Rotation speed (deg/s)</label><input id="setRot" type="number" step="1" min="0.1"></div>
       <div class="keys">
         <b>Left stick</b> move x / y &nbsp; <b>L4 / L5</b> up / down<br>
-        <b>Right stick</b> pitch / roll &nbsp; <b>R4 / R5</b> yaw<br>
+        <b>Right stick</b> roll / pitch &nbsp; <b>R4 / R5</b> yaw<br>
         <b>Right trackpad</b> mouse &nbsp; <b>R2</b> left click &nbsp; <b>L2</b> or pad click: right click<br>
         <b>Left trackpad</b> scroll (zoom)
       </div>
@@ -448,19 +451,36 @@
 
     // Hold to move: the real arm goes to the sim pose while held (and follows the sticks).
     const moveBtn = $("moveRobotPose");
+    let moveBeat = null;
+    function moveMsg(text, err) {
+      $("moveMsg").textContent = text || "";
+      $("moveMsg").classList.toggle("err", !!err);
+    }
+    function sendHold() {
+      post("/api/deck/move", { on: true }).then((d) => {
+        if (!moveHolding) return;
+        if (d.error) moveMsg("Move failed: " + d.error, true);
+        else moveMsg("Moving to sim pose…");
+      });
+    }
     function release() {
       if (!moveHolding) return;
       moveHolding = false;
+      clearInterval(moveBeat);
       moveBtn.classList.remove("holding");
-      post("/api/move_release");
+      post("/api/deck/move", { on: false });
+      if (!$("moveMsg").classList.contains("err")) moveMsg("");
     }
     moveBtn.addEventListener("pointerdown", (e) => {
       if (moveBtn.disabled) return;
       e.preventDefault();
       moveHolding = true;
       moveBtn.classList.add("holding");
-      moveBtn.setPointerCapture(e.pointerId);
-      post("/api/move_hold", { mode: "fk" });
+      try { moveBtn.setPointerCapture(e.pointerId); } catch (err) {}
+      moveMsg("");
+      sendHold();
+      // Keep the hold alive; the server stops the arm if these stop coming.
+      moveBeat = setInterval(sendHold, 500);
     });
     moveBtn.addEventListener("pointerup", release);
     moveBtn.addEventListener("pointercancel", release);

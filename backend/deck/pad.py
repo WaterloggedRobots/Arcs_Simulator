@@ -6,7 +6,7 @@ and L2 / R2 clicks are done by SteamController.exe itself, not here.
 
     left stick     move in x / y (horizontal)
     L4 / L5        move up / down (z)
-    right stick    pitch (up / down) and roll (left / right)
+    right stick    roll (up / down) and pitch (left / right)
     R4 / R5        yaw left / right
 
 Axes follow the Axes Mode toggle: Local = the sim cursor's own axes,
@@ -90,9 +90,10 @@ def read():
         up = (1.0 if g.wButtons & LB else 0.0) - (1.0 if g.bLeftTrigger >= TRIGGER_ON else 0.0)
         yaw = (1.0 if g.wButtons & RB else 0.0) - (1.0 if g.bRightTrigger >= TRIGGER_ON else 0.0)
         return {
-            # stick up = +x (forward), stick right = -y (right of +x in a z-up world)
-            "lin": [_axis(g.sThumbLY), -_axis(g.sThumbLX), up],
-            "rot": [_axis(g.sThumbRX), _axis(g.sThumbRY), yaw],
+            # stick right = +x, stick up = +y; right stick up / down = roll
+            # (about x), left / right = pitch (about y)
+            "lin": [_axis(g.sThumbLX), _axis(g.sThumbLY), up],
+            "rot": [_axis(g.sThumbRY), _axis(g.sThumbRX), yaw],
         }
     _status["connected"] = False
     _status["index"] = None

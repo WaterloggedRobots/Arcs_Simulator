@@ -95,6 +95,42 @@ def _follow_real(force=False):
     rr.start_hold_move(mode="fk")
 
 
+# Hold to move: the page posts {on: true} on press and again every 0.5 s while
+# held; with no beat for HOLD_BEAT_S the move stops (a lost release must not
+# leave the arm moving).
+HOLD_BEAT_S = 1.5
+_hold = {"beat": 0.0, "error": ""}
+
+
+def _hold_start():
+    if not rr.robot_connected():
+        return "robot not connected"
+    if rr.edits_locked():
+        return "stop playback first"
+    if not rr.start_hold_move(mode="fk"):
+        return "the controller refused the move (see the console)"
+    _jog["dirty"] = False
+    return ""
+
+
+def _hold_stop():
+    _hold["beat"] = 0.0
+    rr.stop_hold_move()
+
+
+def _hold_watchdog():
+    while True:
+        time.sleep(0.2)
+        try:
+            with arms.LOCK:
+                arms.ensure_active_loaded()
+                if _hold["beat"] and time.time() - _hold["beat"] > HOLD_BEAT_S:
+                    print("hold to move: no beat from the page, stopping")
+                    _hold_stop()
+        except Exception as e:
+            print("hold watchdog failed", e)
+
+
 def _jog_step(lin, rot, dt):
     with arms.LOCK:
         arms.ensure_active_loaded()
@@ -183,6 +219,25 @@ def api_deck_state():
     })
 
 
+@app.route("/api/deck/move", methods=["POST"])
+def api_deck_move():
+    """Hold to move, run here and not on the viewer queue, so the page hears
+    whether the controller took the move."""
+    data = request.get_json(silent=True) or {}
+    if not data.get("on"):
+        _hold_stop()
+        return jsonify({"ok": True, "holding": False})
+    first = not _hold["beat"] or not getattr(rr, "_hold_move", False)
+    _hold["beat"] = time.time()
+    if first:
+        _hold["error"] = _hold_start()
+        if _hold["error"]:
+            _hold["beat"] = 0.0
+            print("hold to move:", _hold["error"])
+    return jsonify({"ok": not _hold["error"], "holding": bool(getattr(rr, "_hold_move", False)),
+                    "error": _hold["error"]})
+
+
 @app.route("/api/deck/settings", methods=["GET", "POST"])
 def api_deck_settings():
     if request.method == "GET":
@@ -250,6 +305,7 @@ if __name__ == "__main__":
     print("Viser    http://127.0.0.1:%s (iframe)" % port)
     steam_profile.activate()
     pad.start(_jog_step)
+    threading.Thread(target=_hold_watchdog, daemon=True, name="deck-hold").start()
     print("Deck UI  http://127.0.0.1:5000")
     threading.Thread(target=_open_deck_ui, daemon=True).start()
     try:

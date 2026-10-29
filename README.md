@@ -336,7 +336,7 @@ The page shows only the 3D viewer, the **Saved Points** list on the left (click 
 |---|---|
 | Left stick | move the sim cursor in x / y |
 | L4 / L5 | move up / down (z) |
-| Right stick | pitch (up / down) and roll (left / right) |
+| Right stick | roll (up / down) and pitch (left / right) |
 | R4 / R5 | yaw |
 | Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
 | R2 / L2 (or right pad click) | left / right click |
