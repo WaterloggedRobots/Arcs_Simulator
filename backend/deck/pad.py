@@ -8,6 +8,7 @@ and L2 / R2 clicks are done by SteamController.exe itself, not here.
     L4 / L5        move up / down (z)
     right stick    roll (up / down) and pitch (left / right)
     R4 / R5        yaw left / right
+    X              switch the sticks between the sim bot and the real bot
 
 Axes follow the Axes Mode toggle: Local = the sim cursor's own axes,
 Global = world axes.
@@ -22,6 +23,8 @@ import time
 
 LB = 0x0100
 RB = 0x0200
+# Buttons reported to on_button (pressed, not held).
+BUTTONS = {"X": 0x4000}
 DEADZONE = 0.12
 TRIGGER_ON = 128
 LOOP_S = 0.03
@@ -90,6 +93,7 @@ def read():
         up = (1.0 if g.wButtons & LB else 0.0) - (1.0 if g.bLeftTrigger >= TRIGGER_ON else 0.0)
         yaw = (1.0 if g.wButtons & RB else 0.0) - (1.0 if g.bRightTrigger >= TRIGGER_ON else 0.0)
         return {
+            "buttons": int(g.wButtons),
             # stick right = +x, stick up = +y; right stick up / down = roll
             # (about x), left / right = pitch (about y)
             "lin": [_axis(g.sThumbLX), _axis(g.sThumbLY), up],
@@ -104,9 +108,10 @@ def status():
     return dict(_status)
 
 
-def start(step):
+def start(step, on_button=None):
     """Poll the pad and call step(lin, rot, dt) while any control is held,
-    and step(None, None, 0) once when they are all let go."""
+    and step(None, None, 0) once when they are all let go. on_button(name)
+    runs once per press of a button in BUTTONS."""
     if os.name != "nt":
         _status["error"] = "not Windows: no controller input"
         print("deck pad:", _status["error"])
@@ -115,12 +120,19 @@ def start(step):
     def _loop():
         last = time.time()
         moving = False
+        was = 0
         while True:
             now = time.time()
             dt = min(0.1, now - last)
             last = now
             try:
                 pad = read()
+                now_b = pad["buttons"] if pad else 0
+                if on_button is not None:
+                    for name, bit in BUTTONS.items():
+                        if now_b & bit and not was & bit:
+                            on_button(name)
+                was = now_b
                 held = bool(pad) and any(abs(v) > 0 for v in pad["lin"] + pad["rot"])
                 if held:
                     step(pad["lin"], pad["rot"], dt)

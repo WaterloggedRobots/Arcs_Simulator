@@ -338,11 +338,12 @@ The page shows only the 3D viewer, the **Saved Points** list on the left (click 
 | L4 / L5 | move up / down (z) |
 | Right stick | roll (up / down) and pitch (left / right) |
 | R4 / R5 | yaw |
+| X | switch the controller between the Sim bot and the Real bot (also the **Control** switch in the top bar) |
 | Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
 | R2 / L2 (or right pad click) | left / right click |
 | Left trackpad | scroll (zoom) |
 
-Moves follow Axes Mode: Local uses the sim cursor's own axes (so L4 / L5 move along the tool axis), Global uses world axes. Speeds are the *Linear speed* and *Rotation speed* settings; a move with no IK solution is dropped and the panel says so.
+In **Real** control the sticks still move the sim cursor, and the real arm follows it (re-aimed every 0.25 s and once more when you let go); switching to Real first snaps the sim cursor to the real arm. Real control needs a connected robot and drops back to Sim if it disconnects. Moves follow Axes Mode: Local uses the sim cursor's own axes (so L4 / L5 move along the tool axis), Global uses world axes. Speeds are the *Linear speed* and *Rotation speed* settings; a move with no IK solution is dropped and the panel says so.
 
 The controls come from [Steam Deck Tools](https://github.com/WaterloggedRobots/steam-deck-tools)' `SteamController.exe`, which needs its hidden **Arcs Deck** profile (a build from that repository that includes it). On start the app switches `SteamController.exe` to Arcs Deck and switches back to the previous profile on exit; if the app is killed, the profile turns itself off. The Deck reaches the app as an Xbox 360 pad over XInput (`backend/deck/pad.py`); the profile switch is in `backend/deck/steam_profile.py`.
 

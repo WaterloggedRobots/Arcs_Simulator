@@ -78,6 +78,9 @@
       transition: transform 0.15s ease;
     }
     .slide.advanced { background: var(--azure); }
+    #targetSwitch { background: var(--azure); }
+    #targetSwitch.advanced { background: var(--real); }
+    #targetMode.real #tgReal { color: var(--real); font-weight: 600; }
     .slide.advanced::after { transform: translateX(20px); }
     button {
       font: inherit;
@@ -232,6 +235,12 @@
       <span class="pill" id="robotPill">Robot not connected</span>
       <span class="pill" id="padPill">Controller</span>
       <span class="spacer"></span>
+      <div class="mode" id="targetMode" title="Which bot the controller moves (X on the Deck)">
+        <span>Control</span>
+        <span id="tgSim" class="on">Sim</span>
+        <button type="button" class="slide" id="targetSwitch" title="Sim bot / Real bot (X)"></button>
+        <span id="tgReal">Real</span>
+      </div>
       <div class="mode" id="axesMode" title="Axes the sticks move along">
         <span>Axes Mode</span>
         <span id="axLocal" class="on">Local</span>
@@ -317,6 +326,7 @@
       <div class="keys">
         <b>Left stick</b> move x / y &nbsp; <b>L4 / L5</b> up / down<br>
         <b>Right stick</b> roll / pitch &nbsp; <b>R4 / R5</b> yaw<br>
+        <b>X</b> controller drives the Sim bot / Real bot<br>
         <b>Right trackpad</b> mouse &nbsp; <b>R2</b> left click &nbsp; <b>L2</b> or pad click: right click<br>
         <b>Left trackpad</b> scroll (zoom)
       </div>
@@ -415,6 +425,8 @@
       btn.disabled = !online && !moveHolding;
       btn.classList.toggle("holding", moveHolding || !!(d.move || {}).holding);
       syncAxes(d.gizmo_space !== "global");
+      syncTarget(d.target === "real");
+      if (d.target_error) moveMsg("Real control: " + d.target_error, true);
       renderPoints(d.points);
     }
 
@@ -497,6 +509,22 @@
       state.gizmo_space = local ? "local" : "global";
       syncAxes(local);
       post("/api/gizmo_space", { space: state.gizmo_space });
+    });
+
+    // Control: the sticks drive the sim bot, or the real bot (which follows the
+    // sim cursor as you jog). X on the Deck toggles it too.
+    function syncTarget(real) {
+      $("targetSwitch").classList.toggle("advanced", real);
+      $("targetMode").classList.toggle("real", real);
+      $("tgSim").classList.toggle("on", !real);
+      $("tgReal").classList.toggle("on", real);
+    }
+    $("targetSwitch").addEventListener("click", () => {
+      post("/api/deck/target", { target: "toggle" }).then((d) => {
+        state.target = d.target;
+        syncTarget(d.target === "real");
+        if (d.error) moveMsg("Real control: " + d.error, true);
+      });
     });
 
     // Settings: robot IP / port / type, linear and rotation speed.

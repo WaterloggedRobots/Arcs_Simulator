@@ -83,9 +83,35 @@ def _move_sim_cursor(lin, rot, dt):
     return True
 
 
+# Which arm the sticks drive: "sim" moves only the sim cursor; "real" moves
+# the sim cursor as the target and the real arm follows it (MoveJ, re-aimed
+# every FOLLOW_REAL_S and once more when the sticks are let go).
+_target = {"mode": "sim", "error": ""}
+
+
+def _set_target(mode):
+    mode = "real" if str(mode).lower() == "real" else "sim"
+    _target["error"] = ""
+    if mode == "real":
+        if not rr.robot_connected():
+            _target["error"] = "robot not connected"
+            return _target["mode"]
+        # Start from where the real arm is, so the first move is not a jump.
+        rr.reset_sim_to_real()
+        _jog["dirty"] = False
+    elif _target["mode"] == "real" and not _hold["beat"]:
+        rr.stop_hold_move()
+    _target["mode"] = mode
+    print("deck: sticks drive the", mode, "bot")
+    return mode
+
+
 def _follow_real(force=False):
-    """Hold to move aims at the sim pose when pressed; keep it on the jogged pose."""
-    if not getattr(rr, "_hold_move", False) or not _jog["dirty"]:
+    """Hold to move aims at the sim pose when pressed; keep it on the jogged
+    pose. In Real mode the real arm follows the sticks without the button."""
+    if not _jog["dirty"]:
+        return
+    if not (getattr(rr, "_hold_move", False) or _target["mode"] == "real"):
         return
     now = time.time()
     if not force and now - _jog["last_follow"] < FOLLOW_REAL_S:
@@ -140,6 +166,10 @@ def _jog_step(lin, rot, dt):
             _follow_real(force=True)
             return
         if rr.edits_locked() or not rr.ik_allowed():
+            return
+        if _target["mode"] == "real" and not rr.robot_connected():
+            _target["mode"] = "sim"
+            _target["error"] = "robot disconnected: back to Sim"
             return
         ok = _move_sim_cursor(lin, rot, dt)
         _jog["ik_fail"] = not ok
@@ -213,6 +243,8 @@ def api_deck_state():
         "move": move,
         "ik_fail": bool(_jog["ik_fail"]),
         "gizmo_space": getattr(wp, "gizmo_space", "local"),
+        "target": _target["mode"],
+        "target_error": _target["error"],
         "points": webui._sim_poses_payload(),
         "pad": pad.status(),
         "steam_profile": steam_profile.status(),
@@ -236,6 +268,24 @@ def api_deck_move():
             print("hold to move:", _hold["error"])
     return jsonify({"ok": not _hold["error"], "holding": bool(getattr(rr, "_hold_move", False)),
                     "error": _hold["error"]})
+
+
+@app.route("/api/deck/target", methods=["POST"])
+def api_deck_target():
+    """Sticks drive the sim bot or the real bot: {target: "sim" | "real" | "toggle"}."""
+    data = request.get_json(silent=True) or {}
+    want = str(data.get("target") or "toggle")
+    if want == "toggle":
+        want = "sim" if _target["mode"] == "real" else "real"
+    mode = _set_target(want)
+    return jsonify({"ok": not _target["error"], "target": mode, "error": _target["error"]})
+
+
+def _on_pad_button(name):
+    if name == "X":
+        with arms.LOCK:
+            arms.ensure_active_loaded()
+            _set_target("sim" if _target["mode"] == "real" else "real")
 
 
 @app.route("/api/deck/settings", methods=["GET", "POST"])
@@ -304,7 +354,7 @@ if __name__ == "__main__":
     port = webui._wait_viewer()
     print("Viser    http://127.0.0.1:%s (iframe)" % port)
     steam_profile.activate()
-    pad.start(_jog_step)
+    pad.start(_jog_step, _on_pad_button)
     threading.Thread(target=_hold_watchdog, daemon=True, name="deck-hold").start()
     print("Deck UI  http://127.0.0.1:5000")
     threading.Thread(target=_open_deck_ui, daemon=True).start()
