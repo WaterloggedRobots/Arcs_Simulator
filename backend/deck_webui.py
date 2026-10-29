@@ -38,44 +38,12 @@ LIN_MPS_MAX = 0.5
 # While Hold to move is held, re-aim the real arm at the jogged sim pose this often.
 FOLLOW_REAL_S = 0.25
 
-# Sticks "screen": left stick up = away from the camera, right = screen right,
-# on the world horizontal plane; right stick tips the tool the same way. L4 / L5
-# stay on Axes Mode z. "axes": the x / y / roll / pitch of Axes Mode.
-STICK_FRAMES = ("screen", "axes")
-_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "stick": "screen", "ik_fail": False, "dirty": False, "last_follow": 0.0}
+_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "ik_fail": False, "dirty": False, "last_follow": 0.0}
 
 
 def _wxyz(rot):
     x, y, z, w = rot.as_quat()
     return np.array([w, x, y, z], dtype=float)
-
-
-def _screen_axes():
-    """(forward, right): away from the viewer camera and the screen's right,
-    on the horizontal plane (the world is z up)."""
-    yaw = math.radians(float(rr.camera_view_angles().get("yaw", -32.0)))
-    f = np.array([-math.cos(yaw), -math.sin(yaw), 0.0])
-    return f, np.array([f[1], -f[0], 0.0])
-
-
-def _screen_xy(fwd, right):
-    f, r = _screen_axes()
-    return f * float(fwd) + r * float(right)
-
-
-def _screen_rot(rot):
-    """Right stick in "screen": right tips the tool tip to the screen's right,
-    up tips it away from the camera; R4 / R5 yaw about world z. World rotvec."""
-    f, r = _screen_axes()
-    return -f * float(rot[0]) + r * float(rot[1]) + np.array([0.0, 0.0, float(rot[2])])
-
-
-def _split_lin(lin):
-    """(world-frame horizontal part or None, the rest for Axes Mode)."""
-    lin = np.asarray(lin, dtype=float)
-    if _jog["stick"] != "screen":
-        return None, lin
-    return _screen_xy(lin[0], lin[1]), np.array([0.0, 0.0, lin[2]])
 
 
 def _move_sim_cursor(lin, rot, dt):
@@ -85,17 +53,10 @@ def _move_sim_cursor(lin, rot, dt):
     pos, wxyz = rr.get_sim_cursor_pose()
     pos = np.asarray(pos, dtype=float).reshape(3)
     r0 = R.from_quat(rr.wxyz_to_xyzw(wxyz))
-    hz, rest = _split_lin(lin)
-    k = float(_jog["lin_mps"]) * dt
-    d = rest * k
-    if hz is not None:
-        pos = pos + hz * k
+    d = np.asarray(lin, dtype=float) * float(_jog["lin_mps"]) * dt
     rv = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"]) * dt
     local = getattr(wp, "gizmo_space", "local") == "local"
-    if _jog["stick"] == "screen":
-        pos1 = pos + (r0.apply(d) if local else d)
-        r1 = R.from_rotvec(_screen_rot(rv)) * r0
-    elif local:
+    if local:
         pos1 = pos + r0.apply(d)
         r1 = r0 * R.from_rotvec(rv)
     else:
@@ -178,24 +139,16 @@ def _set_target(mode):
 def _real_twist(lin, rot):
     """Stick values to a base-frame TCP velocity for speedLine. Local = the
     real TCP's axes (from its pose), Global = world axes."""
-    hz, rest = _split_lin(lin)
-    v = rest * float(_jog["lin_mps"])
+    v = np.asarray(lin, dtype=float) * float(_jog["lin_mps"])
     w = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"])
-    to_base = rr._base_rot().inv()
     if getattr(wp, "gizmo_space", "local") == "local":
         pose = rr.robot.GetTcpPose()
         if pose is None:
             return None
         r = R.from_euler("xyz", [float(x) for x in list(pose)[3:6]])
     else:
-        r = to_base
-    v = r.apply(v)
-    if hz is not None:
-        v = v + to_base.apply(hz * float(_jog["lin_mps"]))
-        w = to_base.apply(_screen_rot(w))
-    else:
-        w = r.apply(w)
-    return [float(x) for x in np.concatenate([v, w])]
+        r = rr._base_rot().inv()
+    return [float(x) for x in np.concatenate([r.apply(v), r.apply(w)])]
 
 
 def _real_begin(bot):
@@ -497,7 +450,6 @@ def _settings_payload():
         "deck_rot_dps": float(_jog["rot_dps"]),
         "deck_lin_mps": float(_jog["lin_mps"]),
         "deck_real_jog": _real["method"],
-        "deck_stick": _jog["stick"],
     }
 
 
@@ -605,9 +557,6 @@ def api_deck_settings():
     if data.get("deck_real_jog") in REAL_METHODS:
         _set_real_method(data.get("deck_real_jog"))
         save["deck_real_jog"] = _real["method"]
-    if data.get("deck_stick") in STICK_FRAMES:
-        _jog["stick"] = data.get("deck_stick")
-        save["deck_stick"] = _jog["stick"]
     if save:
         webui.save_settings(save)
     mid = str(data.get("robot_model") or "").strip()
@@ -656,7 +605,6 @@ def _load_deck_settings():
     except Exception:
         _jog["lin_mps"] = LIN_MPS_DEFAULT
     _set_real_method(st.get("deck_real_jog"))
-    _jog["stick"] = st.get("deck_stick") if st.get("deck_stick") in STICK_FRAMES else "screen"
 
 
 if __name__ == "__main__":

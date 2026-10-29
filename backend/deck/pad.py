@@ -4,10 +4,10 @@ With the Arcs Deck profile (Steam Deck Tools) the Deck shows up as an X360
 pad: sticks as sticks, L4 / R4 as LB / RB, L5 / R5 as LT / RT. Trackpad mouse
 and L2 / R2 clicks are done by SteamController.exe itself, not here.
 
-    left stick     move in x / y (horizontal)
-    L4 / L5        move up / down (z)
-    right stick    roll (left / right) and pitch (up / down)
-    R4 / R5        yaw left / right
+    left stick     up = +x, left = +y
+    L4 / L5        +z / -z
+    right stick    left = +roll (about x), up = +pitch (about y)
+    R4 / R5        +yaw / -yaw (about z)
     X              switch the sticks between the sim bot and the real bot
 
 Axes follow the Axes Mode toggle: Local = the sim cursor's own axes,
@@ -94,11 +94,10 @@ def read():
         yaw = (1.0 if g.wButtons & RB else 0.0) - (1.0 if g.bRightTrigger >= TRIGGER_ON else 0.0)
         return {
             "buttons": int(g.wButtons),
-            # stick up = +x, stick right = +y; right stick left / right =
-            # roll (about x), up / down = pitch (about y)
-            # left stick linear: half tilt is half speed
-            "lin": [_axis(g.sThumbLY, 1.0), _axis(g.sThumbLX, 1.0), up],
-            "rot": [_axis(g.sThumbRX), _axis(g.sThumbRY), yaw],
+            # left stick up = +x, left = +y (linear: half tilt is half speed);
+            # right stick left = +roll (about x), up = +pitch (about y)
+            "lin": [_axis(g.sThumbLY, 1.0), -_axis(g.sThumbLX, 1.0), up],
+            "rot": [-_axis(g.sThumbRX), _axis(g.sThumbRY), yaw],
         }
     _status["connected"] = False
     _status["index"] = None

@@ -334,10 +334,10 @@ The page shows only the 3D viewer, the **Saved Points** list on the left (click 
 
 | Deck control | Action |
 |---|---|
-| Left stick | move on the floor plane: up = away from the camera, right = screen right (Settings > Stick directions: Screen). With *Axes Mode x / y* it moves along x (up / down) and y (left / right) of Axes Mode instead |
-| L4 / L5 | move up / down (z) |
-| Right stick | tip the tool: right = tip to the screen's right, up = tip away from the camera (Screen); roll (left / right) and pitch (up / down) of Axes Mode with *Axes Mode x / y* |
-| R4 / R5 | yaw |
+| Left stick | up = +x, left = +y (x / y of Axes Mode) |
+| L4 / L5 | +z / -z |
+| Right stick | left = +roll (about x), up = +pitch (about y) |
+| R4 / R5 | +yaw / -yaw (about z) |
 | X | switch the controller between the Sim bot and the Real bot (also the **Control** switch in the top bar) |
 | Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
 | R2 / L2 (or right pad click) | left / right click |
