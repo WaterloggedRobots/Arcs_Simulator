@@ -38,12 +38,44 @@ LIN_MPS_MAX = 0.5
 # While Hold to move is held, re-aim the real arm at the jogged sim pose this often.
 FOLLOW_REAL_S = 0.25
 
-_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "ik_fail": False, "dirty": False, "last_follow": 0.0}
+# Sticks "screen": left stick up = away from the camera, right = screen right,
+# on the world horizontal plane; right stick tips the tool the same way. L4 / L5
+# stay on Axes Mode z. "axes": the x / y / roll / pitch of Axes Mode.
+STICK_FRAMES = ("screen", "axes")
+_jog = {"rot_dps": ROT_DPS_DEFAULT, "lin_mps": LIN_MPS_DEFAULT, "stick": "screen", "ik_fail": False, "dirty": False, "last_follow": 0.0}
 
 
 def _wxyz(rot):
     x, y, z, w = rot.as_quat()
     return np.array([w, x, y, z], dtype=float)
+
+
+def _screen_axes():
+    """(forward, right): away from the viewer camera and the screen's right,
+    on the horizontal plane (the world is z up)."""
+    yaw = math.radians(float(rr.camera_view_angles().get("yaw", -32.0)))
+    f = np.array([-math.cos(yaw), -math.sin(yaw), 0.0])
+    return f, np.array([f[1], -f[0], 0.0])
+
+
+def _screen_xy(fwd, right):
+    f, r = _screen_axes()
+    return f * float(fwd) + r * float(right)
+
+
+def _screen_rot(rot):
+    """Right stick in "screen": right tips the tool tip to the screen's right,
+    up tips it away from the camera; R4 / R5 yaw about world z. World rotvec."""
+    f, r = _screen_axes()
+    return -f * float(rot[0]) + r * float(rot[1]) + np.array([0.0, 0.0, float(rot[2])])
+
+
+def _split_lin(lin):
+    """(world-frame horizontal part or None, the rest for Axes Mode)."""
+    lin = np.asarray(lin, dtype=float)
+    if _jog["stick"] != "screen":
+        return None, lin
+    return _screen_xy(lin[0], lin[1]), np.array([0.0, 0.0, lin[2]])
 
 
 def _move_sim_cursor(lin, rot, dt):
@@ -53,10 +85,17 @@ def _move_sim_cursor(lin, rot, dt):
     pos, wxyz = rr.get_sim_cursor_pose()
     pos = np.asarray(pos, dtype=float).reshape(3)
     r0 = R.from_quat(rr.wxyz_to_xyzw(wxyz))
-    d = np.asarray(lin, dtype=float) * float(_jog["lin_mps"]) * dt
+    hz, rest = _split_lin(lin)
+    k = float(_jog["lin_mps"]) * dt
+    d = rest * k
+    if hz is not None:
+        pos = pos + hz * k
     rv = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"]) * dt
     local = getattr(wp, "gizmo_space", "local") == "local"
-    if local:
+    if _jog["stick"] == "screen":
+        pos1 = pos + (r0.apply(d) if local else d)
+        r1 = R.from_rotvec(_screen_rot(rv)) * r0
+    elif local:
         pos1 = pos + r0.apply(d)
         r1 = r0 * R.from_rotvec(rv)
     else:
@@ -93,15 +132,14 @@ def _move_sim_cursor(lin, rot, dt):
 #   speedLine   TCP velocity (RobotArcs.SpeedLine)
 #   speedJoint  joint velocities toward the controller's IK of a pose a little
 #               ahead on the same twist (RobotArcs.SpeedJoint)
-#   auto        servoJoint, then speedLine if the arm does not move
 # Every speed command restarts the controller's move, so speedLine and
 # speedJoint are re-sent only when the sticks change (in steps of
 # REAL_STEP) or every REAL_KEEP_S; sent each tick they jitter in place.
 _target = {"mode": "sim", "error": "", "jogging": False}
-_real = {"setting": "auto", "method": "servoJoint", "ret": None, "q0": None,
+_real = {"method": "servoJoint", "ret": None, "q0": None,
          "cmd": 0.0, "moved": False, "checked": False,
          "sent": None, "sent_t": 0.0, "pose": None, "q": None}
-REAL_METHODS = ("auto", "servoJoint", "speedLine", "speedJoint")
+REAL_METHODS = ("servoJoint", "speedLine", "speedJoint")
 REAL_SPEED_T = 1.0  # s the controller keeps a speed without a newer one
 REAL_KEEP_S = 0.8   # re-send an unchanged speed this often
 REAL_STEP = 0.1     # stick change (of full tilt) that re-sends a speed
@@ -114,8 +152,10 @@ REAL_MAX_QD = 1.0   # rad/s, per joint, for speedJoint
 REAL_SERVO_LOOKAHEAD = 0.1
 REAL_SERVO_GAIN = 200
 REAL_SERVO_LEAD = 0.03
-# Commanded travel (m, or rad / 5) before deciding the arm is not following.
-REAL_CHECK_AFTER = 0.01
+# Commanded travel (m, or rad / 5) and time before saying the arm is not
+# following (the controller lags the command by a few tenths of a second).
+REAL_CHECK_AFTER = 0.03
+REAL_CHECK_S = 0.8
 
 
 def _set_target(mode):
@@ -138,16 +178,24 @@ def _set_target(mode):
 def _real_twist(lin, rot):
     """Stick values to a base-frame TCP velocity for speedLine. Local = the
     real TCP's axes (from its pose), Global = world axes."""
-    v = np.asarray(lin, dtype=float) * float(_jog["lin_mps"])
+    hz, rest = _split_lin(lin)
+    v = rest * float(_jog["lin_mps"])
     w = np.asarray(rot, dtype=float) * math.radians(_jog["rot_dps"])
+    to_base = rr._base_rot().inv()
     if getattr(wp, "gizmo_space", "local") == "local":
         pose = rr.robot.GetTcpPose()
         if pose is None:
             return None
         r = R.from_euler("xyz", [float(x) for x in list(pose)[3:6]])
     else:
-        r = rr._base_rot().inv()
-    return [float(x) for x in np.concatenate([r.apply(v), r.apply(w)])]
+        r = to_base
+    v = r.apply(v)
+    if hz is not None:
+        v = v + to_base.apply(hz * float(_jog["lin_mps"]))
+        w = to_base.apply(_screen_rot(w))
+    else:
+        w = r.apply(w)
+    return [float(x) for x in np.concatenate([v, w])]
 
 
 def _real_begin(bot):
@@ -160,14 +208,30 @@ def _real_begin(bot):
         print("real jog: prepare failed", e)
     q0 = bot.GetJoints()
     pose = bot.GetTcpPose()
-    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0,
+    _real.update(ret=None, cmd=0.0, moved=False, checked=False, q0=q0, t0=time.time(),
+                 blocked=_blocked(st),
                  sent=None, sent_t=0.0,
                  pose=[float(x) for x in list(pose)[:6]] if pose is not None else None,
                  q=[float(x) for x in list(q0)[:6]] if q0 is not None else None)
+    if _real["blocked"]:
+        _target["error"] = _real["blocked"]
+        print("real jog:", _real["blocked"], st)
+        return
     if _real["method"] == "servoJoint":
         ok = bot.ServoMode(True) if hasattr(bot, "ServoMode") else False
         st["servo_on"] = ok
     print("real jog: start with", _real["method"], st)
+
+
+def _blocked(st):
+    """Why the controller will not take a jog, from PrepareJog's state, or ""."""
+    safety = str(st.get("safety_mode", ""))
+    if safety and not safety.endswith("Normal") and not safety.endswith("ReducedMode"):
+        return "robot is in %s: clear it on the teach pendant" % safety.split(".")[-1]
+    mode = str(st.get("robot_mode", ""))
+    if mode and not mode.endswith("Running"):
+        return "robot is not running (%s)" % mode.split(".")[-1]
+    return ""
 
 
 def _ik_ahead(bot, pose, xd, dt, seed):
@@ -228,11 +292,11 @@ def _speed_joint(bot, xd):
 
 def _real_check(bot, xd, dt):
     """Once enough motion was asked for, check the TCP moved most of it; if
-    not, say so with the controller state, and in auto try speedLine."""
+    not, say so with the controller state."""
     if _real["checked"]:
         return
     _real["cmd"] += (np.linalg.norm(xd[:3]) + np.linalg.norm(xd[3:6]) / 5.0) * dt
-    if _real["cmd"] < REAL_CHECK_AFTER:
+    if _real["cmd"] < REAL_CHECK_AFTER or time.time() - _real["t0"] < REAL_CHECK_S:
         return
     _real["checked"] = True
     q = bot.GetJoints()
@@ -249,12 +313,6 @@ def _real_check(bot, xd, dt):
     st = bot.JogState() if hasattr(bot, "JogState") else {}
     print("real jog: %s sent (ret %s) but the arm did not move; controller %s"
           % (_real["method"], _real["ret"], st))
-    if _real["setting"] == "auto" and _real["method"] == "servoJoint":
-        _end_servo(bot)
-        _real["method"] = "speedLine"
-        _target["error"] = "servoJoint did not move the arm, trying speedLine"
-        _real_begin(bot)
-        return
     _target["error"] = "%s did not move the arm (ret %s): see the console" % (_real["method"], _real["ret"])
 
 
@@ -266,6 +324,8 @@ def _real_jog(lin, rot, dt=0.03):
     if not _target["jogging"]:
         _target["jogging"] = True
         _real_begin(bot)
+    if _real["blocked"]:
+        return False
     xd = _real_twist(lin, rot)
     if xd is None:
         return False
@@ -300,6 +360,8 @@ def _real_stop():
     _target["jogging"] = False
     bot = rr.robot
     if bot is None:
+        return
+    if _real.get("blocked"):
         return
     if _real["method"] == "servoJoint":
         # The arm stops on the last target; leave servo mode for other moves.
@@ -434,7 +496,8 @@ def _settings_payload():
         "hold_lin_mps": float(rr.HOLD_LIN_MPS),
         "deck_rot_dps": float(_jog["rot_dps"]),
         "deck_lin_mps": float(_jog["lin_mps"]),
-        "deck_real_jog": _real["setting"],
+        "deck_real_jog": _real["method"],
+        "deck_stick": _jog["stick"],
     }
 
 
@@ -541,7 +604,10 @@ def api_deck_settings():
         save["deck_lin_mps"] = _jog["lin_mps"]
     if data.get("deck_real_jog") in REAL_METHODS:
         _set_real_method(data.get("deck_real_jog"))
-        save["deck_real_jog"] = _real["setting"]
+        save["deck_real_jog"] = _real["method"]
+    if data.get("deck_stick") in STICK_FRAMES:
+        _jog["stick"] = data.get("deck_stick")
+        save["deck_stick"] = _jog["stick"]
     if save:
         webui.save_settings(save)
     mid = str(data.get("robot_model") or "").strip()
@@ -575,8 +641,8 @@ def _open_deck_ui(url="http://127.0.0.1:5000"):
 
 
 def _set_real_method(name):
-    _real["setting"] = name if name in REAL_METHODS else "auto"
-    _real["method"] = "servoJoint" if _real["setting"] == "auto" else _real["setting"]
+    # An older "auto" setting is servoJoint.
+    _real["method"] = name if name in REAL_METHODS else "servoJoint"
 
 
 def _load_deck_settings():
@@ -589,7 +655,8 @@ def _load_deck_settings():
         _jog["lin_mps"] = min(LIN_MPS_MAX, max(0.001, float(st.get("deck_lin_mps") or LIN_MPS_DEFAULT)))
     except Exception:
         _jog["lin_mps"] = LIN_MPS_DEFAULT
-    _set_real_method(st.get("deck_real_jog") or "auto")
+    _set_real_method(st.get("deck_real_jog"))
+    _jog["stick"] = st.get("deck_stick") if st.get("deck_stick") in STICK_FRAMES else "screen"
 
 
 if __name__ == "__main__":
