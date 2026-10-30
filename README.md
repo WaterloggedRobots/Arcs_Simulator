@@ -29,6 +29,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
   - [Offset](#offset)
   - [Collider](#collider)
 - [Miscellaneous features](#miscellaneous-features)
+- [Steam Deck edition](#steam-deck-edition)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
 - [Project layout](#project-layout)
@@ -325,6 +326,29 @@ Components in the properties panel are listed in the order they were added, newe
 
 ---
 
+## Steam Deck edition
+
+A stripped-down controller for running the real arm from a Steam Deck on Windows. Start it with `python backend/deck_webui.py` instead of `webui.py` (it runs the same backend, so don't run both at once).
+
+The page shows only the 3D viewer, the **Saved Points** list on the left (click one to move the sim cursor there), the **Hold to move** button bottom left (the real arm goes to the sim pose while it is held, and keeps following the sticks), and **Object Properties** on the right with the IK pose and joints of the sim cursor (editable) and the actual robot (read only, shown while connected). The top bar has **Axes Mode** (Local / Global) and **Settings** (robot IP, port, type, Hold to move speed, stick speed, rotation speed, real ramp time and the real jog command). There are no waypoints, bake, timeline, added objects or components, and nothing is autosaved.
+
+| Deck control | Action |
+|---|---|
+| Left stick | up = +x, left = +y (x / y of Axes Mode) |
+| L4 / L5 | +z / -z |
+| Right stick | left = +roll (about x), up = +pitch (about y) |
+| R4 / R5 | +yaw / -yaw (about z) |
+| X | switch the controller between the Sim bot and the Real bot (also the **Control** switch in the top bar) |
+| Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
+| R2 / L2 (or right pad click) | left / right click |
+| Left trackpad | scroll (zoom) |
+
+In **Real** control the sticks jog the real arm directly. Each jog first calls `RobotArcs.PrepareJog` (`startMove`, so a paused motion queue does not swallow the jog, servo mode off, speed fraction 100 %). The **Real jog command** setting picks `servoJoint` (servo mode, on its own thread at a fixed 20 ms with 1 ms Windows timers: each tick moves a target TCP pose one period along the ramped stick speed and sends the controller's IK of it with t = 20 ms; the target is held only if it gets 8 cm ahead of the arm), `speedLine` (TCP velocity) or `speedJoint` (joint velocities toward the controller's IK of a pose 0.25 s ahead). Each speed command restarts the controller's move, so speedLine and speedJoint are re-sent only when the sticks change by a tenth of full tilt or every 0.8 s (1 s timeout, `StopSpeed` on release). servoJoint is the default. Real jogs accelerate and decelerate: **Real ramp time** (default 0.5 s) is the time from stop to full stick speed, and the same rate eases the arm to a stop when you let go (servoJoint keeps streaming until the speed reaches zero; speedLine / speedJoint pass the matching acceleration to the controller). If the joints have not moved after about 3 cm of commanded travel the page says so, and a jog is refused while the robot is not Running or its safety mode is not Normal (for example a protective stop, which is cleared on the teach pendant). Return codes and the controller state (robot, safety and operational mode, runtime state) are printed as `real jog:` lines in the console; the sim bot snaps to the real arm when you switch to Real and when you let go. Real control needs a connected robot and drops back to Sim if it disconnects. Moves follow Axes Mode, which starts on Global (the robot base x / y / z). Local uses the tool's own axes: with the tool pointing down these are turned (tool x is base y and tool z is down), so the sticks seem swapped. While jogging, a `real jog:` line each second shows the sticks, the base-frame speed sent and, for servoJoint, how often the target waited for the arm or had no IK. Speeds are the *Stick speed* (default 0.1 m/s at full tilt, linear stick response) and *Rotation speed* settings, sim and real; a move with no IK solution is dropped and the panel says so.
+
+The controls come from [Steam Deck Tools](https://github.com/WaterloggedRobots/steam-deck-tools)' `SteamController.exe`, which needs its hidden **Arcs Deck** profile (a build from that repository that includes it). On start the app switches `SteamController.exe` to Arcs Deck and switches back to the previous profile on exit; if the app is killed, the profile turns itself off. The Deck reaches the app as an Xbox 360 pad over XInput (`backend/deck/pad.py`); the profile switch is in `backend/deck/steam_profile.py`.
+
+---
+
 ## Feature map
 
 | Function | What Sandbox provides |
@@ -373,6 +397,8 @@ Run the app with `python backend/webui.py`. Every file the app reads or writes i
 ```
 backend/                  everything needed to run the app
   webui.py                Flask web UI (entry point)
+  deck_webui.py           Steam Deck edition (entry point), templates/deck.html
+  deck/                   Steam Deck controls (XInput) and Steam Deck Tools profile switch
   app_paths.py            folder constants
   templates/index.html    the page
   cameras/                sony_liveview.py, libusb-1.0.dll (Sony camera support)

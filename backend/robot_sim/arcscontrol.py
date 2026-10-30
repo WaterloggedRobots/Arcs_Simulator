@@ -238,6 +238,84 @@ class RobotArcs:
         self.mc.clearPath()
         self.mc.startMove()
 
+    # Speed jogging (ARCS MotionControl speedLine / speedJoint). The arm keeps
+    # the commanded speed until a new one arrives, t runs out, or StopSpeed.
+    # Call again every control tick with a short t, so a lost caller stops it.
+    def PrepareJog(self):
+        """Before a speed jog: resume the motion queue (a stopMove from Hold to
+        move or a stop leaves it paused, and then speed commands are ignored),
+        leave servo mode and run at 100 % (the speed is in the command).
+        Returns the controller state as a dict, for the console."""
+        for name, call in (
+            ("startMove", lambda: self.mc.startMove()),
+            ("setServoMode", lambda: self.mc.setServoMode(False) if self.mc.isServoModeEnabled() else 0),
+            ("setSpeedFraction", lambda: self.mc.setSpeedFraction(1.0)),
+        ):
+            try:
+                call()
+            except Exception as e:
+                print("arcscontrol: jog prep", name, "failed", e)
+        return self.JogState()
+
+    def JogState(self):
+        """Robot / safety / operational mode, runtime state, servo mode and
+        speed fraction; any that cannot be read are left out."""
+        out = {}
+        reads = (
+            ("robot_mode", lambda: self.interface.getRobotState().getRobotModeType()),
+            ("safety_mode", lambda: self.interface.getRobotState().getSafetyModeType()),
+            ("operational_mode", lambda: self.interface.getRobotManage().getOperationalMode()),
+            ("runtime", lambda: self.client.getRuntimeMachine().getStatus()),
+            ("servo_mode", lambda: self.mc.isServoModeEnabled()),
+            ("speed_fraction", lambda: self.mc.getSpeedFraction()),
+            ("exec_id", lambda: self.mc.getExecId()),
+        )
+        for key, call in reads:
+            try:
+                out[key] = str(call())
+            except Exception:
+                pass
+        return out
+
+    def SpeedLine(self, xd, acc=0.5, t=0.2):
+        """TCP velocity [vx, vy, vz, wx, wy, wz] (m/s, rad/s) in the base frame."""
+        return self.mc.speedLine([float(v) for v in xd[:6]], float(acc), float(t))
+
+    def SpeedJoint(self, qd, acc=1.0, t=0.2):
+        """Joint velocities (rad/s), acc in rad/s^2."""
+        return self.mc.speedJoint([float(v) for v in qd[:6]], float(acc), float(t))
+
+    # Servo streaming (ARCS setServoMode / servoJoint): send a joint target
+    # every t seconds; the controller leaves servo mode after ~5 t without one.
+    def ServoMode(self, on, timeout=0.5):
+        """Enter / leave servo mode; True once the controller reports it."""
+        try:
+            self.mc.setServoMode(bool(on))
+            t0 = time.time()
+            while bool(self.mc.isServoModeEnabled()) != bool(on):
+                if time.time() - t0 > timeout:
+                    print("arcscontrol: servo mode", on, "not confirmed")
+                    return False
+                time.sleep(0.01)
+            return True
+        except Exception as e:
+            print("arcscontrol: servo mode", on, "failed", e)
+            return False
+
+    def ServoJoint(self, q, t=0.03, lookahead=0.1, gain=200):
+        return self.mc.servoJoint([float(v) for v in q[:6]], 0.0, 0.0, float(t), float(lookahead), float(gain))
+
+    def StopSpeed(self, acc=1.0, rot_acc=2.0, joint_acc=3.0):
+        """End a speed jog: decelerate (line and joint), no clearPath."""
+        try:
+            self.mc.stopLine(float(acc), float(rot_acc))
+        except Exception:
+            pass
+        try:
+            self.mc.stopJoint(float(joint_acc))
+        except Exception:
+            pass
+
     def Close(self):
         c = self.client
         self._drop_client()
@@ -259,7 +337,7 @@ class RobotArcs:
         else:
             return -1
 
-    def GetIK(self, targetPose, seed=None):
+    def GetIK(self, targetPose, seed=None, verbose=True):
         if not self.hasConnected():
             return None
         pose = [float(v) for v in targetPose]
@@ -273,7 +351,8 @@ class RobotArcs:
         except Exception:
             self._drop_client()
             return None
-        print("IK code", code, "q", q)
+        if verbose:
+            print("IK code", code, "q", q)
         if int(code) != 0:
             return None
         q = [float(v) for v in q]
