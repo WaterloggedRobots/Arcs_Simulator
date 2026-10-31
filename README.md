@@ -330,6 +330,19 @@ Components in the properties panel are listed in the order they were added, newe
 
 A stripped-down controller for running the real arm from a Steam Deck on Windows. Start it with `python backend/deck_webui.py` instead of `webui.py` (it runs the same backend, so don't run both at once).
 
+### ArcsDeck.exe (packaged build)
+
+The Deck edition also ships as one Windows file, **ArcsDeck.exe**, with Python, every package, the robot models, the page and default settings inside it; nothing else needs installing. On start it shows the preloader (`backend/deck/preloader.png`) with the loading log in black on the left of its white strip, for at least 4 seconds, then opens the Deck page in its own window (Edge WebView2, part of Windows 10 / 11). Closing the window quits the app and gives the Steam Deck its previous controller profile back. `ArcsDeck.exe --console` also opens a console window with the full log (`real jog:` lines and so on).
+
+Nothing is saved between runs: the .exe unpacks to a temporary folder that is deleted when it exits, so Settings changes (robot IP, speeds) last for that run only. Defaults, including the Saved Points list, come from `user_files/settings.json` at build time.
+
+To build it:
+
+- **On GitHub:** every push to a `steamdeck/...` branch that touches the app runs the *Build ArcsDeck.exe* workflow (it can also be started by hand from the Actions tab); download `ArcsDeck` from the run's Artifacts.
+- **On a Windows PC:** install Python 3.12 from python.org (pyaubo-sdk has no wheels for newer versions) and run `packaging\deck\build_deck.bat`. It makes a build venv (`.venv-deck-build`) and writes `dist\ArcsDeck.exe`.
+
+`python backend/deck_app.py` runs the same launcher from source (preloader and app window; needs `pip install pywebview pillow`). The packaging lives in `packaging/deck/` (`ArcsDeck.spec` for PyInstaller, `requirements-build.txt`, `build_deck.bat`).
+
 The page shows only the 3D viewer, the **Saved Points** list on the left (click one to move the sim cursor there), the **Hold to move** button bottom left (the real arm goes to the sim pose while it is held, and keeps following the sticks), and **Object Properties** on the right with the IK pose and joints of the sim cursor (editable) and the actual robot (read only, shown while connected). The top bar has **Axes Mode** (Local / Global) and **Settings** (robot IP, port, type, Hold to move speed, stick speed, rotation speed, real ramp time and the real jog command). There are no waypoints, bake, timeline, added objects or components, and nothing is autosaved.
 
 | Deck control | Action |
@@ -398,6 +411,7 @@ Run the app with `python backend/webui.py`. Every file the app reads or writes i
 backend/                  everything needed to run the app
   webui.py                Flask web UI (entry point)
   deck_webui.py           Steam Deck edition (entry point), templates/deck.html
+  deck_app.py             Steam Deck edition as a desktop app (ArcsDeck.exe entry point: preloader + window)
   deck/                   Steam Deck controls (XInput) and Steam Deck Tools profile switch
   app_paths.py            folder constants
   templates/index.html    the page
@@ -420,6 +434,7 @@ user_files/               ships with the app, editable by the user
   exports/                export.json, bake_overspeed.csv / .xlsx
   recordings/             camera recordings
   imported_meshes/        meshes added with Import mesh
+packaging/deck/           ArcsDeck.exe build: PyInstaller spec, build requirements, build_deck.bat
 docs/                     not needed at runtime
   examples/cam_scripts/   example camera scripts (YOLO / RealSense), models/ holds yolov8n.pt
   CameraRemoteCommand-2.00.02/   Sony PTP SDK reference and examples

@@ -768,23 +768,37 @@ def _load_deck_settings():
     _set_real_method(st.get("deck_real_jog"))
 
 
-if __name__ == "__main__":
+def boot():
+    """Load settings, start the Viser viewer, the Steam Deck profile, the pad
+    and the hold watchdog. Returns the Viser port. The packaged launcher
+    (deck_app.py) calls this behind its preloader."""
     print("Arcs Deck", DECK_VERSION, "| pad", pad.VERSION, "| sticks:", pad.MAPPING)
     webui.apply_settings(webui.load_settings())
     _load_deck_settings()
     # Sticks move along the robot base x / y / z until Axes Mode is switched to
     # Local (the tool's own axes, which point elsewhere when the tool is turned).
     wp.gizmo_space = "global"
+    print("Starting 3D viewer...")
     webui.start_viewer_thread()
     port = webui._wait_viewer()
     print("Viser    http://127.0.0.1:%s (iframe)" % port)
     steam_profile.activate()
     pad.start(_jog_step, _on_pad_button)
     threading.Thread(target=_hold_watchdog, daemon=True, name="deck-hold").start()
+    return port
+
+
+def serve():
+    """Run the Flask app on 127.0.0.1:5000 (blocks)."""
     print("Deck UI  http://127.0.0.1:5000")
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True,
+            request_handler=webui.QuietHandler)
+
+
+if __name__ == "__main__":
+    boot()
     threading.Thread(target=_open_deck_ui, daemon=True).start()
     try:
-        app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True,
-                request_handler=webui.QuietHandler)
+        serve()
     finally:
         steam_profile.restore()

@@ -1913,7 +1913,16 @@ def _resolve_cv_script(cam):
 
 def _tick_cv_cameras():
     global _cam_targets
-    import cv2
+    try:
+        import cv2  # noqa: F401  (camera scripts and Sony live view need it)
+    except ImportError:
+        # Without OpenCV (e.g. the Deck .exe) only flag cv cameras, instead
+        # of failing (and logging) every tick.
+        for obj in list(wp.scene_objects):
+            cam = obj.get("camera") or {}
+            if cam and str(cam.get("type") or "sim") in ("cv", "opencv"):
+                cam["error"] = "OpenCV (cv2) is not installed"
+        return
     _tick_sony_cameras()
     seen = {}
     for obj in list(wp.scene_objects):
