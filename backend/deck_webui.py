@@ -642,6 +642,12 @@ def api_deck_state():
     })
 
 
+@app.route("/api/deck/profile/retry", methods=["POST"])
+def api_deck_profile_retry():
+    """Retry on the controller banner: switch to the Arcs Deck profile again."""
+    return jsonify({"ok": True, "steam_profile": steam_profile.activate()})
+
+
 @app.route("/api/deck/move", methods=["POST"])
 def api_deck_move():
     """Hold to move, run here and not on the viewer queue, so the page hears
@@ -783,6 +789,7 @@ def boot():
     port = webui._wait_viewer()
     print("Viser    http://127.0.0.1:%s (iframe)" % port)
     steam_profile.activate()
+    steam_profile.start_watch()
     pad.start(_jog_step, _on_pad_button)
     threading.Thread(target=_hold_watchdog, daemon=True, name="deck-hold").start()
     return port

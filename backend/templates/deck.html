@@ -226,6 +226,19 @@
     .keys { margin-top: 12px; color: var(--muted); font-size: 11px; line-height: 1.6; }
     .keys b { color: var(--text); font-weight: 600; }
     #profileMsg { color: var(--muted); font-size: 11px; margin-top: 8px; }
+    #profileBanner {
+      position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+      z-index: 5; max-width: min(720px, calc(100% - 16px));
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px 8px 12px; border-radius: 6px;
+      background: #3d1f1f; color: #f6c2b6; border: 1px solid var(--coral);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+      font-size: 12px; line-height: 1.35;
+    }
+    #profileBanner[hidden] { display: none; }
+    #profileBanner b { color: #fff; }
+    #profileBanner button { flex: none; }
+    #profileBanner .x { background: transparent; border: 0; color: inherit; font-size: 16px; padding: 0 4px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -260,6 +273,11 @@
       </div>
     </aside>
     <div class="viewer-wrap">
+      <div id="profileBanner" role="alert" hidden>
+        <div><b id="profileTitle"></b> <span id="profileText"></span></div>
+        <button type="button" id="profileRetry">Retry</button>
+        <button type="button" class="x" id="profileHide" title="Hide until this changes">&times;</button>
+      </div>
       <iframe src="{{ viser_url }}" title="Viser"></iframe>
       <aside class="props">
         <h2>Object Properties</h2>
@@ -418,11 +436,13 @@
 
       const pad = d.pad || {};
       const prof = d.steam_profile || {};
+      lastProfile = prof;
       const pp = $("padPill");
       pp.textContent = pad.connected ? (prof.active ? "Controller: Arcs Deck" : "Controller connected") : "No controller";
       pp.className = "pill " + (pad.connected ? "ok" : "bad");
       pp.title = prof.message || pad.error || "";
       $("profileMsg").textContent = prof.message ? "Steam controller profile: " + prof.message : "";
+      renderProfileBanner(prof);
 
       const btn = $("moveRobotPose");
       btn.disabled = !online && !moveHolding;
@@ -432,6 +452,49 @@
       if (d.target_error) moveMsg("Real control: " + d.target_error, true);
       renderPoints(d.points);
     }
+
+    // Banner while the Steam Deck controls are not on the Arcs Deck profile:
+    // what is wrong and what still works.
+    const PROFILE_PROBLEMS = {
+      not_running: ["Deck controls are off:",
+        "Steam Deck Tools (SteamController.exe) is not running, so the sticks and back buttons do nothing. " +
+        "Start Steam Controller; the app switches to the Arcs Deck profile by itself. The touchscreen still works."],
+      no_profile: ["Wrong Steam Deck Tools build:",
+        "this SteamController.exe has no \"Arcs Deck\" profile. Controls follow its current profile ({cur}): " +
+        "in X360 the sticks jog but up / down and yaw sit on L1 / R1 and L2 / R2, in Desktop the sticks do nothing. " +
+        "Install the Steam Deck Tools build with the Arcs Deck profile, then Retry."],
+      lost: ["Deck controls changed:",
+        "Steam Controller switched to the {cur} profile, so the sticks and back buttons may not move the arm. Retry switches back to Arcs Deck."],
+    };
+    let profileHiddenKey = "";
+    let lastProfile = {};
+
+    function profileKey(prof) {
+      return (prof.problem || "") + "|" + (prof.current || "");
+    }
+
+    function renderProfileBanner(prof) {
+      const msg = PROFILE_PROBLEMS[prof.problem || ""];
+      const key = profileKey(prof);
+      if (key !== profileHiddenKey) profileHiddenKey = "";
+      $("profileBanner").hidden = !msg || profileHiddenKey === key;
+      if (!msg) return;
+      $("profileTitle").textContent = msg[0];
+      $("profileText").textContent = msg[1].replace("{cur}", prof.current || "unknown");
+    }
+
+    $("profileHide").addEventListener("click", () => {
+      profileHiddenKey = profileKey(lastProfile);
+      $("profileBanner").hidden = true;
+    });
+    $("profileRetry").addEventListener("click", () => {
+      const b = $("profileRetry");
+      b.disabled = true;
+      b.textContent = "Retrying...";
+      fetch("/api/deck/profile/retry", { method: "POST" })
+        .catch(() => {})
+        .finally(() => { b.disabled = false; b.textContent = "Retry"; });
+    });
 
     function poll() {
       fetch("/api/deck/state")

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import threading
 import time
 
 PROFILE = "Arcs Deck"
@@ -26,7 +27,13 @@ _DES = (128 + 2048, 128)
 # Struct size rounded up to SharedData's 256-byte alignment.
 SHARED_SIZE = ((128 + 2048 + 128) * 2 + 255) // 256 * 256
 
-_state = {"mutex": None, "previous": None, "active": False, "message": ""}
+# problem: "" (fine), "not_windows", "not_running" (SteamController.exe is
+# not running), "no_profile" (a build without Arcs Deck), "lost" (it switched
+# to another profile while the app runs). The Deck page shows it as a banner.
+_state = {"mutex": None, "previous": None, "active": False, "message": "",
+          "problem": "", "current": ""}
+_lock = threading.RLock()
+WATCH_S = 3.0
 
 
 def _is_windows():
@@ -114,35 +121,81 @@ def _drop_mutex():
         pass
 
 
+def _set(problem, message, current=""):
+    _state["problem"] = problem
+    _state["message"] = message
+    _state["current"] = current
+    print("steam profile:", message)
+
+
 def activate():
-    """Switch to the Arcs Deck profile. Returns a status dict."""
+    """Switch to the Arcs Deck profile. Returns a status dict. Safe to call
+    again (Retry on the Deck page, the watcher)."""
+    with _lock:
+        if not _is_windows():
+            _set("not_windows", "not Windows: controller profile not switched")
+            return status()
+        prev = current_profile()
+        if not prev:
+            _set("not_running", "SteamController.exe (Steam Deck Tools) is not running")
+            return status()
+        if prev != PROFILE:
+            _state["previous"] = prev
+        if not _state.get("mutex"):
+            _state["mutex"] = _hold_mutex()
+            # It checks the mutex every 0.5 s before the profile becomes selectable.
+            time.sleep(0.6)
+        if _select(PROFILE):
+            _state["active"] = True
+            _set("", "switched from %s" % (_state["previous"] or "?"), PROFILE)
+            _install_exit_hooks()
+        else:
+            _state["active"] = False
+            cur = current_profile()
+            _set("no_profile",
+                 "this SteamController.exe has no %r profile (current profile: %s). Install the "
+                 "Steam Deck Tools build with the Arcs Deck profile." % (PROFILE, cur or "?"), cur)
+            _drop_mutex()
+        return status()
+
+
+def _check():
+    """One watcher pass: notice SteamController.exe starting later, or
+    leaving the Arcs Deck profile."""
+    if not _lock.acquire(blocking=False):
+        return
+    try:
+        cur = current_profile()
+        if _state["active"]:
+            if not cur:
+                _state["active"] = False
+                _set("not_running", "SteamController.exe (Steam Deck Tools) stopped")
+            elif cur != PROFILE:
+                _state["active"] = False
+                _set("lost", "SteamController.exe switched to %r" % cur, cur)
+        elif _state["problem"] == "not_running" and cur:
+            activate()  # it was started after the app
+        elif _state["problem"] == "lost" and cur == PROFILE:
+            _state["active"] = True
+            _set("", "back on %s" % PROFILE, PROFILE)
+    finally:
+        _lock.release()
+
+
+def start_watch():
+    """Check the profile every WATCH_S seconds (Windows only)."""
     if not _is_windows():
-        _state["message"] = "not Windows: controller profile not switched"
-        print("steam profile:", _state["message"])
-        return status()
-    prev = current_profile()
-    if not prev:
-        _state["message"] = "SteamController.exe is not running: start it (Steam Deck Tools) for the deck controls"
-        print("steam profile:", _state["message"])
-        return status()
-    if prev != PROFILE:
-        _state["previous"] = prev
-    _state["mutex"] = _hold_mutex()
-    # It checks the mutex every 0.5 s before the profile becomes selectable.
-    time.sleep(0.6)
-    if _select(PROFILE):
-        _state["active"] = True
-        _state["message"] = "switched from %s" % (_state["previous"] or "?")
-        _install_exit_hooks()
-    else:
-        have = selectable_profiles()
-        _state["message"] = (
-            "SteamController.exe has no %r profile (have: %s). Install the Steam Deck Tools build "
-            "with the Arcs Deck profile, and pick 'Use X360 Controller with Steam'." % (PROFILE, ", ".join(have) or "none")
-        )
-        _drop_mutex()
-    print("steam profile:", _state["message"])
-    return status()
+        return
+
+    def loop():
+        while True:
+            time.sleep(WATCH_S)
+            try:
+                _check()
+            except Exception as e:
+                print("steam profile: watch failed", e)
+
+    threading.Thread(target=loop, daemon=True, name="steam-profile").start()
 
 
 def restore():
@@ -167,6 +220,8 @@ def status():
         "active": bool(_state.get("active")),
         "previous": _state.get("previous"),
         "message": _state.get("message") or "",
+        "problem": _state.get("problem") or "",
+        "current": _state.get("current") or "",
     }
 
 

@@ -35,12 +35,14 @@ PRELOADER = HERE / "deck" / "preloader.png"
 # Preloader layout as fractions of preloader.png (1488 x 1025): the white
 # strip starts at y = 885; the log sits left in it (x = 33 lines up with the
 # "AUBO" title), clear of "v deck.x" at the bottom right.
-SPLASH_WIDTH = 840
+SPLASH_WIDTH = 504
 LOG_X = 33 / 1488
 LOG_BOTTOM = 1012 / 1025
 LOG_RIGHT = 1300 / 1488
-LOG_LINES = 4
-LOG_FONT = ("Segoe UI", 9) if os.name == "nt" else ("DejaVu Sans", 9)
+# The strip is about 47 px tall at this width: 3 lines of 10 px text.
+LOG_LINES = 3
+# Negative = pixels (Tk), so the text fits the strip at any DPI setting.
+LOG_FONT = ("Segoe UI", -10) if os.name == "nt" else ("DejaVu Sans", -10)
 
 
 def splash_text_pos(width, height):

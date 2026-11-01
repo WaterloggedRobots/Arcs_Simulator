@@ -360,6 +360,8 @@ In **Real** control the sticks jog the real arm directly. Each jog first calls `
 
 The controls come from [Steam Deck Tools](https://github.com/WaterloggedRobots/steam-deck-tools)' `SteamController.exe`, which needs its hidden **Arcs Deck** profile (a build from that repository that includes it). On start the app switches `SteamController.exe` to Arcs Deck and switches back to the previous profile on exit; if the app is killed, the profile turns itself off. The Deck reaches the app as an Xbox 360 pad over XInput (`backend/deck/pad.py`); the profile switch is in `backend/deck/steam_profile.py`.
 
+If the controls are not on the Arcs Deck profile, a red banner over the 3D view says why and what still works: **Steam Deck Tools is not running** (sticks and back buttons do nothing; the app switches over by itself once Steam Controller starts), **wrong Steam Deck Tools build** (no Arcs Deck profile: in X360 the sticks still jog but up / down and yaw sit on L1 / R1 and L2 / R2, in Desktop the sticks do nothing), or **the profile was changed** while the app runs. **Retry** tries the switch again; the cross hides the banner until the problem changes. The profile is checked every 3 seconds.
+
 ---
 
 ## Feature map
