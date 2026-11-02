@@ -29,6 +29,7 @@ import arms
 import robot_runtime as rr
 import robot_sim_run as viewer_main
 import waypoints as wp
+import gamepad
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
@@ -609,7 +610,8 @@ def deck_index():
     return render_template("deck.html", viser_url="http://127.0.0.1:%s" % port)
 
 
-app.view_functions["index"] = deck_index
+# The Deck page replaces the sandbox's "/" in boot(), not on import: the
+# sandbox imports this module for its game controller (start_controller).
 
 
 @app.route("/api/deck/state")
@@ -733,6 +735,46 @@ def api_deck_settings():
     return jsonify({"ok": True, "settings": _settings_payload()})
 
 
+@app.route("/api/controller", methods=["GET", "POST"])
+def api_controller():
+    """Sandbox game controller (gamepad.py): the device, which bot it drives
+    and the jog settings. POST {target: "sim" | "real" | "toggle"} switches."""
+    error = ""
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        want = str(data.get("target") or "toggle")
+        if want == "toggle":
+            want = "sim" if _target["mode"] == "real" else "real"
+        with arms.LOCK:
+            arms.ensure_active_loaded()
+            _set_target(want)
+        error = _target["error"]
+    return jsonify({
+        "ok": not error,
+        "started": bool(_controller["started"]),
+        "controller": gamepad.status(),
+        "target": _target["mode"],
+        "error": error or _target["error"],
+        "ik_fail": bool(_jog["ik_fail"]),
+        "settings": _settings_payload(),
+    })
+
+
+_controller = {"started": False}
+
+
+def start_controller():
+    """Sandbox (webui.py): jog with an Xbox / PlayStation controller through
+    the same sim / real jog as the Deck (L1 / L2 and R1 / R2 instead of the
+    Deck's back buttons). Speeds are the Deck's settings."""
+    if _controller["started"]:
+        return
+    _controller["started"] = True
+    _load_deck_settings()
+    print("controller:", gamepad.VERSION, "|", gamepad.MAPPING)
+    gamepad.start(_jog_step, _on_pad_button)
+
+
 def _open_deck_ui(url="http://127.0.0.1:5000"):
     """Open the page as an app window (Edge / Chrome --app): no tabs, no Back,
     so a right-drag Back gesture cannot leave the page. Else the default browser."""
@@ -779,6 +821,7 @@ def boot():
     and the hold watchdog. Returns the Viser port. The packaged launcher
     (deck_app.py) calls this behind its preloader."""
     print("Arcs Deck", DECK_VERSION, "| pad", pad.VERSION, "| sticks:", pad.MAPPING)
+    app.view_functions["index"] = deck_index
     webui.apply_settings(webui.load_settings())
     _load_deck_settings()
     # Sticks move along the robot base x / y / z until Axes Mode is switched to

@@ -29,6 +29,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
   - [Offset](#offset)
   - [Collider](#collider)
 - [Miscellaneous features](#miscellaneous-features)
+- [Game controller (Xbox / PlayStation)](#game-controller-xbox--playstation)
 - [Steam Deck edition](#steam-deck-edition)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
@@ -326,7 +327,28 @@ Components in the properties panel are listed in the order they were added, newe
 
 ---
 
-## Steam Deck edition
+## Game controller (Xbox / PlayStation)
+
+The sandbox can jog the arm with an Xbox or PlayStation (4 / 5) controller connected to the PC it runs on, the same way as the Steam Deck edition. Nothing to set up: the first controller found is used, and it can be plugged in or turned on at any time. The controls are the Deck's, with the shoulder buttons in place of the Deck's back buttons:
+
+| Control | Xbox | PlayStation | Action |
+|---|---|---|---|
+| Left stick | | | up = +x, left = +y |
+| L1 / L2 | LB / LT | L1 / L2 | +z / -z |
+| Right stick | | | left = +roll (about x), up = +pitch (about y) |
+| R1 / R2 | RB / RT | R1 / R2 | +yaw / -yaw (about z) |
+| X | X | Square | switch the controller between the Sim bot and the Real bot |
+
+The top right of the 3D view shows a **Controller** Sim / Real switch (the same as the X button) and the controller in use, for example *Xbox Wireless Controller · Xbox Series X|S* or *PS4 Controller · PS4 (DualShock 4 v2)*, or a warning (no controller, no IK solution, robot not connected). **Preferences > Controller** names the device (with its USB ids), lists the buttons with that controller's own labels, and holds the speeds, shared with the Steam Deck edition: **Stick speed**, **Rotation speed**, **Real ramp time** and **Real jog command**. Sim jogging moves the sim cursor along Axes Mode; Real jogging moves the real arm directly, exactly as on the Deck (see below).
+
+Controllers are read through SDL (the `pygame` package, in `requirements.txt`), which knows Xbox, PlayStation and most other pads and maps them all to the same button positions. Without pygame only Xbox (XInput) controllers work. The code is `backend/gamepad.py` (device, mapping) and `start_controller()` in `backend/deck_webui.py` (the Deck's jog).
+
+**Connecting the controller to the PC**
+
+- **USB cable:** works with any Xbox One / Series or PS4 / PS5 controller. Use a data cable (some charge-only cables do not work).
+- **Bluetooth:** Xbox controllers with Bluetooth (Xbox One S and later, and every Xbox Series controller: those have a USB-C port) pair like any Bluetooth device. Hold the small pair button on top until the Xbox button flashes fast, then add it in Windows Settings > Bluetooth. PS4: hold Share + PS until the light bar flashes; PS5: Create + PS.
+- **Xbox Wireless Adapter for Windows (the dongle):** controllers are not tied to one adapter; any Xbox One / Series controller can be paired to a new adapter (press the adapter's button, then the controller's pair button). A used controller re-pairs the same way, which also replaces whatever it was paired with before. A controller paired to the adapter or an Xbox console again needs a new pairing for Bluetooth, and the other way round.
+
 
 A stripped-down controller for running the real arm from a Steam Deck on Windows. Start it with `python backend/deck_webui.py` instead of `webui.py` (it runs the same backend, so don't run both at once).
 
@@ -414,6 +436,7 @@ backend/                  everything needed to run the app
   webui.py                Flask web UI (entry point)
   deck_webui.py           Steam Deck edition (entry point), templates/deck.html
   deck_app.py             Steam Deck edition as a desktop app (ArcsDeck.exe entry point: preloader + window)
+  gamepad.py              Xbox / PlayStation controller for the sandbox (SDL via pygame, XInput fallback)
   deck/                   Steam Deck controls (XInput) and Steam Deck Tools profile switch
   app_paths.py            folder constants
   templates/index.html    the page

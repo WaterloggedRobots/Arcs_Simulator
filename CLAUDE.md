@@ -24,6 +24,13 @@ Notes for working on this repo. The README is the user manual (features, control
 - **Version**: `DECK_VERSION` in `deck_webui.py` and `VERSION` in `deck/pad.py` (also the `# version:` first line of `deck_webui.py`), shown in Settings and printed on start. Bump both together for a Deck feature change; commits are titled `Deck 1.x: ...`. `deck/preloader.png` has the version drawn on it ("v deck.1.8") and must be re-exported by hand when it changes.
 - Nothing is autosaved in the Deck edition.
 
+## Game controller in the sandbox
+
+- `backend/gamepad.py` reads one Xbox / PlayStation / other pad through SDL2 (`pygame._sdl2.controller`, `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` so it reads while the browser has focus), falling back to XInput (`deck/pad.py`). `identify()` names the family / type from the SDL GUID's USB vendor and product ids. `map_controls()` is the Deck's mapping with L1 / L2 and R1 / R2 for L4 / L5 and R4 / R5; X is the west face button (PlayStation Square).
+- `webui.py` calls `deck_webui.start_controller()` on start, so the sandbox uses the Deck's jog engine (`_jog_step`, real jog, Sim / Real target) and settings (`deck_lin_mps`, `deck_rot_dps`, `deck_ramp_s`, `deck_real_jog`). Importing `deck_webui` must stay side-effect free for the sandbox: the Deck page replaces `/` only in `deck_webui.boot()`.
+- `/api/controller` (GET status, POST `{target}`) feeds the Controller row in the 3D view's top-right box and Preferences > Controller. pygame is excluded from ArcsDeck.exe (the Deck uses XInput only).
+- No controller can be tested in the cloud container: check `identify()` / `map_controls()` directly and the UI with no device.
+
 ## ArcsDeck.exe (packaging/deck)
 
 - PyInstaller one-file build: `packaging/deck/ArcsDeck.spec`, deps in `packaging/deck/requirements-build.txt`, Windows script `packaging/deck/build_deck.bat` (venv `.venv-deck-build`, output `dist/ArcsDeck.exe`). CI: `.github/workflows/build-deck.yml` (windows-latest, Python 3.12, on push to `steamdeck/**` or by hand; the exe is the `ArcsDeck` artifact).

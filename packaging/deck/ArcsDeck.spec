@@ -56,7 +56,7 @@ for pkg in ("skrobot", "trimesh", "pyaubo_sdk", "webview"):
 
 # Features the Deck page does not have (cameras, bake reports, file dialogs
 # are lazy imports): keep them out of the .exe.
-excludes = ["cv2", "pandas", "pygrabber", "usb", "matplotlib", "IPython",
+excludes = ["cv2", "pandas", "pygrabber", "usb", "matplotlib", "IPython", "pygame",
             "jupyter", "notebook", "pytest"]
 
 a = Analysis(
