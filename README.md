@@ -352,7 +352,6 @@ The page shows only the 3D viewer, the **Saved Points** list on the left (click 
 | Right stick | left = +roll (about x), up = +pitch (about y) |
 | R4 / R5 | +yaw / -yaw (about z) |
 | X | switch the controller between the Sim bot and the Real bot (also the **Control** switch in the top bar) |
-| D-pad | orbit the 3D view around the arm: left / right circle around it, up / down move the view higher / lower (looking more from above / below) |
 | Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
 | R2 / L2 (or right pad click) | left / right click |
 | Left trackpad | scroll (zoom) |

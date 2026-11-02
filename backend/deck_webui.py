@@ -1,4 +1,4 @@
-# version: deck-1.9 (2026-11-02)
+# version: deck-1.8 (2026-10-29)
 """Steam Deck edition: a stripped-down controller for the real arm.
 
 Start with `python backend/deck_webui.py` (instead of webui.py). It runs the
@@ -12,7 +12,6 @@ and back buttons then jog the sim cursor (deck/pad.py).
 """
 from __future__ import annotations
 
-import contextlib
 import math
 import os
 import subprocess
@@ -33,7 +32,7 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
-DECK_VERSION = "deck-1.9"
+DECK_VERSION = "deck-1.8"
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1
@@ -679,72 +678,6 @@ def api_deck_target():
     return jsonify({"ok": not _target["error"], "target": mode, "error": _target["error"]})
 
 
-# D-pad: orbit the 3D view around the arm (degrees per second).
-ORBIT_YAW_DPS = 60.0
-ORBIT_PITCH_DPS = 40.0
-ORBIT_PITCH_LIMIT = 85.0
-ORBIT_MIN_DIST = 0.2
-# While the D-pad stays held, go on from the pose set last: the browser reports
-# the camera back with a delay, so reading it every poll would lose steps.
-ORBIT_KEEP_S = 0.3
-_orbit = {}  # client id -> (time, position, look_at)
-
-
-def _view_clients():
-    """The Viser clients showing the world (not camera previews)."""
-    srv = getattr(getattr(rr, "viewer", None), "_server", None)
-    if srv is None:
-        return []
-    try:
-        clients = dict(srv.get_clients())
-    except Exception:
-        return []
-    world = [clients[k] for k in (getattr(rr, "_world_cids", None) or set()) if k in clients]
-    return world or list(clients.values())[:1]
-
-
-def _orbit_view(x, y, dt):
-    """D-pad held: turn the camera around the arm. x = right - left circles
-    it around the arm's base (right moves the camera to its right), y = up -
-    down raises / lowers it. The camera looks at the base, at the height it
-    was looking at, and keeps its distance."""
-    try:
-        with arms.LOCK:
-            arms.ensure_active_loaded()
-            base, _ = rr.arm_base_pose()
-        base = np.asarray(base, dtype=float).reshape(3)
-    except Exception:
-        base = np.zeros(3)
-    now = time.time()
-    for client in _view_clients():
-        try:
-            cam = client.camera
-            cid = getattr(client, "client_id", id(client))
-            last = _orbit.get(cid)
-            if last is not None and now - last[0] < ORBIT_KEEP_S:
-                pos, look = last[1], last[2]
-            else:
-                pos = np.asarray(cam.position, dtype=float).reshape(3)
-                look = np.asarray(cam.look_at, dtype=float).reshape(3)
-            centre = np.array([base[0], base[1], look[2]])
-            d = pos - centre
-            dist = max(ORBIT_MIN_DIST, float(np.linalg.norm(d)))
-            yaw = math.atan2(d[1], d[0]) + math.radians(ORBIT_YAW_DPS * dt) * x
-            pitch = math.atan2(d[2], math.hypot(d[0], d[1])) + math.radians(ORBIT_PITCH_DPS * dt) * y
-            lim = math.radians(ORBIT_PITCH_LIMIT)
-            pitch = max(-lim, min(lim, pitch))
-            new = centre + dist * np.array([math.cos(pitch) * math.cos(yaw),
-                                            math.cos(pitch) * math.sin(yaw),
-                                            math.sin(pitch)])
-            atomic = getattr(client, "atomic", None)
-            with (atomic() if atomic else contextlib.nullcontext()):
-                cam.position = tuple(float(v) for v in new)
-                cam.look_at = tuple(float(v) for v in centre)
-            _orbit[cid] = (now, new, centre)
-        except Exception as e:
-            print("deck: orbit view failed", e)
-
-
 def _on_pad_button(name):
     if name == "X":
         with arms.LOCK:
@@ -857,7 +790,7 @@ def boot():
     print("Viser    http://127.0.0.1:%s (iframe)" % port)
     steam_profile.activate()
     steam_profile.start_watch()
-    pad.start(_jog_step, _on_pad_button, _orbit_view)
+    pad.start(_jog_step, _on_pad_button)
     threading.Thread(target=_hold_watchdog, daemon=True, name="deck-hold").start()
     return port
 
