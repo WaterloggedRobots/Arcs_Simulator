@@ -1,17 +1,18 @@
 """Collider component: sphere / cube collider boxes on scene objects, and one
-robot-shaped collider on the sim cursor.
+robot-shaped collider on the Aubo Arm (sim_bot, the sim robot's base).
 
 Scene objects hold a list of collider boxes, each a local transform relative
 to the object's origin plus a full size in meters (independent of the
-object's scale). The sim cursor's collider is the whole sim robot: one convex
-hull per URDF link, grown by a margin. Its shape and size are fixed.
+object's scale). The Aubo Arm's collider is the whole sim robot: one convex
+hull per URDF link, grown by a margin. Its shape and size are fixed. The sim
+cursor cannot take a collider; it is part of the arm's.
 
 Data lives on the owner so undo snapshots and saves carry it:
   scene object -> obj["collider"]
       {"enabled": bool, "stop": bool,
        "items": [{"shape": "cube"|"sphere", "pos": [x, y, z],
                   "wxyz": [w, x, y, z], "scale": [sx, sy, sz]}]}
-  sim cursor   -> wp.sim_collider
+  Aubo Arm     -> wp.sim_collider (per arm; owner "sim" here)
       {"enabled": bool, "stop": bool, "margin": float}
 
 Green outlines are drawn only while the Collider panel is clicked (focused);
@@ -60,8 +61,22 @@ def _rr():
 
 
 def _norm_owner(owner):
+    """Owner key: "sim" for the active arm's robot collider (asked for as the
+    Aubo Arm, sim_bot[@arm], or the old "sim" / "sim_cursor" ids, which also
+    stand for the robot when a child names one as its parent), else the
+    scene object id."""
     o = str(owner or "")
-    return "sim" if o in ("sim", "sim_cursor") else o
+    if o == "sim":
+        return o
+    try:
+        import arms
+        base, aid = arms.split_id(o)
+        if base in ("sim_bot", "sim_cursor") and aid is not None and aid == arms.current():
+            return "sim"
+    except Exception:
+        if o in ("sim_cursor", "sim_bot"):
+            return "sim"
+    return o
 
 
 def _vec(v, n, fill):
@@ -206,7 +221,8 @@ def add_collider_component(owner):
         rec = {"enabled": True, "stop": False, "items": [default_item(obj)]}
     if not _set_record(owner, rec):
         return None
-    _sv().note_component(owner, "collider")
+    if owner != "sim":
+        _sv().note_component(owner, "collider")
     _refresh_focus_viz()
     return collider_status(owner)
 
@@ -621,7 +637,11 @@ def _clear_hits():
 
 def _owner_name(owner):
     if owner == "sim":
-        return getattr(wp, "SIM_CURSOR_NAME", "Sim cursor")
+        try:
+            import arms
+            return arms.name_of()
+        except Exception:
+            return getattr(_sv(), "SIM_BOT_NAME", "Aubo Arm")
     obj = _sv()._find_object(owner)
     return str((obj or {}).get("name") or owner)
 
@@ -824,7 +844,27 @@ def _refresh_focus_viz():
         _place_viz(owner, v)
 
 
+def _bot_selected():
+    try:
+        import arms
+        bot = arms.cid("sim_bot")
+    except Exception:
+        bot = "sim_bot"
+    return any(kind == "obj" and str(key) == bot
+               for kind, key in list(getattr(wp, "_selection", []) or []))
+
+
 def _show_owner_gizmo(owner, on):
+    if owner == "sim":
+        # The robot collider belongs to the Aubo Arm: park / bring back its gizmo.
+        try:
+            if not on:
+                _sv().hide_sim_bot_gizmo()
+            elif _bot_selected():
+                _sv().show_sim_bot_gizmo()
+        except Exception:
+            pass
+        return
     try:
         import offsets
         offsets._show_owner_gizmo(owner, on)
@@ -860,6 +900,9 @@ def end_collider_edit():
     for o in list(_viz.keys()):
         _drop_viz(o)
     if owner is None:
+        return
+    if owner == "sim":
+        _show_owner_gizmo(owner, True)
         return
     try:
         import offsets

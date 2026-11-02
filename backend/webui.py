@@ -1490,7 +1490,7 @@ def api_offset():
     """Offset component on a scene object or the sim cursor (owner "sim")."""
     data = request.get_json(silent=True) or {}
     owner = data.get("id") or data.get("owner")
-    if data.get("kind") == "sim" or owner in ("sim", "sim_cursor"):
+    if data.get("kind") == "sim" or owner == "sim" or arms.split_id(owner)[0] == "sim_cursor":
         owner = "sim"
     if not owner:
         owner = getattr(wp, "selected_obj_id", None)
@@ -1515,17 +1515,7 @@ def api_offset():
     return jsonify({"ok": st is not None, "offset": st or {}})
 
 
-@app.route("/api/collider", methods=["POST"])
-def api_collider():
-    """Collider component on a scene object or the sim cursor (owner "sim")."""
-    data = request.get_json(silent=True) or {}
-    owner = data.get("id") or data.get("owner")
-    if data.get("kind") == "sim" or owner in ("sim", "sim_cursor"):
-        owner = "sim"
-    if not owner:
-        owner = getattr(wp, "selected_obj_id", None)
-    if not owner:
-        return jsonify({"ok": False, "error": "no owner"})
+def _collider_act(owner, data):
     act = str(data.get("act") or "update").lower()
     if act == "add":
         st = wp.colliders.add_collider_component(owner)
@@ -1547,6 +1537,30 @@ def api_collider():
             scale=data.get("scale"),
             ignore_parent=data.get("ignore_parent"),
         )
+    return st
+
+
+@app.route("/api/collider", methods=["POST"])
+def api_collider():
+    """Collider component on a scene object or the Aubo Arm (sim_bot: the
+    robot-shaped collider). The sim cursor cannot have one."""
+    data = request.get_json(silent=True) or {}
+    owner = data.get("id") or data.get("owner")
+    if data.get("kind") == "sim" or owner == "sim" or arms.split_id(owner)[0] == "sim_cursor":
+        return jsonify({"ok": False, "error": "the Collider component is on the Aubo Arm, not the sim cursor"})
+    if data.get("kind") == "bot":
+        owner = owner or "sim_bot"
+    if not owner:
+        owner = getattr(wp, "selected_obj_id", None)
+    if not owner:
+        return jsonify({"ok": False, "error": "no owner"})
+    base, aid = arms.split_id(owner)
+    if base == "sim_bot" and aid is not None:
+        # An Aubo Arm: its robot collider, read and written as that arm.
+        with arms.using(aid):
+            st = _collider_act("sim", data)
+    else:
+        st = _collider_act(owner, data)
     _status_dirty.set()
     return jsonify({"ok": st is not None, "collider": st or {}})
 

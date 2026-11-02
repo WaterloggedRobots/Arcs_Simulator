@@ -4420,7 +4420,8 @@
       if (isPrim) {
         body.hidden = true;
         if (primBody) primBody.hidden = false;
-        if (extraAdd) extraAdd.classList.toggle("show", !isBot);
+        // The Aubo Arm only takes a Collider (the robot-shaped one): no + once it has it.
+        if (extraAdd) extraAdd.classList.toggle("show", !isBot || !(obj.collider && obj.collider.added));
         const tcP = document.getElementById("trackComp");
         const tsP = document.getElementById("trackSep");
         if (tcP) tcP.hidden = true;
@@ -4732,7 +4733,7 @@
     let offRotEuler = true;
     function postOffset(payload) {
       const obj = window.__lastObject || {};
-      const body = Object.assign({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id }, payload || {});
+      const body = Object.assign({ kind: obj.kind, id: obj.id }, payload || {});
       return fetch("/api/offset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4782,7 +4783,7 @@
       fetch("/api/offset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id, act: "edit" }),
+        body: JSON.stringify({ kind: obj.kind, id: obj.id, act: "edit" }),
       });
     });
     const offsetTrash = document.getElementById("offsetTrash");
@@ -4808,8 +4809,9 @@
         body: JSON.stringify({ id: obj.id, snap_parent_offset: true }),
       }).then(() => setTimeout(refresh, 80));
     };
-    // Collider component: one robot-shaped collider on the sim cursor (margin
-    // only), or a list of cube / sphere boxes on a scene object.
+    // Collider component: one robot-shaped collider on the Aubo Arm (margin
+    // only), or a list of cube / sphere boxes on a scene object. The sim
+    // cursor has none (it is part of the arm's).
     let colRotEuler = true;
     function colEntryHtml(i) {
       const num = (f, v) => "<input data-f='" + f + "' type='number' step='0.001' value='" + v + "'>";
@@ -4835,7 +4837,7 @@
       const box = document.getElementById("colliderComp");
       const sep = document.getElementById("colliderSep");
       const col = (obj && obj.collider) || {};
-      const kinds = ["sim", "empty", "sphere", "cube", "camera", "mesh", "import"];
+      const kinds = ["bot", "empty", "sphere", "cube", "camera", "mesh", "import"];
       const show = !!(obj && kinds.indexOf(obj.kind) >= 0 && col.added);
       if (box) box.hidden = !show;
       if (sep) sep.hidden = !show;
@@ -5159,7 +5161,9 @@
         compMenu.querySelectorAll("[data-comp]").forEach((b) => {
           const k = b.getAttribute("data-comp");
           // Offset component is switched off for now (offsets.OFFSETS_ENABLED).
-          b.hidden = k === "offset" || (k === "track" && !isSim && obj.kind !== "waypoint") || ((k === "offset" || k === "collider") && obj.kind === "waypoint");
+          const isBot = obj.kind === "bot";
+          b.hidden = k === "offset" || (k === "track" && !isSim && obj.kind !== "waypoint") || ((k === "offset" || k === "collider") && obj.kind === "waypoint") ||
+            (k === "collider" && isSim) || (isBot && k !== "collider");
           const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset) || (k === "collider" && hasCollider);
           b.disabled = !!taken;
           b.style.opacity = taken ? "0.4" : "";

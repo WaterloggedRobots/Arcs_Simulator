@@ -314,6 +314,8 @@ def sim_bot_props():
         "scale": [1.0, 1.0, 1.0],
         "parent_id": None,
         "space": "world",
+        # The robot-shaped collider (whole sim robot) lives on the Aubo Arm.
+        "collider": _colliders().collider_status("sim"),
     }
 
 
