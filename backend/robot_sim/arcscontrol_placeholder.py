@@ -40,10 +40,31 @@ class RobotArcs:
     def StartMove(self):
         return None
 
+    def PrepareJog(self):
+        return {}
+
+    def JogState(self):
+        return {}
+
+    def SpeedLine(self, xd, acc=0.5, t=0.2):
+        return None
+
+    def ServoMode(self, on, timeout=0.5):
+        return False
+
+    def ServoJoint(self, q, t=0.03, lookahead=0.1, gain=200):
+        return None
+
+    def SpeedJoint(self, qd, acc=1.0, t=0.2):
+        return None
+
+    def StopSpeed(self, acc=1.0, rot_acc=2.0, joint_acc=3.0):
+        return None
+
     def Close(self):
         return None
 
-    def GetIK(self):
+    def GetIK(self, targetPose=None, seed=None, verbose=True):
         return None
 
     def SetSpeed(self,new_speed):

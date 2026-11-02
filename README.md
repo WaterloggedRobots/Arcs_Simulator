@@ -29,6 +29,8 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
   - [Offset](#offset)
   - [Collider](#collider)
 - [Miscellaneous features](#miscellaneous-features)
+- [Game controller (Xbox / PlayStation)](#game-controller-xbox--playstation)
+- [Steam Deck edition](#steam-deck-edition)
 - [Feature map](#feature-map)
 - [Current limitations](#current-limitations)
 - [Project layout](#project-layout)
@@ -325,6 +327,65 @@ Components in the properties panel are listed in the order they were added, newe
 
 ---
 
+## Game controller (Xbox / PlayStation)
+
+The sandbox can jog the arm with an Xbox or PlayStation (4 / 5) controller connected to the PC it runs on, the same way as the Steam Deck edition. Nothing to set up: the first controller found is used, and it can be plugged in or turned on at any time. The controls are the Deck's, with the shoulder buttons in place of the Deck's back buttons:
+
+| Control | Xbox | PlayStation | Action |
+|---|---|---|---|
+| Left stick | | | up = +x, left = +y |
+| L1 / L2 | LB / LT | L1 / L2 | +z / -z |
+| Right stick | | | left = +roll (about x), up = +pitch (about y) |
+| R1 / R2 | RB / RT | R1 / R2 | +yaw / -yaw (about z) |
+| X | X | Square | switch the controller between the Sim bot and the Real bot |
+
+The top right of the 3D view shows a **Controller** Sim / Real switch (the same as the X button) and the controller in use, for example *Xbox Wireless Controller · Xbox Series X|S* or *PS4 Controller · PS4 (DualShock 4 v2)*, or a warning (no controller, no IK solution, robot not connected). **Preferences > Controller** names the device (with its USB ids), lists the buttons with that controller's own labels, and holds the speeds, shared with the Steam Deck edition: **Stick speed**, **Rotation speed**, **Real ramp time** and **Real jog command**. Sim jogging moves the sim cursor along Axes Mode; Real jogging moves the real arm directly, exactly as on the Deck (see below).
+
+Controllers are read through SDL (the `pygame` package, in `requirements.txt`), which knows Xbox, PlayStation and most other pads and maps them all to the same button positions. Without pygame only Xbox (XInput) controllers work. The code is `backend/gamepad.py` (device, mapping) and `start_controller()` in `backend/deck_webui.py` (the Deck's jog).
+
+**Connecting the controller to the PC**
+
+- **USB cable:** works with any Xbox One / Series or PS4 / PS5 controller. Use a data cable (some charge-only cables do not work).
+- **Bluetooth:** Xbox controllers with Bluetooth (Xbox One S and later, and every Xbox Series controller: those have a USB-C port) pair like any Bluetooth device. Hold the small pair button on top until the Xbox button flashes fast, then add it in Windows Settings > Bluetooth. PS4: hold Share + PS until the light bar flashes; PS5: Create + PS.
+- **Xbox Wireless Adapter for Windows (the dongle):** controllers are not tied to one adapter; any Xbox One / Series controller can be paired to a new adapter (press the adapter's button, then the controller's pair button). A used controller re-pairs the same way, which also replaces whatever it was paired with before. A controller paired to the adapter or an Xbox console again needs a new pairing for Bluetooth, and the other way round.
+
+
+A stripped-down controller for running the real arm from a Steam Deck on Windows. Start it with `python backend/deck_webui.py` instead of `webui.py` (it runs the same backend, so don't run both at once).
+
+### ArcsDeck.exe (packaged build)
+
+The Deck edition also ships as one Windows file, **ArcsDeck.exe**, with Python, every package, the robot models, the page and default settings inside it; nothing else needs installing. On start it shows the preloader (`backend/deck/preloader.png`) with the loading log in black on the left of its white strip, for at least 4 seconds, then opens the Deck page in its own window (Edge WebView2, part of Windows 10 / 11). Closing the window quits the app and gives the Steam Deck its previous controller profile back. `ArcsDeck.exe --console` also opens a console window with the full log (`real jog:` lines and so on).
+
+Nothing is saved between runs: the .exe unpacks to a temporary folder that is deleted when it exits, so Settings changes (robot IP, speeds) last for that run only. Defaults, including the Saved Points list, come from `user_files/settings.json` at build time.
+
+To build it:
+
+- **On GitHub:** every push to a `steamdeck/...` branch that touches the app runs the *Build ArcsDeck.exe* workflow (it can also be started by hand from the Actions tab); download `ArcsDeck` from the run's Artifacts.
+- **On a Windows PC:** install Python 3.12 from python.org (pyaubo-sdk has no wheels for newer versions) and run `packaging\deck\build_deck.bat`. It makes a build venv (`.venv-deck-build`) and writes `dist\ArcsDeck.exe`.
+
+`python backend/deck_app.py` runs the same launcher from source (preloader and app window; needs `pip install pywebview pillow`). The packaging lives in `packaging/deck/` (`ArcsDeck.spec` for PyInstaller, `requirements-build.txt`, `build_deck.bat`).
+
+The page shows only the 3D viewer, the **Saved Points** list on the left (click one to move the sim cursor there), the **Hold to move** button bottom left (the real arm goes to the sim pose while it is held, and keeps following the sticks), and **Object Properties** on the right with the IK pose and joints of the sim cursor (editable) and the actual robot (read only, shown while connected). The top bar has **Axes Mode** (Local / Global) and **Settings** (robot IP, port, type, Hold to move speed, stick speed, rotation speed, real ramp time and the real jog command). There are no waypoints, bake, timeline, added objects or components, and nothing is autosaved.
+
+| Deck control | Action |
+|---|---|
+| Left stick | up = +x, left = +y (x / y of Axes Mode) |
+| L4 / L5 | +z / -z |
+| Right stick | left = +roll (about x), up = +pitch (about y) |
+| R4 / R5 | +yaw / -yaw (about z) |
+| X | switch the controller between the Sim bot and the Real bot (also the **Control** switch in the top bar) |
+| Right trackpad | mouse (drag the sim cursor gizmo as in the sandbox) |
+| R2 / L2 (or right pad click) | left / right click |
+| Left trackpad | scroll (zoom) |
+
+In **Real** control the sticks jog the real arm directly. Each jog first calls `RobotArcs.PrepareJog` (`startMove`, so a paused motion queue does not swallow the jog, servo mode off, speed fraction 100 %). The **Real jog command** setting picks `servoJoint` (servo mode, on its own thread at a fixed 20 ms with 1 ms Windows timers: each tick moves a target TCP pose one period along the ramped stick speed and sends the controller's IK of it with t = 20 ms; the target is held only if it gets 8 cm ahead of the arm), `speedLine` (TCP velocity) or `speedJoint` (joint velocities toward the controller's IK of a pose 0.25 s ahead). Each speed command restarts the controller's move, so speedLine and speedJoint are re-sent only when the sticks change by a tenth of full tilt or every 0.8 s (1 s timeout, `StopSpeed` on release). servoJoint is the default. Real jogs accelerate and decelerate: **Real ramp time** (default 0.5 s) is the time from stop to full stick speed, and the same rate eases the arm to a stop when you let go (servoJoint keeps streaming until the speed reaches zero; speedLine / speedJoint pass the matching acceleration to the controller). If the joints have not moved after about 3 cm of commanded travel the page says so, and a jog is refused while the robot is not Running or its safety mode is not Normal (for example a protective stop, which is cleared on the teach pendant). Return codes and the controller state (robot, safety and operational mode, runtime state) are printed as `real jog:` lines in the console; the sim bot snaps to the real arm when you switch to Real and when you let go. Real control needs a connected robot and drops back to Sim if it disconnects. Moves follow Axes Mode, which starts on Global (the robot base x / y / z). Local uses the tool's own axes: with the tool pointing down these are turned (tool x is base y and tool z is down), so the sticks seem swapped. While jogging, a `real jog:` line each second shows the sticks, the base-frame speed sent and, for servoJoint, how often the target waited for the arm or had no IK. Speeds are the *Stick speed* (default 0.1 m/s at full tilt, linear stick response) and *Rotation speed* settings, sim and real; a move with no IK solution is dropped and the panel says so.
+
+The controls come from [Steam Deck Tools](https://github.com/WaterloggedRobots/steam-deck-tools)' `SteamController.exe`, which needs its hidden **Arcs Deck** profile (a build from that repository that includes it). On start the app switches `SteamController.exe` to Arcs Deck and switches back to the previous profile on exit; if the app is killed, the profile turns itself off. The Deck reaches the app as an Xbox 360 pad over XInput (`backend/deck/pad.py`); the profile switch is in `backend/deck/steam_profile.py`.
+
+If the controls are not on the Arcs Deck profile, a red banner over the 3D view says why and what still works: **Steam Deck Tools is not running** (sticks and back buttons do nothing; the app switches over by itself once Steam Controller starts), **wrong Steam Deck Tools build** (no Arcs Deck profile: in X360 the sticks still jog but up / down and yaw sit on L1 / R1 and L2 / R2, in Desktop the sticks do nothing), or **the profile was changed** while the app runs. **Retry** tries the switch again; the cross hides the banner until the problem changes. The profile is checked every 3 seconds.
+
+---
+
 ## Feature map
 
 | Function | What Sandbox provides |
@@ -373,6 +434,10 @@ Run the app with `python backend/webui.py`. Every file the app reads or writes i
 ```
 backend/                  everything needed to run the app
   webui.py                Flask web UI (entry point)
+  deck_webui.py           Steam Deck edition (entry point), templates/deck.html
+  deck_app.py             Steam Deck edition as a desktop app (ArcsDeck.exe entry point: preloader + window)
+  gamepad.py              Xbox / PlayStation controller for the sandbox (SDL via pygame, XInput fallback)
+  deck/                   Steam Deck controls (XInput) and Steam Deck Tools profile switch
   app_paths.py            folder constants
   templates/index.html    the page
   cameras/                sony_liveview.py, libusb-1.0.dll (Sony camera support)
@@ -394,6 +459,7 @@ user_files/               ships with the app, editable by the user
   exports/                export.json, bake_overspeed.csv / .xlsx
   recordings/             camera recordings
   imported_meshes/        meshes added with Import mesh
+packaging/deck/           ArcsDeck.exe build: PyInstaller spec, build requirements, build_deck.bat
 docs/                     not needed at runtime
   examples/cam_scripts/   example camera scripts (YOLO / RealSense), models/ holds yolov8n.pt
   CameraRemoteCommand-2.00.02/   Sony PTP SDK reference and examples

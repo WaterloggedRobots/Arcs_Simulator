@@ -6,6 +6,10 @@ scipy>=1.10
 flask>=3.0
 werkzeug>=3.0
 
+# Game controller (Xbox / PlayStation) jogging in the sandbox (gamepad.py);
+# without it only XInput (Xbox) pads work, unnamed.
+pygame>=2.5
+
 # Viewer + URDF
 scikit-robot>=0.0.44
 viser>=0.2.23

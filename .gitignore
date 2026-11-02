@@ -3,3 +3,7 @@ __pycache__/
 ~$*
 user_files/paths/
 user_files/exports/
+# Deck .exe build (packaging/deck)
+/build/
+/dist/
+/.venv-deck-build/

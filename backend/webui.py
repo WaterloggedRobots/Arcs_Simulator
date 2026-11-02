@@ -1726,6 +1726,16 @@ def _autosave_loop():
         time.sleep(60)
 
 
+def _start_controller():
+    """Xbox / PlayStation controller jogging (gamepad.py, same jog as the
+    Steam Deck edition in deck_webui.py)."""
+    try:
+        import deck_webui
+        deck_webui.start_controller()
+    except Exception as e:
+        print("controller unavailable:", e)
+
+
 def _wait_viewer(timeout=20.0):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -1741,6 +1751,7 @@ if __name__ == "__main__":
     port = _wait_viewer()
     print("Viser    http://127.0.0.1:%s (iframe)" % port)
     _ensure_status_worker()
+    _start_controller()
     print("Web UI   http://127.0.0.1:5000")
     threading.Thread(target=_open_ui, daemon=True).start()
     threading.Thread(target=_autosave_loop, daemon=True).start()

@@ -981,6 +981,22 @@
     #pathWinWrap .mode-advanced { color: #6b7385 !important; }
     #pathWinWrap.simple .mode-simple { color: #6a6b72 !important; }
     #pathWinWrap.advanced .mode-advanced { color: #7aa2ff !important; }
+    /* Game controller (Xbox / PlayStation): which bot it drives. Sim blue, Real orange. */
+    #padTarget { background: #3d6ebd; }
+    #padTarget.advanced { background: #e39a3c; }
+    #padWrap .mode-simple,
+    #padWrap .mode-advanced { color: #6b7385 !important; }
+    #padWrap.simple .mode-simple { color: #7aa2ff !important; }
+    #padWrap.advanced .mode-advanced { color: #e39a3c !important; }
+    #padWrap[hidden], #padInfo[hidden] { display: none !important; }
+    #padInfo { margin: -4px 0 0; font-size: 11px; line-height: 1.3; color: #8a8a92; max-width: 184px; }
+    #padInfo.warn { color: #e39a3c; }
+    #pane-pad { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
+    .pad-binds { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 4px; }
+    .pad-binds td { padding: 3px 4px; border-bottom: 1px solid #2a2b32; }
+    .pad-binds td:first-child { color: #e8e8ea; white-space: nowrap; width: 40%; }
+    .pad-binds td:last-child { color: #8a8a92; }
+    #ctrlSettings select.pad-sel { width: 100%; background: #1c1d21; color: #e8e8ea; border: 1px solid #111; border-radius: 6px; padding: 6px; margin-bottom: 8px; }
     .path-win-row #pathWinRad {
       flex: 0 0 72px;
       width: 72px;
@@ -1698,6 +1714,7 @@
           <div class="ctrl-body">
           <div class="ctrl-side">
             <button type="button" class="ctrl-tab on" data-tab="robot">Robot Settings</button>
+            <button type="button" class="ctrl-tab" data-tab="pad">Controller</button>
             <button type="button" class="ctrl-tab" data-tab="wps">Waypoints</button>
             <button type="button" class="ctrl-tab" data-tab="pwin">Path window</button>
             <button type="button" class="ctrl-tab" data-tab="tl">Timeline</button>
@@ -1705,6 +1722,26 @@
             <button type="button" class="ctrl-tab" data-tab="dev">Developer Mode</button>
           </div>
           <div class="ctrl-main">
+            <div class="ctrl-pane" id="pane-pad" hidden>
+              <label class="field">Game controller</label>
+              <p id="padDevice" style="font-size:12px;color:#e8e8ea;margin:0 0 4px;">No controller</p>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 10px;">Xbox or PlayStation (4 / 5) controller on this PC, by USB or wireless. The first one found is used; turn it on or plug it in at any time.</p>
+              <table class="pad-binds" id="padBinds"></table>
+              <hr style="border:0;border-top:1px solid #2a2b32;margin:12px 0;">
+              <label class="field">Stick speed (m/s)</label>
+              <input id="padLin" type="number" min="0.001" max="0.5" step="0.01" />
+              <label class="field">Rotation speed (°/s)</label>
+              <input id="padRot" type="number" min="0.1" step="1" />
+              <label class="field">Real ramp time (s)</label>
+              <input id="padRamp" type="number" min="0.05" max="3" step="0.1" />
+              <label class="field">Real jog command</label>
+              <select id="padJog" class="pad-sel">
+                <option value="servoJoint">servoJoint</option>
+                <option value="speedLine">speedLine</option>
+                <option value="speedJoint">speedJoint</option>
+              </select>
+              <p style="font-size:11px;color:#8a8a92;margin:0;">Shared with the Steam Deck edition. Speeds are at full tilt; Real ramp time is how long the real arm takes to reach full speed and to stop.</p>
+            </div>
             <div class="ctrl-pane" id="pane-wps" hidden>
               <label class="field">Bake spacing (m)</label>
               <input id="spacing" type="number" min="0.01" max="1" step="0.01" value="0.05" />
@@ -1907,6 +1944,13 @@
           <button type="button" class="slide" id="pathWinToggle" title="Hide path within the playhead window"></button>
           <span class="mode-advanced">On</span>
         </div>
+        <div class="tl-mode simple" id="padWrap" title="Which bot the game controller moves (X / Square on the controller)" hidden>
+          <span class="hud-label">Controller</span>
+          <span class="mode-simple">Sim</span>
+          <button type="button" class="slide" id="padTarget" title="Sim bot / Real bot (X, or Square on PlayStation)"></button>
+          <span class="mode-advanced">Real</span>
+        </div>
+        <div id="padInfo" hidden></div>
         <div id="robotLinkWarn">Robot not connected</div>
       </div>
       <div class="view-cube" id="viewCube" title="Click a face or corner to set the camera">
@@ -6068,6 +6112,99 @@
         }),
       }).then(refresh);
     });
+    // Game controller (gamepad.py): device line, Sim / Real switch, Preferences > Controller.
+    const padState = { last: null, err: "", errAt: 0 };
+    const PAD_ERR_S = 5000;
+    function padBindRows(labels) {
+      const L = labels || {};
+      return [
+        ["Left stick", "up +x, left +y"],
+        [(L.L1 || "L1") + " / " + (L.L2 || "L2"), "+z / -z"],
+        ["Right stick", "left +roll (about x), up +pitch (about y)"],
+        [(L.R1 || "R1") + " / " + (L.R2 || "R2"), "+yaw / -yaw (about z)"],
+        [L.X || "X", "switch between the Sim bot and the Real bot"],
+      ].map((r) => "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td></tr>").join("");
+    }
+    function setPadVal(id, v, digits) {
+      const el = document.getElementById(id);
+      if (el && document.activeElement !== el && v != null) el.value = Number(v).toFixed(digits);
+    }
+    function renderPad(d) {
+      padState.last = d;
+      const wrap = document.getElementById("padWrap");
+      const info = document.getElementById("padInfo");
+      if (!d || !d.started) {
+        if (wrap) wrap.hidden = true;
+        if (info) info.hidden = true;
+        return;
+      }
+      const c = d.controller || {};
+      const real = d.target === "real";
+      if (wrap) {
+        wrap.hidden = false;
+        wrap.classList.toggle("simple", !real);
+        wrap.classList.toggle("advanced", real);
+      }
+      const t = document.getElementById("padTarget");
+      if (t) t.classList.toggle("advanced", real);
+      let line = c.connected ? (c.name + (c.type ? " · " + c.type : "")) : "No controller";
+      let warn = !c.connected;
+      // A refused switch (e.g. robot not connected) shows for a few seconds.
+      if (d.error !== padState.err) { padState.err = d.error || ""; padState.errAt = Date.now(); }
+      if (d.error && Date.now() - padState.errAt < PAD_ERR_S) { line = d.error; warn = true; }
+      else if (d.ik_fail) { line = "No IK solution there: move back"; warn = true; }
+      if (info) {
+        info.hidden = false;
+        info.textContent = line;
+        info.classList.toggle("warn", warn);
+        info.title = c.connected ? ("via " + (c.backend || "?") + (c.vendor ? " · USB " + c.vendor + ":" + c.product : "")) : (c.error || "");
+      }
+      const dev = document.getElementById("padDevice");
+      if (dev) {
+        dev.textContent = c.connected
+          ? c.name + " — " + (c.type || "controller") + (c.vendor ? " (USB " + c.vendor + ":" + c.product + ")" : "") + ", via " + (c.backend || "?")
+          : "No controller connected" + (c.error ? " (" + c.error + ")" : "");
+      }
+      const binds = document.getElementById("padBinds");
+      const html = padBindRows(c.labels);
+      if (binds && binds.innerHTML !== html) binds.innerHTML = html;
+      const st = d.settings || {};
+      setPadVal("padLin", st.deck_lin_mps, 3);
+      setPadVal("padRot", st.deck_rot_dps, 1);
+      setPadVal("padRamp", st.deck_ramp_s, 2);
+      const jog = document.getElementById("padJog");
+      if (jog && document.activeElement !== jog && st.deck_real_jog) jog.value = st.deck_real_jog;
+    }
+    function pollPad() {
+      fetch("/api/controller")
+        .then((r) => (r.ok ? r.json() : null))
+        .then(renderPad)
+        .catch(() => {})
+        .finally(() => setTimeout(pollPad, 400));
+    }
+    function savePadSetting(key, el) {
+      const v = el.tagName === "SELECT" ? el.value : parseFloat(el.value);
+      if (el.tagName !== "SELECT" && !(v > 0)) return;
+      fetch("/api/deck/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: v }),
+      }).catch(() => {});
+    }
+    [["padLin", "deck_lin_mps"], ["padRot", "deck_rot_dps"], ["padRamp", "deck_ramp_s"], ["padJog", "deck_real_jog"]].forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("change", () => savePadSetting(key, el));
+    });
+    const padTargetBtn = document.getElementById("padTarget");
+    if (padTargetBtn) padTargetBtn.onclick = () => {
+      fetch("/api/controller", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "toggle" }),
+      }).then((r) => r.json()).then(renderPad).catch(() => {});
+    };
+    pollPad();
+
     async function refresh() {
       const r = await fetch("/api/status");
       const d = await r.json();
@@ -7035,7 +7172,7 @@
         tab.onclick = () => {
           ctrlSettings.querySelectorAll(".ctrl-tab").forEach((t) => t.classList.remove("on"));
           tab.classList.add("on");
-          ["robot", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
+          ["robot", "pad", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
             const pane = document.getElementById("pane-" + id);
             if (pane) pane.hidden = tab.getAttribute("data-tab") !== id;
           });

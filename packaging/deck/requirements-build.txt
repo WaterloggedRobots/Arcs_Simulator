@@ -1,0 +1,7 @@
+# Build environment for ArcsDeck.exe (Windows, Python 3.12).
+# pyaubo-sdk has Windows wheels for Python <= 3.12 only.
+-r ../../backend/requirements.txt
+pyaubo-sdk
+pywebview>=5.0
+pillow>=10.0
+pyinstaller>=6.10
