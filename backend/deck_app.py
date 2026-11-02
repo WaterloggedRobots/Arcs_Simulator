@@ -39,6 +39,7 @@ SPLASH_WIDTH = 504
 LOG_X = 33 / 1488
 LOG_BOTTOM = 1012 / 1025
 LOG_RIGHT = 1300 / 1488
+VERSION_RIGHT = 1473 / 1488  # right end of the version, where the old drawn-in one ended
 # The strip is about 47 px tall at this width: 3 lines of 10 px text.
 LOG_LINES = 3
 # Negative = pixels (Tk), so the text fits the strip at any DPI setting.
@@ -60,7 +61,36 @@ def splash_image(width):
     height = int(round(img.height * width / img.width))
     img = img.resize((width, height), Image.LANCZOS)
     img.putalpha(img.getchannel("A").point(lambda a: 255 if a >= 128 else 0))
+    _draw_version(img)
     return img
+
+
+def _version_font(px):
+    from PIL import ImageFont
+    for name in ("segoeui.ttf", "DejaVuSans.ttf", "arial.ttf"):
+        try:
+            return ImageFont.truetype(name, px)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default(size=px)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _draw_version(img):
+    """The Deck version (deck/version.py) bottom right of the white strip, in
+    the log's size and on its baseline, so it never goes stale."""
+    from PIL import ImageDraw
+    try:
+        from deck.version import label
+    except Exception:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from deck.version import label
+    w, h = img.size
+    font = _version_font(abs(LOG_FONT[1]))
+    ImageDraw.Draw(img).text((int(round(VERSION_RIGHT * w)), int(round(LOG_BOTTOM * h))),
+                             label(), fill=(40, 40, 40, 255), font=font, anchor="rs")
 
 
 if FROZEN:

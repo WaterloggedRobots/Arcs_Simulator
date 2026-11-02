@@ -33,7 +33,7 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
-DECK_VERSION = "deck-1.10"
+from deck.version import DECK_VERSION  # noqa: E402  (also drawn on the preloader)
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1

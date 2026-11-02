@@ -39,7 +39,7 @@ datas = [
      "aubo-i5-full-master/robotiq_85_gripper"),
 ]
 binaries = []
-hiddenimports = ["deck", "deck.pad", "deck.steam_profile", "arcscontrol",
+hiddenimports = ["deck", "deck.pad", "deck.steam_profile", "deck.version", "arcscontrol",
                  "PIL.ImageTk", "PIL._tkinter_finder"]  # preloader
 
 datas += collect_data_files("viser")  # web client build, icons
