@@ -21,8 +21,9 @@ Notes for working on this repo. The README is the user manual (features, control
 
 - `backend/deck_webui.py`: routes under `/api/deck/...`, jog logic, `boot()` (settings, viewer, Steam profile, pad, hold watchdog) and `serve()` (Flask, blocking).
 - `backend/deck/pad.py`: Deck controls as an XInput pad. `backend/deck/steam_profile.py`: switches Steam Deck Tools' `SteamController.exe` to the hidden "Arcs Deck" profile and back on exit.
-- **Version**: `DECK_VERSION` in `deck_webui.py` and `VERSION` in `deck/pad.py` (also the `# version:` first line of `deck_webui.py`), shown in Settings and printed on start. Bump both together for a Deck feature change; commits are titled `Deck 1.x: ...`. `deck/preloader.png` has the version drawn on it ("v deck.1.8") and must be re-exported by hand when it changes.
+- **Version**: `DECK_VERSION` in `deck_webui.py` and `VERSION` in `deck/pad.py` (also the `# version:` first line of `deck_webui.py`), shown in Settings and printed on start. Bump both together for a Deck feature change; commits are titled `Deck 1.x: ...`. `deck/preloader.png` has the version drawn on it (still "v deck.1.8" while the code is deck-1.9) and must be re-exported by hand when it changes.
 - Nothing is autosaved in the Deck edition.
+- D-pad (XInput bits in `deck/pad.py`, `on_dpad`) orbits the Viser camera around the active arm's base via `deck_webui._orbit_view` (sets `client.camera.position` / `look_at`; keeps its own pose while held because the browser reports the camera back late). Deck edition only, not the sandbox controller.
 
 ## ArcsDeck.exe (packaging/deck)
 

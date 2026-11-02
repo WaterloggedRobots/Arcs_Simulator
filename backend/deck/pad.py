@@ -9,6 +9,8 @@ and L2 / R2 clicks are done by SteamController.exe itself, not here.
     right stick    left = +roll (about x), up = +pitch (about y)
     R4 / R5        +yaw / -yaw (about z)
     X              switch the sticks between the sim bot and the real bot
+    D-pad          orbit the 3D view around the arm: left / right around it,
+                   up / down higher / lower
 
 Axes follow the Axes Mode toggle: Local = the sim cursor's own axes,
 Global = world axes.
@@ -21,9 +23,10 @@ import os
 import threading
 import time
 
-VERSION = "deck-1.8"
+VERSION = "deck-1.9"
 MAPPING = "left stick up +x, left +y; L4/L5 +z/-z; right stick left +roll, up +pitch; R4/R5 +yaw/-yaw"
 
+DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT = 0x0001, 0x0002, 0x0004, 0x0008
 LB = 0x0100
 RB = 0x0200
 # Buttons reported to on_button (pressed, not held).
@@ -95,8 +98,12 @@ def read():
         g = st.Gamepad
         up = (1.0 if g.wButtons & LB else 0.0) - (1.0 if g.bLeftTrigger >= TRIGGER_ON else 0.0)
         yaw = (1.0 if g.wButtons & RB else 0.0) - (1.0 if g.bRightTrigger >= TRIGGER_ON else 0.0)
+        b = int(g.wButtons)
         return {
-            "buttons": int(g.wButtons),
+            "buttons": b,
+            # D-pad as [right - left, up - down]
+            "dpad": [(1 if b & DPAD_RIGHT else 0) - (1 if b & DPAD_LEFT else 0),
+                     (1 if b & DPAD_UP else 0) - (1 if b & DPAD_DOWN else 0)],
             # left stick up = +x, left = +y (linear: half tilt is half speed);
             # right stick left = +roll (about x), up = +pitch (about y)
             "lin": [_axis(g.sThumbLY, 1.0), -_axis(g.sThumbLX, 1.0), up],
@@ -111,10 +118,11 @@ def status():
     return dict(_status)
 
 
-def start(step, on_button=None):
+def start(step, on_button=None, on_dpad=None):
     """Poll the pad and call step(lin, rot, dt) while any control is held,
     and step(None, None, 0) once when they are all let go. on_button(name)
-    runs once per press of a button in BUTTONS."""
+    runs once per press of a button in BUTTONS; on_dpad(x, y, dt) runs every
+    poll while the D-pad is held (x: right - left, y: up - down)."""
     if os.name != "nt":
         _status["error"] = "not Windows: no controller input"
         print("deck pad:", _status["error"])
@@ -136,6 +144,8 @@ def start(step, on_button=None):
                         if now_b & bit and not was & bit:
                             on_button(name)
                 was = now_b
+                if on_dpad is not None and pad and any(pad["dpad"]):
+                    on_dpad(pad["dpad"][0], pad["dpad"][1], dt)
                 held = bool(pad) and any(abs(v) > 0 for v in pad["lin"] + pad["rot"])
                 if held:
                     step(pad["lin"], pad["rot"], dt)
