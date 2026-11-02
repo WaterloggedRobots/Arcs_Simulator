@@ -1,4 +1,4 @@
-# version: deck-1.8 (2026-10-29)
+# version: deck-1.10 (2026-11-02)
 """Steam Deck edition: a stripped-down controller for the real arm.
 
 Start with `python backend/deck_webui.py` (instead of webui.py). It runs the
@@ -12,6 +12,7 @@ and back buttons then jog the sim cursor (deck/pad.py).
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import subprocess
@@ -32,7 +33,7 @@ import waypoints as wp
 from deck import pad, steam_profile
 
 # Keep equal to the first line; printed on start and shown in Settings.
-DECK_VERSION = "deck-1.8"
+DECK_VERSION = "deck-1.10"
 ROT_DPS_DEFAULT = 20.0
 # Left stick and L4 / L5 at full tilt, sim and real (Hold to move has its own speed).
 LIN_MPS_DEFAULT = 0.1
@@ -638,6 +639,7 @@ def api_deck_state():
         "target_error": _target["error"],
         "points": webui._sim_poses_payload(),
         "pad": pad.status(),
+        "zoom": _zoom_pct(),
         "steam_profile": steam_profile.status(),
     })
 
@@ -678,7 +680,148 @@ def api_deck_target():
     return jsonify({"ok": not _target["error"], "target": mode, "error": _target["error"]})
 
 
+# ---------------------------------------------------------------- 3D view
+# A finger dragged on the 3D view orbits the camera around the arm (the page
+# turns it into degrees); the Zoom slider and D-pad up / down set the
+# camera's distance. Zoom 100 % is the distance of the start-up view.
+ORBIT_PITCH_LIMIT = 85.0
+ZOOM_MIN, ZOOM_MAX = 20.0, 500.0
+ZOOM_STEP = 1.1          # D-pad up / down: 10 % in / out
+ZOOM_REF_DEFAULT = 2.13  # m, start-up ("iso") camera to the point it looks at
+# Go on from the pose set last while the finger keeps moving: the browser
+# reports the camera back with a delay, so reading it each time loses steps.
+VIEW_KEEP_S = 0.3
+_view = {}  # client id -> (time, position, look_at)
+# Flask serves requests on several threads: one view change at a time, so
+# two drag steps never start from the same pose.
+_view_lock = threading.Lock()
+
+
+def _view_clients():
+    """The Viser clients showing the world (not camera previews)."""
+    srv = getattr(getattr(rr, "viewer", None), "_server", None)
+    if srv is None:
+        return []
+    try:
+        clients = dict(srv.get_clients())
+    except Exception:
+        return []
+    world = [clients[k] for k in (getattr(rr, "_world_cids", None) or set()) if k in clients]
+    return world or list(clients.values())[:1]
+
+
+def _cam_pose(client):
+    cid = getattr(client, "client_id", id(client))
+    last = _view.get(cid)
+    if last is not None and time.time() - last[0] < VIEW_KEEP_S:
+        return cid, last[1], last[2]
+    cam = client.camera
+    return (cid, np.asarray(cam.position, dtype=float).reshape(3),
+            np.asarray(cam.look_at, dtype=float).reshape(3))
+
+
+def _set_cam(client, cid, pos, look):
+    atomic = getattr(client, "atomic", None)
+    with (atomic() if atomic else contextlib.nullcontext()):
+        client.camera.position = tuple(float(v) for v in pos)
+        client.camera.look_at = tuple(float(v) for v in look)
+    _view[cid] = (time.time(), np.asarray(pos, dtype=float), np.asarray(look, dtype=float))
+
+
+def _zoom_ref():
+    try:
+        pos, look = rr._camera_pose("iso")
+        return max(0.05, float(np.linalg.norm(np.asarray(pos, float) - np.asarray(look, float))))
+    except Exception:
+        return ZOOM_REF_DEFAULT
+
+
+def _zoom_pct():
+    for client in _view_clients():
+        try:
+            _, pos, look = _cam_pose(client)
+            d = float(np.linalg.norm(pos - look))
+            return round(100.0 * _zoom_ref() / max(1e-6, d), 1)
+        except Exception:
+            pass
+    return None
+
+
+def orbit_view(dyaw_deg, dpitch_deg):
+    """Turn the camera around the arm: dyaw around its base's vertical axis
+    (positive moves the camera to its right), dpitch higher (+) / lower. The
+    camera looks at the base, at the height it was looking at, and keeps its
+    distance (zoom)."""
+    try:
+        with arms.LOCK:
+            arms.ensure_active_loaded()
+            base, _ = rr.arm_base_pose()
+        base = np.asarray(base, dtype=float).reshape(3)
+    except Exception:
+        base = np.zeros(3)
+    with _view_lock:
+        for client in _view_clients():
+            _orbit_client(client, base, dyaw_deg, dpitch_deg)
+
+
+def _orbit_client(client, base, dyaw_deg, dpitch_deg):
+    try:
+        cid, pos, look = _cam_pose(client)
+        centre = np.array([base[0], base[1], look[2]])
+        # Same distance as before (the zoom does not change), now from the base.
+        dist = max(0.05, float(np.linalg.norm(pos - look)))
+        d = pos - centre
+        yaw = math.atan2(d[1], d[0]) + math.radians(dyaw_deg)
+        lim = math.radians(ORBIT_PITCH_LIMIT)
+        pitch = math.atan2(d[2], math.hypot(d[0], d[1])) + math.radians(dpitch_deg)
+        pitch = max(-lim, min(lim, pitch))
+        new = centre + dist * np.array([math.cos(pitch) * math.cos(yaw),
+                                        math.cos(pitch) * math.sin(yaw),
+                                        math.sin(pitch)])
+        _set_cam(client, cid, new, centre)
+    except Exception as e:
+        print("deck: orbit view failed", e)
+
+
+def zoom_view(pct=None, factor=None):
+    """Zoom to pct % (100 = start-up view), or by factor (> 1 zooms in).
+    Moves the camera along its line of sight; what it looks at stays put."""
+    ref = _zoom_ref()
+    out = None
+    with _view_lock:
+        for client in _view_clients():
+            try:
+                cid, pos, look = _cam_pose(client)
+                d = pos - look
+                dist = float(np.linalg.norm(d)) or ref
+                cur = 100.0 * ref / dist
+                want = float(pct) if pct is not None else cur * float(factor or 1.0)
+                want = max(ZOOM_MIN, min(ZOOM_MAX, want))
+                _set_cam(client, cid, look + d / dist * (100.0 * ref / want), look)
+                out = round(want, 1)
+            except Exception as e:
+                print("deck: zoom view failed", e)
+    return out
+
+
+@app.route("/api/deck/view", methods=["POST"])
+def api_deck_view():
+    """{orbit: [dyaw_deg, dpitch_deg]} | {zoom: pct} | {zoom_step: +1 | -1}."""
+    data = request.get_json(silent=True) or {}
+    orb = data.get("orbit")
+    if isinstance(orb, (list, tuple)) and len(orb) >= 2:
+        orbit_view(float(orb[0] or 0), float(orb[1] or 0))
+    if data.get("zoom") not in (None, ""):
+        zoom_view(pct=float(data["zoom"]))
+    elif data.get("zoom_step"):
+        zoom_view(factor=ZOOM_STEP if float(data["zoom_step"]) > 0 else 1.0 / ZOOM_STEP)
+    return jsonify({"ok": True, "zoom": _zoom_pct()})
+
+
 def _on_pad_button(name):
+    if name in ("DPAD_UP", "DPAD_DOWN"):
+        zoom_view(factor=ZOOM_STEP if name == "DPAD_UP" else 1.0 / ZOOM_STEP)
+        return
     if name == "X":
         with arms.LOCK:
             arms.ensure_active_loaded()

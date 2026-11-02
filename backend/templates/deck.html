@@ -62,6 +62,17 @@
       font-size: 12px; color: var(--muted);
     }
     .mode .on { color: var(--text); }
+    /* Zoom slider (D-pad up / down: 10 % in / out) */
+    #zoomBox input[type=range] { width: 120px; accent-color: var(--azure); }
+    #zoomVal { min-width: 40px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+    /* Touch layer over the visible 3D view: a finger drag orbits the camera
+       around the arm. Mouse (trackpad cursor) input passes through to Viser:
+       the layer steps aside as soon as the cursor moves over it. */
+    #touchView {
+      position: absolute; top: 0; left: 0; bottom: 0; right: var(--props-w);
+      z-index: 4; touch-action: none; background: transparent;
+    }
+    #touchView.pass { pointer-events: none; }
     .slide {
       position: relative;
       width: 40px; height: 20px;
@@ -254,6 +265,11 @@
         <button type="button" class="slide" id="targetSwitch" title="Sim bot / Real bot (X)"></button>
         <span id="tgReal">Real</span>
       </div>
+      <div class="mode" id="zoomBox" title="Zoom the 3D view (D-pad up / down: 10 % in / out)">
+        <span>Zoom</span>
+        <input type="range" id="zoomRange" min="0" max="1000" step="1" value="500">
+        <span id="zoomVal">100%</span>
+      </div>
       <div class="mode" id="axesMode" title="Axes the sticks move along">
         <span>Axes Mode</span>
         <span id="axLocal" class="on">Local</span>
@@ -279,6 +295,7 @@
         <button type="button" class="x" id="profileHide" title="Hide until this changes">&times;</button>
       </div>
       <iframe src="{{ viser_url }}" title="Viser"></iframe>
+      <div id="touchView"></div>
       <aside class="props">
         <h2>Object Properties</h2>
         <section id="simProps">
@@ -347,7 +364,8 @@
       <div class="keys">
         <b>Left stick</b> up +x, left +y &nbsp; <b>L4 / L5</b> +z / -z<br>
         <b>Right stick</b> left +roll (about x), up +pitch (about y) &nbsp; <b>R4 / R5</b> +yaw / -yaw (about z)<br>
-        <b>X</b> controller drives the Sim bot / Real bot<br>
+        <b>X</b> controller drives the Sim bot / Real bot &nbsp; <b>D-pad up / down</b> zoom in / out 10 %<br>
+        <b>Finger on the 3D view</b> orbit around the arm (elsewhere the touchscreen clicks as usual)<br>
         <b>Right trackpad</b> mouse &nbsp; <b>R2</b> left click &nbsp; <b>L2</b> or pad click: right click<br>
         <b>Left trackpad</b> scroll (zoom)
       </div>
@@ -401,6 +419,83 @@
       });
     }
 
+    // ---- 3D view: Zoom slider (log scale 20 % .. 500 %) and touch orbit
+    const ZOOM_MIN = 20, ZOOM_MAX = 500;
+    const zoomRange = document.getElementById("zoomRange");
+    const zoomVal = document.getElementById("zoomVal");
+    let zoomDragging = false, zoomSendT = 0, zoomTimer = null;
+    function zoomToSlider(p) {
+      return Math.round(1000 * Math.log(p / ZOOM_MIN) / Math.log(ZOOM_MAX / ZOOM_MIN));
+    }
+    function sliderToZoom(v) {
+      return ZOOM_MIN * Math.pow(ZOOM_MAX / ZOOM_MIN, Number(v) / 1000);
+    }
+    function renderZoom(p) {
+      if (p == null || !isFinite(p)) return;
+      if (!zoomDragging) zoomRange.value = zoomToSlider(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, p)));
+      if (!zoomDragging) zoomVal.textContent = Math.round(p) + "%";
+    }
+    function sendZoom() {
+      zoomTimer = null;
+      zoomSendT = Date.now();
+      post("/api/deck/view", { zoom: sliderToZoom(zoomRange.value) });
+    }
+    zoomRange.addEventListener("pointerdown", () => { zoomDragging = true; });
+    window.addEventListener("pointerup", () => { zoomDragging = false; });
+    zoomRange.addEventListener("input", () => {
+      zoomVal.textContent = Math.round(sliderToZoom(zoomRange.value)) + "%";
+      // At most ~25 updates a second while dragging.
+      if (zoomTimer) return;
+      zoomTimer = setTimeout(sendZoom, Math.max(0, 40 - (Date.now() - zoomSendT)));
+    });
+    zoomRange.addEventListener("change", () => { zoomDragging = false; sendZoom(); });
+
+    const ORBIT_DEG_PER_PX = 0.35;
+    const touchView = document.getElementById("touchView");
+    const orbit = { id: null, x: 0, y: 0, acc: [0, 0], timer: null };
+    function flushOrbit() {
+      orbit.timer = null;
+      const a = orbit.acc;
+      if (!a[0] && !a[1]) return;
+      orbit.acc = [0, 0];
+      post("/api/deck/view", { orbit: a });
+    }
+    // The trackpad cursor (a mouse) goes to Viser: step aside when it comes over the view.
+    touchView.addEventListener("pointermove", (e) => {
+      if (e.pointerType === "mouse") { touchView.classList.add("pass"); return; }
+      if (e.pointerType !== "touch" || e.pointerId !== orbit.id) return;
+      e.preventDefault();
+      // Drag right turns the arm to the right (the camera moves left); drag
+      // down views it from higher up.
+      orbit.acc[0] += -(e.clientX - orbit.x) * ORBIT_DEG_PER_PX;
+      orbit.acc[1] += (e.clientY - orbit.y) * ORBIT_DEG_PER_PX;
+      orbit.x = e.clientX;
+      orbit.y = e.clientY;
+      if (!orbit.timer) orbit.timer = setTimeout(flushOrbit, 35);
+    });
+    touchView.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse") { touchView.classList.add("pass"); return; }
+      if (e.pointerType !== "touch" || orbit.id !== null) return;
+      e.preventDefault();
+      orbit.id = e.pointerId;
+      orbit.x = e.clientX;
+      orbit.y = e.clientY;
+      try { touchView.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => touchView.addEventListener(ev, (e) => {
+      if (e.pointerId !== orbit.id) return;
+      orbit.id = null;
+      flushOrbit();
+    }));
+    // Back for fingers once the pointer is anywhere else on the page (the
+    // cursor left the view, or a finger touched the panels or top bar).
+    document.addEventListener("pointermove", (e) => {
+      if (e.target !== touchView) touchView.classList.remove("pass");
+    }, true);
+    document.addEventListener("pointerdown", (e) => {
+      if (e.target !== touchView) touchView.classList.remove("pass");
+    }, true);
+
     function render(d) {
       state = d || {};
       const sim = d.sim || {};
@@ -443,6 +538,7 @@
       pp.title = prof.message || pad.error || "";
       $("profileMsg").textContent = prof.message ? "Steam controller profile: " + prof.message : "";
       renderProfileBanner(prof);
+      renderZoom(d.zoom);
 
       const btn = $("moveRobotPose");
       btn.disabled = !online && !moveHolding;

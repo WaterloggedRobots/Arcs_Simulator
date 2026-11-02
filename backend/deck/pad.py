@@ -9,6 +9,7 @@ and L2 / R2 clicks are done by SteamController.exe itself, not here.
     right stick    left = +roll (about x), up = +pitch (about y)
     R4 / R5        +yaw / -yaw (about z)
     X              switch the sticks between the sim bot and the real bot
+    D-pad up / down  zoom the 3D view in / out by 10 % per press
 
 Axes follow the Axes Mode toggle: Local = the sim cursor's own axes,
 Global = world axes.
@@ -21,13 +22,13 @@ import os
 import threading
 import time
 
-VERSION = "deck-1.8"
+VERSION = "deck-1.10"
 MAPPING = "left stick up +x, left +y; L4/L5 +z/-z; right stick left +roll, up +pitch; R4/R5 +yaw/-yaw"
 
 LB = 0x0100
 RB = 0x0200
 # Buttons reported to on_button (pressed, not held).
-BUTTONS = {"X": 0x4000}
+BUTTONS = {"X": 0x4000, "DPAD_UP": 0x0001, "DPAD_DOWN": 0x0002}
 DEADZONE = 0.12
 TRIGGER_ON = 128
 LOOP_S = 0.03
