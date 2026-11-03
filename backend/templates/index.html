@@ -6134,8 +6134,17 @@
       const wrap = document.getElementById("padWrap");
       const info = document.getElementById("padInfo");
       if (!d || !d.started) {
+        // Not running: say why rather than showing nothing.
         if (wrap) wrap.hidden = true;
-        if (info) info.hidden = true;
+        const why = (d && d.error) ? d.error : "no answer from /api/controller (see the console)";
+        if (info) {
+          info.hidden = false;
+          info.textContent = "Controller unavailable: " + why;
+          info.classList.add("warn");
+          info.title = why;
+        }
+        const dev0 = document.getElementById("padDevice");
+        if (dev0) dev0.textContent = "Controller unavailable: " + why;
         return;
       }
       const c = d.controller || {};
@@ -6177,7 +6186,7 @@
     }
     function pollPad() {
       fetch("/api/controller")
-        .then((r) => (r.ok ? r.json() : null))
+        .then((r) => (r.ok ? r.json() : r.json().catch(() => null)))
         .then(renderPad)
         .catch(() => {})
         .finally(() => setTimeout(pollPad, 400));

@@ -1733,7 +1733,14 @@ def _start_controller():
         import deck_webui
         deck_webui.start_controller()
     except Exception as e:
+        traceback.print_exc()
         print("controller unavailable:", e)
+        reason = "%s: %s" % (type(e).__name__, e)
+        if "/api/controller" not in [r.rule for r in app.url_map.iter_rules()]:
+            # Tell the page why, instead of leaving it without a Controller row.
+            app.add_url_rule("/api/controller", "api_controller_unavailable",
+                             lambda: jsonify({"ok": False, "started": False, "error": reason}),
+                             methods=["GET", "POST"])
 
 
 def _wait_viewer(timeout=20.0):
