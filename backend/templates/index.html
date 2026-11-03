@@ -6172,7 +6172,7 @@
       if (dev) {
         dev.textContent = c.connected
           ? c.name + " — " + (c.type || "controller") + (c.vendor ? " (USB " + c.vendor + ":" + c.product + ")" : "") + ", via " + (c.backend || "?")
-          : "No controller connected" + (c.error ? " (" + c.error + ")" : "");
+          : "No controller connected" + (c.error ? " (" + c.error + ")" : "") + (c.seen ? ". SDL sees: " + c.seen : "");
       }
       const binds = document.getElementById("padBinds");
       const html = padBindRows(c.labels);

@@ -25,7 +25,7 @@ import os
 import threading
 import time
 
-VERSION = "controller-1.0"
+VERSION = "controller-1.1"
 MAPPING = ("left stick up +x, left +y; L1/L2 +z/-z; right stick left +roll, up +pitch; "
            "R1/R2 +yaw/-yaw; X (PlayStation Square) Sim / Real")
 
@@ -43,7 +43,7 @@ LABELS = {
 }
 
 _status = {"backend": None, "connected": False, "name": "", "type": "", "family": "",
-           "vendor": "", "product": "", "error": ""}
+           "vendor": "", "product": "", "error": "", "seen": ""}
 _lock = threading.Lock()
 
 
@@ -152,16 +152,27 @@ class _SDL:
         from pygame._sdl2 import controller
         self.pg = pygame
         self.c = controller
+        # On Windows SDL learns about pads (and plugging in / out) through
+        # window messages, which only arrive while events are pumped; that
+        # needs the video subsystem (no window is opened).
+        self.pump = False
+        try:
+            pygame.display.init()
+            self.pump = True
+        except Exception as e:
+            print("controller: no SDL event pump (%s)" % e)
         pygame.joystick.init()
         controller.init()
         self.ctrl = None
         self.last_scan = 0.0
+        self.seen = None
 
     def _open(self):
         now = time.time()
         if now - self.last_scan < SCAN_S:
             return None
         self.last_scan = now
+        self._log_seen()
         for i in range(self.c.get_count()):
             if not self.c.is_controller(i):
                 continue
@@ -178,7 +189,38 @@ class _SDL:
                 _status["error"] = "open failed: %s" % e
         return None
 
+    def _log_seen(self):
+        """Log (and show in Preferences) every device SDL sees, once per change:
+        what to look at when a controller is not picked up."""
+        pg = self.pg
+        rows = []
+        try:
+            for i in range(pg.joystick.get_count()):
+                try:
+                    j = pg.joystick.Joystick(i)
+                    name, guid = j.get_name(), j.get_guid()
+                    axes, buttons = j.get_numaxes(), j.get_numbuttons()
+                except Exception as e:
+                    name, guid, axes, buttons = "?", "", 0, 0
+                    print("controller: device %d unreadable: %s" % (i, e))
+                ok = self.c.is_controller(i)
+                rows.append("%s [%s, %d axes, %d buttons, %s]" % (
+                    name, guid or "no guid", axes, buttons,
+                    "game controller" if ok else "NOT a known game controller"))
+        except Exception as e:
+            rows = ["error listing devices: %s" % e]
+        seen = "; ".join(rows) or "nothing"
+        if seen != self.seen:
+            self.seen = seen
+            _status["seen"] = seen
+            print("controller: SDL sees %d device(s): %s" % (len(rows), seen))
+
     def read(self):
+        if self.pump:
+            try:
+                self.pg.event.pump()
+            except Exception:
+                pass
         self.c.update()  # also notices controllers being plugged in or removed
         if self.ctrl is not None and not self.ctrl.attached():
             try:
