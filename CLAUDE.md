@@ -19,6 +19,8 @@ Notes for working on this repo. The README is the user manual (features, control
 
 ## Steam Deck edition
 
+- **Branches:** Deck work lives on its own branch, `steamdeck/latest` (started from `steamdeck/build`); push every Deck change there. PC sandbox work (`multi-arm`, `controller`, `multi-arm-controller`) does not go to the Deck branches, and Deck work does not go to them, unless the owner asks for a feature to be carried over.
+
 - `backend/deck_webui.py`: routes under `/api/deck/...`, jog logic, `boot()` (settings, viewer, Steam profile, pad, hold watchdog) and `serve()` (Flask, blocking).
 - `backend/deck/pad.py`: Deck controls as an XInput pad. `backend/deck/steam_profile.py`: switches Steam Deck Tools' `SteamController.exe` to the hidden "Arcs Deck" profile and back on exit.
 - **Version**: `DECK_VERSION` in `backend/deck/version.py` is the one source: `deck_webui.DECK_VERSION`, `deck/pad.VERSION`, Settings, the start-up print and the preloader all use it (also update the `# version:` first line of `deck_webui.py`). Bump it for a Deck feature change; commits are titled `Deck 1.x: ...`. `deck/preloader.png` has no version drawn in: `deck_app._draw_version` writes `version.label()` ("v deck.1.10") bottom right of the white strip, at the log font size on its baseline, for both splash stages.
