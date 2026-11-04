@@ -82,6 +82,7 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
 
 - The simulated robot appears as the **sim cursor** — the draggable handle that stands in for the real arm's end effector.
 - **Aubo Arm** is the robot base, shown as a blue marker at the foot of the arm. The **Sim cursor** and, while the robot is connected, the **Real cursor** sit under it in the hierarchy. Select it to get a gizmo at the base, or type its position and rotation in Properties: both the real and the sim arm move with it, and the sim cursor keeps its joint angles. IK values, MoveL targets and the IK fields stay relative to the arm's base, as on the teach pendant; saved points (Bookmarks) always move with the arm. After a move, if there are waypoints, the app asks whether they should **move with the arm** or **stay in place**. Waypoints that stay turn red and lose their joint angles; the next bake solves them again and turns each one white once IK is found. The base pose is saved with the project and can be undone (together with the waypoint choice).
+- **More Aubo Arms.** *Add object > Aubo Arm* adds another arm, named **Aubo Arm 1**, **Aubo Arm 2** and so on, placed beside the last one (the first arm keeps the name **Aubo Arm**). Each arm has its own base, Sim and Real cursors, IK (relative to its own base) and waypoints. Objects, cameras and saved paths are shared, in one world frame. Saved points are shared too, but relative to the base: each one is drawn once in front of every arm, and going to it moves the active arm to its own copy. Selecting an arm's cursor or base, clicking its timeline row, clicking one of its waypoints, or picking it in *Preferences > Robot Settings* makes it the **active arm**, named in brackets in the Waypoints header. The Waypoints list shows every arm's waypoints, each arm under its own name, and the **+** buttons add to the active arm. Double-click an arm in the object list to rename it; select an added arm and press Delete to remove it (the first arm stays). Bake, Simulate and Run work on every arm that has a path, on one clock.
 - Add simple primitives, or import custom **`.stl`** meshes to build a simulation environment around the robot.
 - **Empty** objects are drawn as grey, see-through waypoint markers (sphere with forward and side arrows), so their orientation is visible.
 - Add advanced objects such as **cameras**, to reproduce a real camera's position in the simulated world.
@@ -298,12 +299,12 @@ The properties panel shows its **local** position and rotation relative to the o
 
 ### Collider
 
-The **Collider component** can be added to any 3D object and to the sim cursor.
+The **Collider component** can be added to any 3D object and to the **Aubo Arm** (the sim robot's base). The sim cursor has no Collider of its own: it is part of the Aubo Arm's robot collider. Each Aubo Arm has its own.
 
-- **Sim cursor:** the collider covers the whole sim robot in the shape of its URDF (one convex hull per link). Its shape and size can't be changed; **Margin** (default 0 m) makes it thicker.
+- **Aubo Arm:** the collider covers the whole sim robot in the shape of its URDF (one convex hull per link). Its shape and size can't be changed; **Margin** (default 0 m) makes it thicker.
 - **Other objects:** the component holds a list of collider boxes. Each box has a shape (**Cube** or **Sphere**), a position and rotation relative to the object, and a size in meters (a diameter for spheres). The size does not follow the object's scale. A new box starts wrapped around the object as it is at that moment. Use **+** to add a box and the **−** at the top right of a box to delete it; several boxes on one object make a custom shape. Rotation has the same Quat/Euler and rad/deg toggles as Offset.
 - **Green outlines** of the boxes (or of the robot hull) show only while you click the Collider panel. Selecting the object again hides them. Collider boxes can't be moved in the 3D view yet.
-- **During a simulation**, when colliders of two different objects touch, both models turn red. Boxes of the same object never count against each other. A parent and its child do collide (the arm can hit its own end effector) unless the child ticks **ignore parent collider**, which shows for parented objects and skips the nearest parent above it that has a collider (for a tool on the sim cursor, the robot). If either object has **stop simulation if collide** ticked, the simulation pauses (same as the Pause button) when the contact starts; Resume plays on while they stay touching.
+- **During a simulation**, when colliders of two different objects touch, both models turn red. Boxes of the same object never count against each other. A parent and its child do collide (the arm can hit its own end effector) unless the child ticks **ignore parent collider**, which shows for parented objects and skips the nearest parent above it that has a collider (for a tool on the sim cursor or the Aubo Arm, the robot). If either object has **stop simulation if collide** ticked, the simulation pauses (same as the Pause button) when the contact starts; Resume plays on while they stay touching.
 
 Colliders are saved with the project and covered by undo for scene objects.
 
@@ -314,7 +315,7 @@ Components in the properties panel are listed in the order they were added, newe
 ## Miscellaneous features
 
 - **File save and load**, with **autosave and automatic backup**.
-- **Settings menu** for robot type and joint limits.
+- **Settings menu** for robot type and joint limits. *Robot Settings* holds the robot IP and port for one arm, chosen in its **Aubo Arm** select (it follows the active arm both ways). The first arm falls back to the address in `arcscontrol.py`, so scripts run on their own keep working; an added arm is sim only until it gets an IP. Robot type, IP, port and the joint speed and acceleration limits are per arm (all on the *Robot Settings* tab, under its **Aubo Arm** select); the first arm's are kept in `settings.json`, added arms' in the project file.
 - **Automatic reconnection** to the robot.
 - **Multi-camera handling** — the simulator, computer webcams and Sony cameras are handled separately, with split-screen views and an individual recording track for each.
 - **View console** for debugging.
@@ -361,6 +362,7 @@ The following are known to be rough or incomplete at this stage:
 | Live target tracking during a run | Not available; tracking is computed before baking. Real-arm face tracking is in progress. |
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
+| Several Aubo Arms | Undo and redo belong to the active arm. Timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
 
 ---
 
