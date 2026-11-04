@@ -2162,7 +2162,7 @@
             <label class="col-stop" id="colIgnoreRow" hidden><input id="colliderIgnoreParent" type="checkbox"> ignore parent collider</label>
             <div id="colRobot" hidden>
               <div class="col-note">Covers the whole robot in the shape of its URDF.</div>
-              <div class="row name-row"><label>Margin</label><input id="colMargin" type="number" step="0.001" min="0" value="0"></div>
+              <div class="row name-row"><label>Margin</label><input id="colMargin" type="number" step="0.01" min="0" value="0.00"></div>
             </div>
             <div id="colObj" hidden>
               <div class="row rot-tools">
@@ -4860,7 +4860,7 @@
       if (ob) ob.hidden = robot;
       if (robot) {
         const m = document.getElementById("colMargin");
-        if (m && document.activeElement !== m) m.value = Number(col.margin || 0).toFixed(4);
+        if (m && document.activeElement !== m) m.value = Number(col.margin || 0).toFixed(2);
         return;
       }
       const items = col.items || [];
