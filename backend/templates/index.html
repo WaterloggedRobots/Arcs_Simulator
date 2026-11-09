@@ -752,7 +752,16 @@
     #gimConnWrap.advanced .mode-advanced { color: #4aa3ff !important; }
     #gimConnect { background: #8a8a92 !important; }
     #gimConnect.advanced { background: #4aa3ff !important; }
-    .gim-err { color: #e05555; font-size: 12px; padding: 6px 10px 10px; word-break: break-word; }
+    .gim-err { color: #e05555; font-size: 12px; padding: 8px 0 4px; word-break: break-word; }
+    .gim-twin::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .gim-twin.sim::before { background: rgb(80, 200, 255); }
+    .gim-twin.real::before { background: rgb(255, 180, 80); }
+    #gimMountBlock[hidden], #gimSimBlock[hidden], #gimRealBlock[hidden] { display: none; }
+    .props.gim-part #primBody > :not(#gimbalProps) { display: none !important; }
+    .props.gim-part #gimbalProps > hr { display: none; }
+    .props.gim-part #simExtraAdd,
+    .props.gim-part .track-comp:not(#gimbalProps),
+    .props.gim-part > hr { display: none !important; }
     .gim-err[hidden] { display: none; }
     .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
     .use-offset-btn:disabled { opacity: 0.45; cursor: default; }
@@ -2065,47 +2074,60 @@
           </div>
           <div id="gimbalProps" class="track-comp gim-comp" hidden>
             <hr>
-            <div class="track-head">
-              <span>Gimbal</span>
-              <div class="track-head-right">
-                <div class="tl-mode simple" id="gimConnWrap" title="Connect to the gimbal (off: the cube previews the target)">
-                  <span class="mode-simple">Off</span>
-                  <button type="button" class="slide" id="gimConnect"></button>
-                  <span class="mode-advanced">Connected</span>
+            <div id="gimMountBlock">
+              <div class="track-head">
+                <span>Gimbal</span>
+                <div class="track-head-right">
+                  <div class="tl-mode simple" id="gimConnWrap" title="Send moves to the real gimbal (Move, initial pose, Run). Angles are read either way.">
+                    <span class="mode-simple">Off</span>
+                    <button type="button" class="slide" id="gimConnect"></button>
+                    <span class="mode-advanced">Drive</span>
+                  </div>
                 </div>
               </div>
+              <div class="col-note" id="gimState"></div>
+              <div class="col-note">Select <b>Sim gimbal</b> under it for the target and frames, <b>Real gimbal</b> for the angles read.</div>
+              <details class="gim-conn" open>
+                <summary>Connection</summary>
+                <div class="row name-row"><label>Script</label><input id="gimScript" type="text" placeholder="rs4_can.py (bundled)" title="Driver script; empty = user_files/gimbal_scripts/rs4_can.py"></div>
+                <div class="row name-row"><label>Interface</label><input id="gimIface" type="text" value="canalystii" title="python-can interface"></div>
+                <div class="row name-row"><label>Channel</label><input id="gimChannel" type="number" step="1" min="0" value="0"></div>
+                <div class="row name-row"><label>Bitrate</label><input id="gimBitrate" type="number" step="1000" min="0" value="1000000"></div>
+                <div class="row name-row"><label>Move time (s)</label><input id="gimMoveS" type="number" step="0.1" min="0.1" max="25" value="2" title="Time for Move gimbal and for the move to the initial pose before a run"></div>
+              </details>
             </div>
-            <div class="col-note" id="gimState">Preview only: the cube shows the target angles.</div>
-            <label class="field tight">Target (deg)</label>
-            <div class="row triple gim-angles">
-              <label title="yaw">yaw</label><input id="gimYaw" type="number" step="0.1" min="-180" max="180" value="0">
-              <label title="roll">roll</label><input id="gimRoll" type="number" step="0.1" min="-30" max="30" value="0">
-              <label title="pitch">pitch</label><input id="gimPitch" type="number" step="0.1" min="-56" max="146" value="0">
+            <div id="gimSimBlock">
+              <div class="track-head"><span class="gim-twin sim">Sim gimbal</span></div>
+              <label class="field tight">Target (deg)</label>
+              <div class="row triple gim-angles">
+                <label title="yaw">yaw</label><input id="gimYaw" type="number" step="0.1" min="-180" max="180" value="0">
+                <label title="roll">roll</label><input id="gimRoll" type="number" step="0.1" min="-30" max="30" value="0">
+                <label title="pitch">pitch</label><input id="gimPitch" type="number" step="0.1" min="-56" max="146" value="0">
+              </div>
+              <div class="gim-btns">
+                <button type="button" id="gimMove" title="Send the target to the real gimbal">Move gimbal</button>
+                <button type="button" id="gimUseRead" title="Copy the angles read from the real gimbal into the target">Use read angles</button>
+              </div>
+              <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
+              <div class="gim-btns">
+                <button type="button" id="gimInsert" title="Insert a frame with the target angles at the playhead">Insert frame</button>
+                <button type="button" id="gimDelete" title="Delete the frame at the playhead">Delete frame</button>
+              </div>
+              <div id="gimFrames" class="gim-frames"></div>
+              <div id="gimbalReadErr" class="gim-err" hidden></div>
             </div>
-            <label class="field tight">Read from gimbal (deg)</label>
-            <div class="row triple gim-angles">
-              <label>yaw</label><input id="gimReadYaw" type="text" readonly value="—">
-              <label>roll</label><input id="gimReadRoll" type="text" readonly value="—">
-              <label>pitch</label><input id="gimReadPitch" type="text" readonly value="—">
+            <div id="gimRealBlock">
+              <div class="track-head"><span class="gim-twin real">Real gimbal</span></div>
+              <label class="field tight">Read from gimbal (deg)</label>
+              <div class="row triple gim-angles">
+                <label>yaw</label><input id="gimReadYaw" type="text" readonly value="—">
+                <label>roll</label><input id="gimReadRoll" type="text" readonly value="—">
+                <label>pitch</label><input id="gimReadPitch" type="text" readonly value="—">
+              </div>
+              <div class="gim-btns">
+                <button type="button" id="gimUseRead2" title="Copy these angles into the Sim gimbal's target">Use as target</button>
+              </div>
             </div>
-            <div class="gim-btns">
-              <button type="button" id="gimMove" title="Send the target to the gimbal">Move gimbal</button>
-              <button type="button" id="gimUseRead" title="Copy the angles read from the gimbal into the target">Use read angles</button>
-            </div>
-            <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
-            <div class="gim-btns">
-              <button type="button" id="gimInsert" title="Insert a frame with the target angles at the playhead">Insert frame</button>
-              <button type="button" id="gimDelete" title="Delete the frame at the playhead">Delete frame</button>
-            </div>
-            <div id="gimFrames" class="gim-frames"></div>
-            <details class="gim-conn">
-              <summary>Connection</summary>
-              <div class="row name-row"><label>Script</label><input id="gimScript" type="text" placeholder="rs4_can.py (bundled)" title="Driver script; empty = user_files/gimbal_scripts/rs4_can.py"></div>
-              <div class="row name-row"><label>Interface</label><input id="gimIface" type="text" value="canalystii" title="python-can interface"></div>
-              <div class="row name-row"><label>Channel</label><input id="gimChannel" type="number" step="1" min="0" value="0"></div>
-              <div class="row name-row"><label>Bitrate</label><input id="gimBitrate" type="number" step="1000" min="0" value="1000000"></div>
-              <div class="row name-row"><label>Move time (s)</label><input id="gimMoveS" type="number" step="0.1" min="0.1" max="25" value="2" title="Time for Move gimbal and for the move to the initial pose before a run"></div>
-            </details>
           </div>
         </div>
         <div id="propBody" hidden>
@@ -2308,7 +2330,6 @@
             <button type="button" data-comp="offset">Offset</button>
             <button type="button" data-comp="collider">Collider</button>
           </div>
-          <div id="gimbalReadErr" class="gim-err" hidden></div>
       </aside>
     </div>
     <div class="tl-resizer" id="tlResizer" title="Drag to resize timeline"></div>
@@ -4553,14 +4574,20 @@
     }
     function renderGimbal(obj) {
       const box = document.getElementById("gimbalProps");
+      const panel = document.getElementById("propsPanel");
       const errEl = document.getElementById("gimbalReadErr");
       const g = (obj && obj.kind === "gimbal") ? (obj.gimbal || {}) : null;
+      const part = g ? (obj.gimbal_part || "") : "";
       if (box) box.hidden = !g;
+      if (panel) panel.classList.toggle("gim-part", !!part);
       if (!g) {
-        if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
         window.__gimbal = null;
         return;
       }
+      // Mount: settings. Sim gimbal: target and frames. Real gimbal: angles read.
+      document.getElementById("gimMountBlock").hidden = !!part;
+      document.getElementById("gimSimBlock").hidden = part !== "sim";
+      document.getElementById("gimRealBlock").hidden = part !== "real";
       window.__gimbal = { id: obj.id, keys: g.keys || [] };
       const cfg = g.cfg || {};
       const setVal = (id, v) => {
@@ -4571,24 +4598,24 @@
       ["gimYaw", "gimRoll", "gimPitch"].forEach((id, i) => setVal(id, Number(tgt[i] || 0).toFixed(1)));
       const rd = g.read;
       ["gimReadYaw", "gimReadRoll", "gimReadPitch"].forEach((id, i) => setVal(id, rd ? Number(rd[i]).toFixed(1) : "—"));
-      const on = !!cfg.connect;
+      const drive = cfg.drive !== false;
       const sw = document.getElementById("gimConnect");
       const wrap = document.getElementById("gimConnWrap");
-      if (sw) sw.classList.toggle("advanced", on);
-      if (wrap) { wrap.classList.toggle("advanced", on); wrap.classList.toggle("simple", !on); }
+      if (sw) sw.classList.toggle("advanced", drive);
+      if (wrap) { wrap.classList.toggle("advanced", drive); wrap.classList.toggle("simple", !drive); }
       const st = document.getElementById("gimState");
       if (st) {
-        let txt = "Preview only: the cube shows the target angles.";
-        if (on && g.connected && g.read_ok) txt = "Connected: the cube shows the angles read from the gimbal.";
-        else if (on && g.connected) txt = "Connected: the cube shows the last angles read.";
-        else if (on) txt = "Connecting…";
+        let txt = g.read_ok ? "Reading the real gimbal." : (g.connected ? "Connected, angle read failing." : "Real gimbal not connected (retrying).");
+        txt += drive ? " Moves are sent to it." : " Moves are not sent (Drive off).";
         if (g.cmd_err) txt += " " + g.cmd_err;
         st.textContent = txt;
       }
       const mv = document.getElementById("gimMove");
-      if (mv) mv.disabled = !g.connected;
-      const ur = document.getElementById("gimUseRead");
-      if (ur) ur.disabled = !rd;
+      if (mv) mv.disabled = !(g.connected && drive);
+      ["gimUseRead", "gimUseRead2"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !rd;
+      });
       setVal("gimScript", cfg.script || "");
       setVal("gimIface", cfg.interface || "canalystii");
       setVal("gimChannel", cfg.channel != null ? cfg.channel : 0);
@@ -4611,6 +4638,7 @@
           "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button></div>"
         ).join("") || "<div class='col-note'>No frames. Set the target, move the playhead and press Insert frame.</div>";
       }
+      // Red under the Sim gimbal when the real angles can't be read.
       if (errEl) {
         errEl.textContent = g.read_err || "";
         errEl.hidden = !g.read_err;
@@ -4640,7 +4668,7 @@
       const byId = (id) => document.getElementById(id);
       const conn = byId("gimConnect");
       if (conn) conn.addEventListener("click", () => {
-        postGimbal({ cfg: { connect: !conn.classList.contains("advanced") } });
+        postGimbal({ cfg: { drive: !conn.classList.contains("advanced") } });
       });
       ["gimYaw", "gimRoll", "gimPitch"].forEach((id) => {
         const el = byId(id);
@@ -4658,8 +4686,10 @@
       });
       const mv = byId("gimMove");
       if (mv) mv.addEventListener("click", () => postGimbal({ action: "move", target: gimbalTarget() }));
-      const ur = byId("gimUseRead");
-      if (ur) ur.addEventListener("click", () => postGimbal({ action: "use_read" }));
+      ["gimUseRead", "gimUseRead2"].forEach((id) => {
+        const ur = byId(id);
+        if (ur) ur.addEventListener("click", () => postGimbal({ action: "use_read" }));
+      });
       const ins = byId("gimInsert");
       if (ins) ins.addEventListener("click", () => postGimbal({ action: "insert_frame", t: playhead, target: gimbalTarget() }));
       const del = byId("gimDelete");
@@ -5774,7 +5804,8 @@
       const wps = document.getElementById("hierWps");
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
-      const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import" || d.object.kind === "gimbal")) ? [d.object.id] : []);
+      const gimPart = d.object && d.object.kind === "gimbal" && d.object.gimbal_part;
+      const selIds = gimPart ? [d.object.id + "#" + gimPart] : d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import" || d.object.kind === "gimbal")) ? [d.object.id] : []);
       // Built-ins. With SIM_BOT_ENABLED: Aubo Arm (robot base) with the Sim cursor and,
       // while the robot is connected, the Real cursor under it.
       // Every Aubo Arm gets its own group; a Real cursor shows only while that arm's robot is connected.
@@ -5789,7 +5820,15 @@
               .concat(a.real_connected ? [{ id: a.real_id, name: "Real cursor", parent_id: a.bot_id }] : [])
           : [{ id: a.sim_id, name: "Sim cursor", arm: 1 }]);
       });
-      const objRows = armRows.concat(d.scene_objects || []);
+      // A gimbal lists its Sim twin and, while its angles read, its Real twin (like an arm's cursors).
+      const twinRows = [];
+      (d.scene_objects || []).forEach((o) => {
+        if (!o || o.kind !== "gimbal") return;
+        twinRows.push({ id: o.id + "#sim", name: "Sim gimbal", parent_id: o.id, twin: "sim" });
+        if (o.gimbal_real) twinRows.push({ id: o.id + "#real", name: "Real gimbal", parent_id: o.id, twin: "real" });
+      });
+      twinRows.forEach((r) => { builtInIds[r.id] = 1; });
+      const objRows = armRows.concat(d.scene_objects || [], twinRows);
       const builtIn = (id) => !!builtInIds[id];
       window.__armBuiltIns = builtInIds;
       const activeArm = armList.find((a) => a.active) || armList[0];
@@ -5825,7 +5864,8 @@
         return (byParent[pid] || []).map((o) => {
           const pad = 8 + depth * 14;
           const mark = (o.parent_id ? "↳ " : "");
-          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
+          const twinDot = o.twin ? "<span class='gim-twin " + o.twin + "'></span>" : "";
+          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + twinDot + (o.name || o.kind) + "</span>" + (o.twin ? "" : eyeHtml("obj", o.id)) + "</div>" + walk(o.id, depth + 1);
         }).join("");
       }
       let tree = walk("", 0);

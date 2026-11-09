@@ -336,6 +336,7 @@ def _scene_objects_payload():
             "cam_type": str(((obj.get("camera") or {}).get("type") or "sim")),
             "has_frame": bool(obj.get("id") in getattr(sv, "_cam_frame_jpeg", {})),
             "cam_error": obj.get("cam_error") or ((obj.get("camera") or {}).get("error")),
+            "gimbal_real": wp.gimbal.real_ok(obj.get("id")) if obj.get("kind") == "gimbal" else None,
         })
     return rows
 
@@ -1188,6 +1189,8 @@ def api_delete_selected():
         arms.remove_arm(arms.active())
         _status_dirty.set()
         return jsonify({"ok": True, "removed_arm": True})
+    if wp.gimbal.selected_part():
+        return jsonify({"ok": False, "error": "a gimbal's Sim / Real twin can't be deleted"})
     if hasattr(wp, "delete_selected"):
         wp.delete_selected()
     return jsonify({"ok": True})

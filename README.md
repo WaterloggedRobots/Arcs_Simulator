@@ -318,29 +318,27 @@ Components in the properties panel are listed in the order they were added, newe
 
 ## Gimbal (DJI RS4)
 
-*Add > Gimbal* (or **+** in the Objects tab) adds a gimbal. It is one object in the list, drawn as two parts:
+*Add > Gimbal* (or **+** in the Objects tab) adds a gimbal. Like an Aubo Arm with its Sim and Real cursors, it has a mount and two twins, listed under it:
 
-- **Mount** — a grey empty (sphere with forward and side arrows). This is what you move: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm).
-- **Head** — a dark cube with an orange lens arrow, attached to the mount. You can't move it yourself: its rotation relative to the mount is the gimbal's **yaw / roll / pitch**. While the gimbal is connected it shows the angles **read from the gimbal**; otherwise it previews the **target** angles.
+- **Gimbal** (the mount) — a grey empty (sphere with forward and side arrows). This is what you move: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm).
+- **Sim gimbal** — a large blue waypoint-like marker (sphere, long lens arrow, side arrow) on the mount, turned by the **target** angles: what you set, and the track when the playhead moves.
+- **Real gimbal** — the same in orange, turned by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
 
-Angles are the gimbal's joint angles in degrees (limits: yaw ±180, roll ±30, pitch −56…+146). The head uses the mount's frame (z forward, x right, y down): positive yaw turns right, positive roll drops the right side, positive pitch tilts up, applied in the motor order yaw > roll > pitch.
+The twins can't be moved, renamed or deleted on their own; their angles come from the target and from the gimbal.
 
-**Properties > Gimbal**
+Angles are the gimbal's joint angles in degrees (limits: yaw ±180, roll ±30, pitch −56…+146). The twins use the mount's frame (z forward along the lens arrow, x right, y down): positive yaw turns right, positive roll drops the right side, positive pitch tilts up, applied in the motor order yaw > roll > pitch.
 
-| Control | What it does |
+**Properties**
+
+| Selected | Shows |
 | --- | --- |
-| **Off / Connected** | Talk to the gimbal. Off: preview only, nothing is sent. |
-| **Target** | Yaw, roll, pitch for Move gimbal and Insert frame. Follows the track when the playhead moves. |
-| **Read from gimbal** | The last angles read (about 10 times a second). |
-| **Move gimbal** | Sends the target to the gimbal, taking *Move time*. |
-| **Use read angles** | Copies the read angles into the target (pose the gimbal by hand or joystick, then key it). |
-| **Insert frame** | Adds a frame with the target angles at the playhead (replaces one already there). |
-| **Delete frame** | Deletes the frame at the playhead. The frame list below also has × per frame; click a frame to move the playhead to it. |
-| **Connection** | Driver script (empty = the bundled `rs4_can.py`), python-can interface, channel, bitrate, and *Move time* (for Move gimbal and the move to the initial pose). |
+| **Gimbal** | Name, transform, scale, components; **Off / Drive** (send moves to the real gimbal: Move gimbal, the initial pose and Run; angles are read either way); the connection state; **Connection**: driver script (empty = the bundled `rs4_can.py`), python-can interface, channel, bitrate and *Move time* (for Move gimbal and the move to the initial pose). |
+| **Sim gimbal** | **Target** yaw / roll / pitch; **Move gimbal** (sends the target, taking *Move time*); **Use read angles** (copies the real angles into the target); **Insert frame** (target angles at the playhead, replacing one already there); **Delete frame** (at the playhead); the frame list (click a frame to move the playhead to it, × deletes it); red **Angle read failed: …** text when reading fails. |
+| **Real gimbal** | The angles read, and **Use as target**. |
 
-If reading the angles fails (no adapter, gimbal off, no reply, bad CRC …), red text at the bottom of the gimbal's properties panel says why, and the head keeps the last angles read. After about 2 s of failures the CAN bus is reopened, and a failed connect is retried every 2 s.
+After about 2 s of failed reads the CAN bus is reopened.
 
-**Timeline.** Adding a gimbal adds its track (*<name> gimbal*): teal diamonds are frames, and the gimbal moves linearly from one frame to the next. The track goes with the gimbal object (delete the object to remove it). During **Simulate** and when scrubbing, the target (and the head, while not connected) follows the track. During **Run**, the gimbal is driven along the track: at each frame it is sent the next one with a move time that makes it arrive on time (gaps longer than 25 s are split). Before the run, while the arm moves to its init pose, the gimbal goes to its initial pose. Simulate never moves the real gimbal.
+**Timeline.** Adding a gimbal adds its track (*<name> gimbal*): teal diamonds are frames, and the gimbal moves linearly from one frame to the next. The track goes with the gimbal object (delete the object to remove it). During **Simulate** and when scrubbing, the target (and the Sim gimbal) follows the track. During **Run**, the gimbal is driven along the track: at each frame it is sent the next one with a move time that makes it arrive on time (gaps longer than 25 s are split). Before the run, while the arm moves to its init pose, the gimbal goes to its initial pose. Simulate never moves the real gimbal.
 
 **Driver script.** `user_files/gimbal_scripts/rs4_can.py` talks to a DJI RS4 through the DJI R SDK (v2.5) over CAN: a CANalyst-II USB adapter by default, 1 Mbit/s, CAN ids 0x223 (to the gimbal) / 0x222 (from it). It needs `pip install python-can pyusb libusb-package`. Run it on its own (`python user_files/gimbal_scripts/rs4_can.py`) to check the connection: it reads the angles and nudges yaw. Another gimbal or adapter can use its own script with the same four functions: `connect(cfg)`, `get_angles()` → (yaw, roll, pitch) in degrees, `move_to(yaw, roll, pitch, duration)` (returns at once) and `close()`. The sandbox calls them from one thread only. The code is `backend/robot_sim/gimbal.py`.
 
@@ -455,7 +453,7 @@ The following are known to be rough or incomplete at this stage:
 | Live target tracking during a run | Not available; tracking is computed before baking. Real-arm face tracking is in progress. |
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
-| Gimbal | Simulate previews the track on the head only while the gimbal is not connected. Gimbal frames are not covered by undo, and can't be dragged on the timeline (delete and insert again). |
+| Gimbal | Gimbal frames are not covered by undo, and can't be dragged on the timeline (delete and insert again). |
 | Several Aubo Arms | Undo and redo belong to the active arm. Timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
 
 ---
@@ -480,7 +478,7 @@ backend/                  everything needed to run the app
     robot_runtime.py      sim/real robot state, IK, Simulate / Run, path buffer
     waypoints.py          waypoints, Bezier handles, bookmarked points, saved paths, selection, undo/redo
     simulatorview.py      other scene objects: primitives, meshes, parenting, measure, cameras
-    gimbal.py             Gimbal objects: head cube, gimbal track, driver script thread (DJI RS4)
+    gimbal.py             Gimbal objects: Sim / Real twins, gimbal track, driver script thread (DJI RS4)
     path_bake.py          path sampling, IK and speed checks, baking
     timeline.py           timeline control: keyframe drag/snap, sample times, transitions, copy/paste
     file_manage.py        save / open / export

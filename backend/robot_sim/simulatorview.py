@@ -401,8 +401,8 @@ def reparent_object(oid, parent_id=None):
         return False
     if pid is not None and arms.is_builtin(pid) is False and "@" in pid:
         return False  # an arm that no longer exists
-    if pid == oid:
-        return False
+    if pid == oid or (pid and "#" in pid):
+        return False  # itself, or a gimbal's Sim / Real twin
     walk = pid
     while walk:
         if walk == oid:
@@ -1058,6 +1058,13 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
 
 
 def select_scene_object(oid, mode="replace"):
+    # A gimbal's Sim / Real twin ("o3#sim"): select the gimbal, remember the twin.
+    base_id, part = _gimbal().split_part(oid)
+    _gimbal().set_selected_part(base_id, part)
+    if part:
+        if _find_object(base_id) is None:
+            return False
+        return wp.select_item("obj", base_id, mode="replace")
     wp.note_scene_pick()
     import time as _t
     wp._obj_select_hold = _t.time() + 1.5
@@ -1154,7 +1161,7 @@ def delete_scene_object(oid):
         _colliders().forget_owner(oid)
     except Exception as e:
         print("delete: collider cleanup failed", e)
-    for key in ("gizmo", "head", "handle", "frustum"):
+    for key in ("gizmo", "sim_head", "real_head", "handle", "frustum"):
         h = obj.get(key)
         if h is not None:
             try:
@@ -1253,10 +1260,12 @@ def selected_object_props():
     else:
         p = obj["pos"]
         q = obj.get("wxyz", [1, 0, 0, 0])
+    part = _gimbal().part_of(obj.get("id")) if obj.get("kind") == "gimbal" else None
     return {
         "kind": obj.get("kind"),
         "id": obj.get("id"),
-        "name": obj.get("name"),
+        "name": obj.get("name") if not part else "%s · %s gimbal" % (obj.get("name"), "Sim" if part == "sim" else "Real"),
+        "gimbal_part": part,
         "editable": True,
         "pos": [float(v) for v in np.asarray(p).reshape(3)],
         "wxyz": [float(v) for v in np.asarray(q).reshape(4)],

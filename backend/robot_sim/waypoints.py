@@ -3479,6 +3479,8 @@ def _apply_selection_viz():
             obj = simulatorview._find_object(key)
             if obj is None:
                 continue
+            if gimbal.part_of(key):
+                continue  # a gimbal twin: its angles come from the track / the gimbal, no gizmo
             giz = obj.get("gizmo")
             if giz is None:
                 giz = simulatorview._bind_object_gizmo(obj, visible=True)

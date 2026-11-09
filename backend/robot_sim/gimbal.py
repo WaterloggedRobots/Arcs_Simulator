@@ -1,15 +1,17 @@
 """Gimbal objects: a DJI RS4 (or any gimbal with a driver script) in the scene.
 
-A Gimbal is one scene object (kind "gimbal", one row in the object list) drawn
-as two scene nodes:
+A Gimbal is one scene object (kind "gimbal") with two twins under it, like the
+Aubo Arm's Sim and Real cursors (list rows "<oid>#sim" and "<oid>#real"):
 
 - the mount: an empty (grey sphere + arrows) at the object's transform. The
   user moves it like any other object (gizmo, Properties, parenting).
-- the head: a cube (with an orange lens arrow) parented to the mount. Its local
-  rotation is the gimbal's yaw / roll / pitch: the angles read from the gimbal
-  while it is connected, otherwise the target angles (a preview).
+- the Sim gimbal: a large blue waypoint-like marker (sphere, long lens arrow,
+  side arrow) parented to the mount, rotated by the target angles (the track).
+- the Real gimbal: the same in orange, rotated by the angles read from the
+  gimbal. It is shown only while reading the angles works. Reading is tried
+  all the time (reconnecting every 2 s).
 
-Angles are the gimbal's joint angles in degrees. The head's frame matches the
+Angles are the gimbal's joint angles in degrees. The twins' frame matches the
 mount's: z forward (lens), x right, y down. Yaw turns about y (positive turns
 right), roll about the yawed z (positive drops the right side), pitch about
 the yawed and rolled x (positive tilts up), in the motor order yaw > roll > pitch.
@@ -43,14 +45,16 @@ DEFAULT_SCRIPT = "rs4_can.py"
 PERIOD_S = 0.1
 RECONNECT_S = 2.0
 MAX_MOVE_S = 25.0  # the SDK's time_for_action tops out at 25.5 s
-HEAD_RGB = (70, 70, 78)
-LENS_RGB = (255, 150, 40)
-HEAD_SIZE = 0.06
+SIM_RGB = (80, 200, 255)    # as the Sim cursor
+REAL_RGB = (255, 180, 80)   # as the Real cursor
+TWIN_R = {"sim": 0.034, "real": 0.03}
+ARROW_LEN = 0.24
+PARTS = ("sim", "real")
 AXES = ("yaw", "roll", "pitch")
 LIMITS = {"yaw": (-180.0, 180.0), "roll": (-30.0, 30.0), "pitch": (-56.0, 146.0)}
 
 DEFAULT_CFG = {
-    "connect": False,          # talk to the gimbal (off: preview only)
+    "drive": True,             # send moves (Move, initial pose, Run); reading never stops
     "script": "",              # driver script; "" = the bundled RS4 script
     "interface": "canalystii",  # python-can interface
     "channel": 0,
@@ -92,7 +96,7 @@ def clean_gimbal(rec):
     for k in DEFAULT_CFG:
         if k in src and src[k] is not None:
             cfg[k] = src[k]
-    cfg["connect"] = bool(cfg["connect"])
+    cfg["drive"] = bool(cfg["drive"])
     cfg["script"] = str(cfg["script"] or "")
     cfg["interface"] = str(cfg["interface"] or "canalystii")
     cfg["channel"] = int(_f(cfg["channel"], 0))
@@ -249,7 +253,7 @@ def _quat_axis(axis, deg):
 
 
 def head_wxyz(angles):
-    """Local rotation of the head for (yaw, roll, pitch) in degrees."""
+    """Local rotation of a twin for (yaw, roll, pitch) in degrees."""
     import simulatorview as sv
     y, r, p = (list(angles or [0, 0, 0]) + [0, 0, 0])[:3]
     q = sv._qmul(sv._qmul(_quat_axis((0, 1, 0), y), _quat_axis((0, 0, 1), r)), _quat_axis((1, 0, 0), p))
@@ -257,60 +261,112 @@ def head_wxyz(angles):
     return q / n
 
 
-def spawn_head(obj):
-    """Cube + lens arrow as children of the mount's node (follow its pose and visibility)."""
-    if wp.server is None or obj.get("handle") is None:
-        return
-    name = "/obj_%s/mesh/head" % obj["id"]
-    sc = np.asarray(obj.get("scale", [1, 1, 1]), dtype=float).reshape(3)
-    try:
-        head = wp.server.scene.add_box(
-            name=name,
-            dimensions=tuple(HEAD_SIZE * float(v) for v in sc),
-            color=HEAD_RGB,
-            wxyz=tuple(float(v) for v in head_wxyz((obj.get("gimbal") or {}).get("target"))),
-            position=(0.0, 0.0, 0.0),
-        )
-        wp.add_forward_arrow(name, length=0.11, colors=LENS_RGB)
-    except Exception as e:
-        print("gimbal head failed", e)
-        return
-    obj["head"] = head
-    oid = obj["id"]
+def part_id(oid, part):
+    return "%s#%s" % (oid, part)
 
-    def _on_click(_e=None, _oid=oid):
-        import simulatorview as sv
-        mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
-        sv.select_scene_object(_oid, mode=mode)
+
+def split_part(oid):
+    """'o3#sim' -> ('o3', 'sim'); anything else -> (oid, None)."""
+    base, _, part = str(oid or "").partition("#")
+    return (base, part) if part in PARTS else (str(oid or ""), None)
+
+
+def _arrow(name, length, shaft, head, rgb, axis):
+    pts = np.zeros((1, 2, 3), dtype=np.float32)
+    pts[0, 1, axis] = float(length)
+    return wp.server.scene.add_arrows(
+        name=name, points=pts, colors=np.asarray(rgb, dtype=np.uint8).reshape(3),
+        shaft_radius=shaft, head_radius=head, head_length=head * 2.2)
+
+
+def _spawn_twin(obj, part, angles):
+    rgb = SIM_RGB if part == "sim" else REAL_RGB
+    name = "/obj_%s/mesh/%s" % (obj["id"], part)
+    sph = wp.server.scene.add_icosphere(
+        name=name, radius=TWIN_R[part], color=rgb,
+        wxyz=tuple(float(v) for v in head_wxyz(angles)), position=(0.0, 0.0, 0.0))
     try:
-        head.on_click(_on_click)
+        sph.opacity = 0.55
     except Exception:
         pass
+    # Lens direction (z) and right (x), large like a waypoint's.
+    _arrow(name + "/lens", ARROW_LEN, 0.007, 0.018, rgb, 2)
+    _arrow(name + "/side", ARROW_LEN * 0.4, 0.005, 0.012, rgb, 0)
+    oid = obj["id"]
+
+    def _on_click(_e=None, _id=part_id(oid, part)):
+        import simulatorview as sv
+        sv.select_scene_object(_id)
+    try:
+        sph.on_click(_on_click)
+    except Exception:
+        pass
+    return sph
+
+
+def spawn_head(obj):
+    """The Sim and Real gimbal markers, children of the mount's node (they
+    follow its pose and visibility). The Real one starts hidden."""
+    if wp.server is None or obj.get("handle") is None:
+        return
+    target = (obj.get("gimbal") or {}).get("target")
+    for part in PARTS:
+        try:
+            obj[part + "_head"] = _spawn_twin(obj, part, target)
+        except Exception as e:
+            print("gimbal %s twin failed" % part, e)
+            obj[part + "_head"] = None
+    _set_visible(obj, "real", False)
 
 
 def scale_head(obj):
-    h = obj.get("head")
-    if h is None:
-        return
-    sc = np.asarray(obj.get("scale", [1, 1, 1]), dtype=float).reshape(3)
-    try:
-        h.dimensions = tuple(HEAD_SIZE * float(v) for v in sc)
-    except Exception:
-        pass
+    """Twins keep their size (like waypoints); only the mount sphere scales."""
+    return None
 
 
-def _set_head(obj, angles):
-    h = obj.get("head")
+def _set_twin(obj, part, angles):
+    h = obj.get(part + "_head")
     if h is None or angles is None:
         return
     key = tuple(round(float(v), 3) for v in angles)
-    if obj.get("_head_shown") == key:
+    if obj.get("_shown_" + part) == key:
         return
-    obj["_head_shown"] = key
+    obj["_shown_" + part] = key
     try:
         h.wxyz = tuple(float(v) for v in head_wxyz(angles))
     except Exception:
         pass
+
+
+def _set_visible(obj, part, on):
+    h = obj.get(part + "_head")
+    if h is None or obj.get("_vis_" + part) == bool(on):
+        return
+    obj["_vis_" + part] = bool(on)
+    try:
+        h.visible = bool(on)
+    except Exception:
+        pass
+
+
+# Which twin is selected: kept with its object id, so selecting anything else
+# (selected_obj_id changes) or the mount itself drops it.
+_part_sel = {"oid": None, "part": None}
+
+
+def set_selected_part(oid, part):
+    _part_sel["oid"] = str(oid) if part else None
+    _part_sel["part"] = part if part in PARTS else None
+
+
+def part_of(oid):
+    if oid is None or _part_sel["oid"] != str(oid) or str(getattr(wp, "selected_obj_id", None)) != str(oid):
+        return None
+    return _part_sel["part"]
+
+
+def selected_part():
+    return part_of(getattr(wp, "selected_obj_id", None))
 
 
 # ---------------------------------------------------------------------------
@@ -499,24 +555,28 @@ def _tick_one(obj, clock):
     rt["last_play"] = t
     with _rt_lock:
         reqs, rt["requests"] = rt["requests"], []
-    if cfg.get("connect"):
-        if _ensure_connected(oid, cfg, rt):
+    # Reading is always attempted; moves go out only with Drive on.
+    if _ensure_connected(oid, cfg, rt):
+        if cfg.get("drive", True):
             for kind, angles, dur in reqs:
                 _move(oid, rt, angles, dur)
             if real_on and not rt["running"]:
                 rt["cmd_end"] = -1.0
             if real_on:
                 _drive_run(oid, rt, keys, t)
-            _read(oid, rt)
-    elif rt["connected"]:
-        _disconnect(rt)
-        rt["read_err"] = ""
-        rt["read"] = None
-        print("gimbal disconnected", oid)
+        _read(oid, rt)
     rt["running"] = real_on
-    connected = cfg.get("connect") and rt["connected"]
-    shown = rt["read"] if (connected and rt["read"] is not None) else g.get("target")
-    _set_head(obj, shown)
+    _set_twin(obj, "sim", g.get("target"))
+    ok = real_ok(oid)
+    if ok:
+        _set_twin(obj, "real", rt["read"])
+    _set_visible(obj, "real", ok)
+
+
+def real_ok(oid):
+    """The last angle read worked: the Real gimbal is shown."""
+    rt = _rt.get(str(oid))
+    return bool(rt and rt["connected"] and rt["read_ok"] and rt["read"] is not None)
 
 
 def tick():
@@ -599,8 +659,8 @@ def update(oid, data):
     if data.get("target") is not None:
         g["target"] = data.get("target")
     obj["gimbal"] = clean_gimbal(g)
-    if not obj["gimbal"]["cfg"]["connect"]:
-        _rt_for(oid)["next_try"] = 0.0
+    if isinstance(data.get("cfg"), dict) and set(data["cfg"]) & {"script", "interface", "channel", "bitrate"}:
+        _rt_for(oid)["next_try"] = 0.0  # try the new settings now
     return True
 
 
@@ -612,20 +672,20 @@ def status(oid):
     g = clean_gimbal(obj.get("gimbal"))
     rt = _rt_for(oid)
     cfg = g["cfg"]
-    connected = bool(cfg["connect"] and rt["connected"])
+    connected = bool(rt["connected"])
     err = ""
-    if cfg["connect"]:
-        if not rt["connected"]:
-            err = "Angle read failed: not connected" + (" (%s)" % rt["conn_err"] if rt["conn_err"] else "")
-        elif not rt["read_ok"] and rt["read_err"]:
-            err = "Angle read failed: %s" % rt["read_err"]
+    if not rt["connected"]:
+        err = "Angle read failed: not connected" + (" (%s)" % rt["conn_err"] if rt["conn_err"] else "")
+    elif not rt["read_ok"]:
+        err = "Angle read failed: %s" % (rt["read_err"] or "no angles yet")
     return {
         "cfg": cfg,
         "target": g["target"],
         "script_path": resolve_script(cfg),
         "connected": connected,
-        "read": rt["read"] if connected else None,
-        "read_ok": bool(connected and rt["read_ok"]),
+        "read": rt["read"] if real_ok(oid) else None,
+        "read_ok": real_ok(oid),
+        "part": part_of(oid),
         "read_age": (time.time() - rt["read_at"]) if rt["read_at"] else None,
         "read_err": err,
         "cmd_err": rt["cmd_err"] if connected else "",
