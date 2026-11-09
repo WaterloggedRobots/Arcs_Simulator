@@ -724,6 +724,36 @@
     .track-row button { width: 28px; min-width: 28px; margin: 0; padding: 0; background: #3a3b44; }
     .track-row button.on { background: #4aa3ff; }
     .track-err { color: #e05555; font-size: 12px; margin-top: 4px; }
+    .gim-comp[hidden] { display: none; }
+    .gim-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 6px 0 2px; }
+    .gim-btns button { margin: 0; background: #3a3b44; }
+    .gim-btns button:disabled { opacity: 0.45; cursor: default; }
+    .props .row.triple.gim-angles { grid-template-columns: 28px minmax(0,1fr) 26px minmax(0,1fr) 34px minmax(0,1fr); }
+    .props .row.triple.gim-angles input { min-width: 0; width: 100%; }
+    .props .row.triple.gim-angles label { font-size: 11px; }
+    .props .gim-comp input[type="text"] {
+      width: 100%; min-width: 0; padding: 3px 4px; margin: 0; font-size: 12px; box-sizing: border-box;
+      border: 1px solid #111; border-radius: 6px; background: #1c1d21; color: var(--text);
+    }
+    .props .gim-comp input[readonly] { color: #9a9aa2; background: #18191d; }
+    .gim-count { color: #9a9aa2; }
+    .gim-frames { max-height: 140px; overflow-y: auto; margin-top: 4px; }
+    .gim-frame { display: grid; grid-template-columns: 52px 1fr 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+    .gim-frame:hover { background: #2c2d36; }
+    .gim-frame.on { background: #233a52; }
+    .gim-frame .gim-fdel { width: 22px; min-width: 22px; height: 22px; margin: 0; padding: 0; background: #3a3b44; line-height: 1; }
+    .gim-frame .gim-fdel:hover { background: #6a3a3a; }
+    .gim-conn { margin-top: 8px; font-size: 12px; }
+    .gim-conn summary { cursor: pointer; color: #c8c8ce; }
+    .props .gim-conn .row.name-row { grid-template-columns: 78px 1fr; padding-left: 0; padding-right: 0; }
+    .props .gim-comp .row { padding-left: 0; padding-right: 0; }
+    .gim-conn input { min-width: 0; width: 100%; background: #1c1d21; color: var(--text); border: 1px solid #111; border-radius: 6px; padding: 4px 6px; }
+    #gimConnWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #gimConnWrap.advanced .mode-advanced { color: #4aa3ff !important; }
+    #gimConnect { background: #8a8a92 !important; }
+    #gimConnect.advanced { background: #4aa3ff !important; }
+    .gim-err { color: #e05555; font-size: 12px; padding: 6px 10px 10px; word-break: break-word; }
+    .gim-err[hidden] { display: none; }
     .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
     .use-offset-btn:disabled { opacity: 0.45; cursor: default; }
     #offsetWrap.simple .mode-simple { color: #8a8a92 !important; }
@@ -1505,6 +1535,7 @@
           <button data-act="add-sphere">Sphere</button>
           <button data-act="add-cube">Cube</button>
           <button data-act="add-camera">Camera</button>
+          <button data-act="add-gimbal">Gimbal</button>
           <button data-act="add-import">Import object</button>
         </div>
       </div>
@@ -1861,6 +1892,7 @@
               <button type="button" data-act="add-sphere">Sphere</button>
               <button type="button" data-act="add-cube">Cube</button>
               <button type="button" data-act="add-camera">Camera</button>
+              <button type="button" data-act="add-gimbal">Gimbal</button>
               <button type="button" data-act="add-import">Import object</button>
               <button type="button" data-act="add-aubo_arm">Aubo Arm</button>
             </div>
@@ -2030,6 +2062,50 @@
             <label class="drag" data-k="sy">y</label><input id="sy" type="number" step="0.01" value="1">
             <label class="drag" data-k="sz">z</label><input id="sz" type="number" step="0.01" value="1">
           </div>
+          </div>
+          <div id="gimbalProps" class="track-comp gim-comp" hidden>
+            <hr>
+            <div class="track-head">
+              <span>Gimbal</span>
+              <div class="track-head-right">
+                <div class="tl-mode simple" id="gimConnWrap" title="Connect to the gimbal (off: the cube previews the target)">
+                  <span class="mode-simple">Off</span>
+                  <button type="button" class="slide" id="gimConnect"></button>
+                  <span class="mode-advanced">Connected</span>
+                </div>
+              </div>
+            </div>
+            <div class="col-note" id="gimState">Preview only: the cube shows the target angles.</div>
+            <label class="field tight">Target (deg)</label>
+            <div class="row triple gim-angles">
+              <label title="yaw">yaw</label><input id="gimYaw" type="number" step="0.1" min="-180" max="180" value="0">
+              <label title="roll">roll</label><input id="gimRoll" type="number" step="0.1" min="-30" max="30" value="0">
+              <label title="pitch">pitch</label><input id="gimPitch" type="number" step="0.1" min="-56" max="146" value="0">
+            </div>
+            <label class="field tight">Read from gimbal (deg)</label>
+            <div class="row triple gim-angles">
+              <label>yaw</label><input id="gimReadYaw" type="text" readonly value="—">
+              <label>roll</label><input id="gimReadRoll" type="text" readonly value="—">
+              <label>pitch</label><input id="gimReadPitch" type="text" readonly value="—">
+            </div>
+            <div class="gim-btns">
+              <button type="button" id="gimMove" title="Send the target to the gimbal">Move gimbal</button>
+              <button type="button" id="gimUseRead" title="Copy the angles read from the gimbal into the target">Use read angles</button>
+            </div>
+            <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
+            <div class="gim-btns">
+              <button type="button" id="gimInsert" title="Insert a frame with the target angles at the playhead">Insert frame</button>
+              <button type="button" id="gimDelete" title="Delete the frame at the playhead">Delete frame</button>
+            </div>
+            <div id="gimFrames" class="gim-frames"></div>
+            <details class="gim-conn">
+              <summary>Connection</summary>
+              <div class="row name-row"><label>Script</label><input id="gimScript" type="text" placeholder="rs4_can.py (bundled)" title="Driver script; empty = user_files/gimbal_scripts/rs4_can.py"></div>
+              <div class="row name-row"><label>Interface</label><input id="gimIface" type="text" value="canalystii" title="python-can interface"></div>
+              <div class="row name-row"><label>Channel</label><input id="gimChannel" type="number" step="1" min="0" value="0"></div>
+              <div class="row name-row"><label>Bitrate</label><input id="gimBitrate" type="number" step="1000" min="0" value="1000000"></div>
+              <div class="row name-row"><label>Move time (s)</label><input id="gimMoveS" type="number" step="0.1" min="0.1" max="25" value="2" title="Time for Move gimbal and for the move to the initial pose before a run"></div>
+            </details>
           </div>
         </div>
         <div id="propBody" hidden>
@@ -2232,6 +2308,7 @@
             <button type="button" data-comp="offset">Offset</button>
             <button type="button" data-comp="collider">Collider</button>
           </div>
+          <div id="gimbalReadErr" class="gim-err" hidden></div>
       </aside>
     </div>
     <div class="tl-resizer" id="tlResizer" title="Drag to resize timeline"></div>
@@ -2708,6 +2785,9 @@
       });
     })();
 
+    function isGimbalTrack(tr) {
+      return !!(tr && String(tr.id || "").indexOf("gimbal_") === 0);
+    }
     function applyExtraTracks(rows) {
       const src = Array.isArray(rows) ? rows : [];
       extraTracks = src.map((tr, i) => ({
@@ -2826,7 +2906,7 @@
         nm.textContent = vis[i].name;
         d.appendChild(nm);
         // The Look At track follows its component; remove the component instead.
-        if (vis[i].custom && vis[i].id !== "look_sim") {
+        if (vis[i].custom && vis[i].id !== "look_sim" && !isGimbalTrack(vis[i])) {
           const del = document.createElement("button");
           del.type = "button";
           del.className = "tl-del-track";
@@ -3207,7 +3287,40 @@
       });
 
       vis.forEach((tr, row) => {
-        if (!tr.custom || !tr.keys || !tr.keys.length) return;
+        if (!isGimbalTrack(tr) || !tr.keys || !tr.keys.length) return;
+        // Gimbal frames: teal diamonds joined by a line (the gimbal moves between them).
+        const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+        const ks = tr.keys.slice().sort((a, b) => Number(a.t) - Number(b.t));
+        ctx.strokeStyle = "#2f8f8b";
+        ctx.lineWidth = 3;
+        for (let i = 0; i < ks.length - 1; i++) {
+          ctx.beginPath();
+          ctx.moveTo(timeToX(Number(ks[i].t)) + 10, cy);
+          ctx.lineTo(timeToX(Number(ks[i + 1].t)) - 10, cy);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+        ks.forEach((k) => {
+          const x = timeToX(Number(k.t));
+          ctx.fillStyle = "#3ec7c2";
+          ctx.beginPath();
+          ctx.moveTo(x, cy - 12);
+          ctx.lineTo(x + 11, cy);
+          ctx.lineTo(x, cy + 12);
+          ctx.lineTo(x - 11, cy);
+          ctx.closePath();
+          ctx.fill();
+          if (Math.abs(Number(k.t) - playhead) < 1e-4) {
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          }
+        });
+      });
+
+      vis.forEach((tr, row) => {
+        if (!tr.custom || isGimbalTrack(tr) || !tr.keys || !tr.keys.length) return;
         const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
         const ks = tr.keys.slice().sort((a, b) => Number(a.t) - Number(b.t));
         for (let i = 0; i < ks.length - 1; i++) {
@@ -4429,14 +4542,153 @@
         cx * cy * sz - sx * sy * cz,
       ];
     }
+    // Gimbal object: one scene object (mount empty + head cube). Its panel
+    // section and the red "angle read failed" line at the bottom of the panel.
+    let _gimFramesSig = "";
+    function gimbalTarget() {
+      return ["gimYaw", "gimRoll", "gimPitch"].map((id) => {
+        const v = parseFloat((document.getElementById(id) || {}).value);
+        return isFinite(v) ? v : 0;
+      });
+    }
+    function renderGimbal(obj) {
+      const box = document.getElementById("gimbalProps");
+      const errEl = document.getElementById("gimbalReadErr");
+      const g = (obj && obj.kind === "gimbal") ? (obj.gimbal || {}) : null;
+      if (box) box.hidden = !g;
+      if (!g) {
+        if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
+        window.__gimbal = null;
+        return;
+      }
+      window.__gimbal = { id: obj.id, keys: g.keys || [] };
+      const cfg = g.cfg || {};
+      const setVal = (id, v) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = v;
+      };
+      const tgt = g.target || [0, 0, 0];
+      ["gimYaw", "gimRoll", "gimPitch"].forEach((id, i) => setVal(id, Number(tgt[i] || 0).toFixed(1)));
+      const rd = g.read;
+      ["gimReadYaw", "gimReadRoll", "gimReadPitch"].forEach((id, i) => setVal(id, rd ? Number(rd[i]).toFixed(1) : "—"));
+      const on = !!cfg.connect;
+      const sw = document.getElementById("gimConnect");
+      const wrap = document.getElementById("gimConnWrap");
+      if (sw) sw.classList.toggle("advanced", on);
+      if (wrap) { wrap.classList.toggle("advanced", on); wrap.classList.toggle("simple", !on); }
+      const st = document.getElementById("gimState");
+      if (st) {
+        let txt = "Preview only: the cube shows the target angles.";
+        if (on && g.connected && g.read_ok) txt = "Connected: the cube shows the angles read from the gimbal.";
+        else if (on && g.connected) txt = "Connected: the cube shows the last angles read.";
+        else if (on) txt = "Connecting…";
+        if (g.cmd_err) txt += " " + g.cmd_err;
+        st.textContent = txt;
+      }
+      const mv = document.getElementById("gimMove");
+      if (mv) mv.disabled = !g.connected;
+      const ur = document.getElementById("gimUseRead");
+      if (ur) ur.disabled = !rd;
+      setVal("gimScript", cfg.script || "");
+      setVal("gimIface", cfg.interface || "canalystii");
+      setVal("gimChannel", cfg.channel != null ? cfg.channel : 0);
+      setVal("gimBitrate", cfg.bitrate != null ? cfg.bitrate : 1000000);
+      setVal("gimMoveS", cfg.move_s != null ? cfg.move_s : 2);
+      const keys = g.keys || [];
+      const cnt = document.getElementById("gimFrameCount");
+      if (cnt) cnt.textContent = "(" + keys.length + ")";
+      const atIdx = keys.findIndex((k) => Math.abs(Number(k.t) - playhead) < 1e-4);
+      const del = document.getElementById("gimDelete");
+      if (del) del.disabled = atIdx < 0;
+      const list = document.getElementById("gimFrames");
+      const sig = obj.id + "|" + atIdx + "|" + JSON.stringify(keys);
+      if (list && sig !== _gimFramesSig) {
+        _gimFramesSig = sig;
+        list.innerHTML = keys.map((k, i) =>
+          "<div class='gim-frame" + (i === atIdx ? " on" : "") + "' data-gi='" + i + "' title='Move the playhead to this frame'>" +
+          "<span>" + Number(k.t).toFixed(2) + "s</span>" +
+          "<span>y " + Number(k.yaw).toFixed(1) + " · r " + Number(k.roll).toFixed(1) + " · p " + Number(k.pitch).toFixed(1) + "</span>" +
+          "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button></div>"
+        ).join("") || "<div class='col-note'>No frames. Set the target, move the playhead and press Insert frame.</div>";
+      }
+      if (errEl) {
+        errEl.textContent = g.read_err || "";
+        errEl.hidden = !g.read_err;
+      }
+    }
+    function postGimbal(body) {
+      const g = window.__gimbal;
+      if (!g) return Promise.resolve(null);
+      return fetch("/api/gimbal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ id: g.id }, body)),
+      }).then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (Array.isArray(d.tracks)) {
+          applyExtraTracks(d.tracks);
+          try { renderTimeline(); } catch (err) {}
+        }
+        if (!d.ok && statusEl) statusEl.textContent = "Gimbal: " + (d.error || "not done");
+        if (d.gimbal && window.__lastObject && window.__lastObject.id === g.id) {
+          renderGimbal(Object.assign({}, window.__lastObject, { kind: "gimbal", gimbal: d.gimbal }));
+        }
+        return d;
+      });
+    }
+    (function setupGimbalProps() {
+      const byId = (id) => document.getElementById(id);
+      const conn = byId("gimConnect");
+      if (conn) conn.addEventListener("click", () => {
+        postGimbal({ cfg: { connect: !conn.classList.contains("advanced") } });
+      });
+      ["gimYaw", "gimRoll", "gimPitch"].forEach((id) => {
+        const el = byId(id);
+        if (el) el.addEventListener("change", () => postGimbal({ target: gimbalTarget() }));
+      });
+      const cfgFields = { gimScript: "script", gimIface: "interface", gimChannel: "channel", gimBitrate: "bitrate", gimMoveS: "move_s" };
+      Object.keys(cfgFields).forEach((id) => {
+        const el = byId(id);
+        if (!el) return;
+        el.addEventListener("change", () => {
+          const cfg = {};
+          cfg[cfgFields[id]] = el.type === "number" ? Number(el.value) : el.value.trim();
+          postGimbal({ cfg: cfg });
+        });
+      });
+      const mv = byId("gimMove");
+      if (mv) mv.addEventListener("click", () => postGimbal({ action: "move", target: gimbalTarget() }));
+      const ur = byId("gimUseRead");
+      if (ur) ur.addEventListener("click", () => postGimbal({ action: "use_read" }));
+      const ins = byId("gimInsert");
+      if (ins) ins.addEventListener("click", () => postGimbal({ action: "insert_frame", t: playhead, target: gimbalTarget() }));
+      const del = byId("gimDelete");
+      if (del) del.addEventListener("click", () => postGimbal({ action: "delete_frame", t: playhead }));
+      const list = byId("gimFrames");
+      if (list) list.addEventListener("click", (e) => {
+        const g = window.__gimbal;
+        if (!g) return;
+        const delBtn = e.target.closest("[data-gdel]");
+        if (delBtn) {
+          e.stopPropagation();
+          postGimbal({ action: "delete_frame", index: Number(delBtn.getAttribute("data-gdel")) });
+          return;
+        }
+        const row = e.target.closest("[data-gi]");
+        if (!row) return;
+        const k = (g.keys || [])[Number(row.getAttribute("data-gi"))];
+        if (k) setPlayhead(Number(k.t));
+      });
+    })();
     function fillProps(obj, move) {
+      renderGimbal(obj);
       const body = document.getElementById("propBody");
       const primBody = document.getElementById("primBody");
       const name = document.getElementById("propName");
       const panel = document.getElementById("propsPanel");
       const isBot = !!(obj && obj.kind === "bot");
       panel.classList.toggle("is-bot", isBot);
-      const isPrim = isBot || !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import"));
+      const isPrim = isBot || !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import" || obj.kind === "gimbal"));
       const moveBtn = document.getElementById("moveRobotPose");
       const extraAdd = document.getElementById("simExtraAdd");
       const isSim = !!(obj && obj.kind === "sim");
@@ -5522,7 +5774,7 @@
       const wps = document.getElementById("hierWps");
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
-      const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import")) ? [d.object.id] : []);
+      const selIds = d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import" || d.object.kind === "gimbal")) ? [d.object.id] : []);
       // Built-ins. With SIM_BOT_ENABLED: Aubo Arm (robot base) with the Sim cursor and,
       // while the robot is connected, the Real cursor under it.
       // Every Aubo Arm gets its own group; a Real cursor shows only while that arm's robot is connected.
@@ -7244,7 +7496,7 @@
       document.getElementById("menuAdd").classList.remove("open");
       const kind = act.replace("add-", "");
       if (kind === "import" || kind === "mesh") { pickImportObject(); return; }
-      if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera") return;
+      if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera" && kind !== "gimbal") return;
       fetch("/api/add_object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7264,7 +7516,7 @@
         const kind = act.replace("add-", "");
         menu.hidden = true;
         if (kind === "import" || kind === "mesh") { pickImportObject(); return; }
-        if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera" && kind !== "aubo_arm") return;
+        if (kind !== "empty" && kind !== "sphere" && kind !== "cube" && kind !== "camera" && kind !== "gimbal" && kind !== "aubo_arm") return;
         fetch("/api/add_object", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -8152,7 +8404,7 @@
           fetch("/api/move_hold", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ q: q, mode: "fk" }),
+            body: JSON.stringify({ q: q, mode: "fk", path_start: true }),
           });
           return;
         }

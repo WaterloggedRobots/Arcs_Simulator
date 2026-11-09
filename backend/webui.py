@@ -1230,8 +1230,16 @@ def api_merge():
 def api_tracks():
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        wp.extra_tracks = data.get("tracks") or []
-        # Camera and Look At tracks follow their components, not the client list.
+        # Gimbal frames are edited only through /api/gimbal: keep the server's
+        # copy, so a page with an older track list can't drop new frames.
+        gim = {str(t.get("id")): t.get("keys") for t in list(getattr(wp, "extra_tracks", None) or [])
+               if isinstance(t, dict) and str(t.get("id") or "").startswith(wp.gimbal.TRACK_PREFIX)}
+        tracks = [t for t in (data.get("tracks") or []) if t]
+        for tr in tracks:
+            if isinstance(tr, dict) and str(tr.get("id") or "") in gim:
+                tr["keys"] = gim[str(tr.get("id"))]
+        wp.extra_tracks = tracks
+        # Camera, Look At and gimbal tracks follow their objects, not the client list.
         if hasattr(wp, "sync_camera_tracks"):
             wp.sync_camera_tracks()
     return jsonify({"ok": True, "tracks": list(getattr(wp, "extra_tracks", None) or [])})
@@ -1329,6 +1337,9 @@ def api_hide_robot():
 @app.route("/api/move_hold", methods=["POST"])
 def api_move_hold():
     data = request.get_json(silent=True) or {}
+    if data.get("path_start"):
+        # Run pressed before the arm is at the path start: gimbals go to their initial pose too.
+        rr._gimbals_to_initial_pose()
     viewer_main.move_requests.append(("start", data))
     return jsonify({"ok": True})
 
@@ -1648,6 +1659,42 @@ def api_cam_script():
             cam["script"] = path
             break
     return jsonify({"ok": True, "path": path})
+
+
+@app.route("/api/gimbal", methods=["POST"])
+def api_gimbal():
+    """Gimbal object: {id, action, ...}.
+    update {cfg?, target?} | move {target?} | insert_frame {t?, target?} |
+    delete_frame {t | index} | use_read (target = angles read from the gimbal)."""
+    data = request.get_json(silent=True) or {}
+    oid = str(data.get("id") or getattr(wp, "selected_obj_id", None) or "")
+    act = str(data.get("action") or "update")
+    if wp.gimbal._find(oid) is None:
+        return jsonify({"ok": False, "error": "no such gimbal"}), 404
+    ok = True
+    if data.get("cfg") is not None or data.get("target") is not None:
+        ok = wp.gimbal.update(oid, data)
+    if act == "move":
+        ok = wp.gimbal.request_move(oid)
+    elif act == "use_read":
+        st = wp.gimbal.status(oid) or {}
+        ok = st.get("read") is not None
+        if ok:
+            wp.gimbal.update(oid, {"target": st.get("read")})
+    elif act == "insert_frame":
+        if rr.edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        t = data.get("t")
+        if t is None:
+            t = getattr(viewer_main, "playhead_t", 0.0)
+        ok = wp.gimbal.insert_frame(oid, t)
+    elif act == "delete_frame":
+        if rr.edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        ok = wp.gimbal.delete_frame(oid, t=data.get("t"), index=data.get("index"))
+    _status_dirty.set()
+    return jsonify({"ok": bool(ok), "gimbal": wp.gimbal.status(oid),
+                    "tracks": list(getattr(wp, "extra_tracks", None) or [])})
 
 
 @app.route("/api/cam_click", methods=["POST"])

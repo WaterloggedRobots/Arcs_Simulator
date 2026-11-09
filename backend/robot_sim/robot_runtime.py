@@ -3087,7 +3087,17 @@ def start_goto_path_start():
     q0 = _first_path_q()
     if q0 is None:
         return False
+    _gimbals_to_initial_pose()
     return start_hold_move(q=q0, mode="fk")
+
+
+def _gimbals_to_initial_pose():
+    """Gimbals go to their track's pose at t = 0 while the arm moves to the path start."""
+    try:
+        import gimbal
+        gimbal.go_to_initial_pose()
+    except Exception as e:
+        print("gimbal initial pose failed", e)
 
 
 def _path_samples():

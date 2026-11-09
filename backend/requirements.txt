@@ -10,6 +10,12 @@ werkzeug>=3.0
 # without it only XInput (Xbox) pads work, unnamed.
 pygame>=2.5
 
+# Gimbal object (DJI RS4 over CAN, user_files/gimbal_scripts/rs4_can.py);
+# without them the gimbal works as a preview only.
+python-can>=4.0
+pyusb>=1.2
+libusb-package>=1.0
+
 # Viewer + URDF
 scikit-robot>=0.0.44
 viser>=0.2.23

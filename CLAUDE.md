@@ -17,6 +17,12 @@ Notes for working on this repo. The README is the user manual (features, control
 - `robot_runtime.py` finds URDFs under `<its folder>/aubo-i5-full-master/aubo_description/urdf` (`aubo_i*.urdf`, with an optional `<model>_sim.urdf`).
 - `user_files/settings.json` holds settings plus the global saved points and paths. `user_files/paths/` and `user_files/exports/` are git-ignored.
 
+## Gimbal objects
+
+- `backend/robot_sim/gimbal.py`: scene object kind `"gimbal"` (one list row) = mount empty (`handle`) + head cube (`head`, a child scene node of the mount, so it follows pose and visibility). Saved data is `obj["gimbal"] = {cfg, target}` (`clean_gimbal`), in file save and undo snapshots. Frames live on the extra track `gimbal_<oid>` as `{t, yaw, roll, pitch}`; `sync_tracks` (called from `sync_camera_tracks`) keeps one per gimbal. `/api/tracks` keeps the server's gimbal keys; frames are edited only through `/api/gimbal`.
+- All gimbal I/O is on the `gimbal` thread (`tick()` at 10 Hz); web requests are queued (`request_move`). The driver is a user script (`user_files/gimbal_scripts/rs4_can.py`, DJI R SDK over python-can) loaded per object. The run is detected from each arm's `_rp` / `_pb` without swapping arms.
+- No gimbal or CAN adapter in the cloud container: test with a stub script that implements `connect / get_angles / move_to / close`.
+
 ## Steam Deck edition
 
 - `backend/deck_webui.py`: routes under `/api/deck/...`, jog logic, `boot()` (settings, viewer, Steam profile, pad, hold watchdog) and `serve()` (Flask, blocking).

@@ -538,6 +538,11 @@ def _colliders():
     return colliders
 
 
+def _gimbal():
+    import gimbal
+    return gimbal
+
+
 def _find_object(oid):
     for obj in wp.scene_objects:
         if obj.get("id") == oid:
@@ -545,7 +550,7 @@ def _find_object(oid):
     return None
 
 
-_PRIM_KINDS = ("empty", "sphere", "cube", "camera", "mesh", "import")
+_PRIM_KINDS = ("empty", "sphere", "cube", "camera", "mesh", "import", "gimbal")
 
 
 def _is_mesh_kind(kind):
@@ -575,9 +580,11 @@ def _apply_object_xform(obj):
         elif kind in ("cube", "camera") and hasattr(h, "dimensions"):
             base = 0.06 if kind == "camera" else 0.1
             h.dimensions = (base * float(sc[0]), base * float(sc[1]), base * float(sc[2]))
-        elif kind in ("sphere", "empty") and hasattr(h, "radius"):
-            base = 0.02 if kind == "empty" else 0.05
+        elif kind in ("sphere", "empty", "gimbal") and hasattr(h, "radius"):
+            base = 0.05 if kind == "sphere" else 0.02
             h.radius = base * max(1e-4, float(np.mean(np.abs(sc))))
+        if kind == "gimbal":
+            _gimbal().scale_head(obj)
     except Exception:
         pass
     giz = obj.get("gizmo")
@@ -822,8 +829,9 @@ def _spawn_object_mesh(obj):
             color=(220, 220, 220),
         )
     else:
-        base = 0.02 if kind == "empty" else 0.05
-        color = EMPTY_RGB if kind == "empty" else (220, 220, 220)
+        mount = kind in ("empty", "gimbal")
+        base = 0.02 if mount else 0.05
+        color = EMPTY_RGB if mount else (220, 220, 220)
         handle = wp.server.scene.add_icosphere(
             name=name,
             radius=base * max(1e-4, float(np.mean(np.abs(sc)))),
@@ -831,7 +839,7 @@ def _spawn_object_mesh(obj):
             wxyz=wxyz,
             color=color,
         )
-        if kind == "empty":
+        if mount:
             # Empties look like a grey, see-through waypoint: sphere + forward
             # and side arrows. The arrows are child nodes, so they follow the
             # sphere's pose and visibility and go when it is removed.
@@ -845,6 +853,9 @@ def _spawn_object_mesh(obj):
             except Exception as e:
                 print("empty arrows failed", e)
     obj["handle"] = handle
+    if kind == "gimbal":
+        # The gimbal head: a cube under the mount, rotated by the gimbal angles.
+        _gimbal().spawn_head(obj)
     if obj.get("camera"):
         try:
             _refresh_camera_viz(obj)
@@ -920,6 +931,8 @@ def sync_camera_tracks():
     kept = [t for t in kept if not (isinstance(t, dict) and t.get("id") == LOOK_TRACK_ID)]
     if look_on:
         kept.append({"id": LOOK_TRACK_ID, "name": "Look At", "keys": []})
+    # One track per gimbal (gimbal_<oid>), frames of yaw / roll / pitch.
+    kept = _gimbal().sync_tracks(kept)
     wp.extra_tracks = kept
     return wp.extra_tracks
 
@@ -959,11 +972,14 @@ def restore_scene_object(rec):
         "comp_order": [str(k) for k in ((rec or {}).get("comp_order") or [])],
         "mesh_path": str((rec or {}).get("mesh_path") or "") if _is_mesh_kind(kind) else None,
         "mesh_error": None,
+        "gimbal": _gimbal().clean_gimbal((rec or {}).get("gimbal")) if kind == "gimbal" else None,
     }
     wp.scene_objects.append(obj)
     if wp.server is not None:
         _spawn_object_mesh(obj)
         _bind_object_gizmo(obj, visible=False)
+    if kind == "gimbal":
+        _gimbal().ensure_thread()
     return obj
 
 
@@ -981,7 +997,7 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
     oid = "o%d" % wp._obj_seq
     pos = np.array([1.0, 0.0, 0.2], dtype=float)
     wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-    names = {"empty": "Empty", "sphere": "Sphere", "cube": "Cube", "camera": "Camera", "mesh": "Import"}
+    names = {"empty": "Empty", "sphere": "Sphere", "cube": "Cube", "camera": "Camera", "mesh": "Import", "gimbal": "Gimbal"}
     label = name
     if not label:
         if _is_mesh_kind(kind) and mesh_path:
@@ -1009,6 +1025,7 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
         "comp_order": [],
         "mesh_path": str(mesh_path) if (_is_mesh_kind(kind) and mesh_path) else (str(mesh_path) if mesh_path else None),
         "mesh_error": None,
+        "gimbal": _gimbal().clean_gimbal(None) if kind == "gimbal" else None,
     }
     wp.scene_objects.append(obj)
     if wp.server is not None:
@@ -1027,6 +1044,10 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
     except Exception:
         pass
     print("added object", kind, oid, pos)
+    if kind == "gimbal":
+        # Its timeline track comes with it.
+        sync_camera_tracks()
+        _gimbal().ensure_thread()
     if add_cam:
         sync_camera_tracks()
         try:
@@ -1075,7 +1096,7 @@ def update_scene_object(oid, name=None, pos=None, wxyz=None, scale=None, space=N
         return False
     if name is not None:
         obj["name"] = str(name)
-        if obj.get("kind") == "camera":
+        if obj.get("kind") in ("camera", "gimbal"):
             sync_camera_tracks()
     if space is not None:
         obj["space"] = "local" if str(space).lower().startswith("loc") else "world"
@@ -1133,7 +1154,7 @@ def delete_scene_object(oid):
         _colliders().forget_owner(oid)
     except Exception as e:
         print("delete: collider cleanup failed", e)
-    for key in ("gizmo", "handle", "frustum"):
+    for key in ("gizmo", "head", "handle", "frustum"):
         h = obj.get(key)
         if h is not None:
             try:
@@ -1249,6 +1270,7 @@ def selected_object_props():
         "collider": _colliders().collider_status(obj.get("id")),
         "parent_offset": _parent_offset(obj) is not None,
         "comp_order": list(obj.get("comp_order") or []),
+        "gimbal": _gimbal().status(obj.get("id")) if obj.get("kind") == "gimbal" else None,
     }
 
 

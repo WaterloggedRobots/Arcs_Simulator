@@ -543,6 +543,7 @@ def _snapshot():
             "collider": colliders.clean_collider(o.get("collider")),
             "comp_order": list(o.get("comp_order") or []),
             "mesh_path": o.get("mesh_path"),
+            "gimbal": gimbal.clean_gimbal(o.get("gimbal")) if o.get("kind") == "gimbal" else None,
         })
     try:
         import robot_runtime as rr
@@ -3698,3 +3699,4 @@ def set_item_visible(kind, oid, on=None):
 import simulatorview  # noqa: E402,F401
 import offsets  # noqa: E402
 import colliders  # noqa: E402
+import gimbal  # noqa: E402

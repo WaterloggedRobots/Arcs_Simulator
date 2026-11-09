@@ -78,6 +78,8 @@ def _dump_track(tr):
     if tr.get("id"):
         rec["id"] = str(tr.get("id"))
     rec["name"] = str(tr.get("name") or rec.get("id") or "Track")
+    if tr.get("gimbal"):
+        rec["gimbal"] = True
     keys = []
     for k in list(tr.get("keys") or []):
         if not isinstance(k, dict):
@@ -90,7 +92,7 @@ def _dump_track(tr):
                 continue
         if "rec" in k or "record" in k or "v" in k:
             item["rec"] = bool(k.get("rec") if "rec" in k else (k.get("record") if "record" in k else k.get("v")))
-        for extra in ("kind", "name", "on"):
+        for extra in ("kind", "name", "on", "yaw", "roll", "pitch"):
             if k.get(extra) is not None:
                 item[extra] = k.get(extra)
         if item:
@@ -226,6 +228,7 @@ def _dump_scene_objects():
             "collider": wp.colliders.clean_collider(obj.get("collider")),
             "comp_order": list(obj.get("comp_order") or []),
             "mesh_path": obj.get("mesh_path") or None,
+            "gimbal": wp.gimbal.clean_gimbal(obj.get("gimbal")) if obj.get("kind") == "gimbal" else None,
         })
     return out
 
