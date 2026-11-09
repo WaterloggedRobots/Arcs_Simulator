@@ -333,7 +333,7 @@ Angles are the gimbal's joint angles in degrees (limits: yaw ±180, roll ±30, p
 | Selected | Shows |
 | --- | --- |
 | **Gimbal** | Name, transform, scale, components; **Off / Drive** (send moves to the real gimbal: Move gimbal, the initial pose and Run; angles are read either way); the connection state; **Connection**: driver script (empty = the bundled `rs4_can.py`), python-can interface, channel, bitrate and *Move time* (for Move gimbal and the move to the initial pose). |
-| **Sim gimbal** | **Target** yaw / roll / pitch; **Move gimbal** (sends the target, taking *Move time*); **Use read angles** (copies the real angles into the target); **Insert frame** (target angles at the playhead, replacing one already there); **Delete frame** (at the playhead); the frame list (click a frame to move the playhead to it, × deletes it); red **Angle read failed: …** text when reading fails. |
+| **Sim gimbal** | **Target** yaw / roll / pitch (the moves you type; the track sets them when the playhead moves); **Move real to sim** (sends the real gimbal to the Sim gimbal's angles, taking *Move time*; needs the real gimbal reading and Drive on), with a line saying how far the real gimbal is from the sim one; **Copy real pose to sim** (the angles read become the target); **Insert frame** (target angles at the playhead, replacing one already there); **Delete frame** (at the playhead); the frame list (click a frame to move the playhead to it, × deletes it); red **Angle read failed: …** text when reading fails. |
 | **Real gimbal** | The angles read, and **Use as target**. |
 
 After about 2 s of failed reads the CAN bus is reopened.

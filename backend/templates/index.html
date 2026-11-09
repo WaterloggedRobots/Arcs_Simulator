@@ -727,6 +727,10 @@
     .gim-comp[hidden] { display: none; }
     .gim-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 6px 0 2px; }
     .gim-btns button { margin: 0; background: #3a3b44; }
+    .gim-btns.gim-one { grid-template-columns: 1fr; }
+    .gim-move-real { display: block; width: 100%; margin: 8px 0 2px; background: #b8752a; color: #fff; }
+    .gim-move-real:hover:not(:disabled) { background: #cf8735; }
+    .gim-move-real:disabled { opacity: 0.45; cursor: default; }
     .gim-btns button:disabled { opacity: 0.45; cursor: default; }
     .props .row.triple.gim-angles { grid-template-columns: 28px minmax(0,1fr) 26px minmax(0,1fr) 34px minmax(0,1fr); }
     .props .row.triple.gim-angles input { min-width: 0; width: 100%; }
@@ -2104,9 +2108,10 @@
                 <label title="roll">roll</label><input id="gimRoll" type="number" step="0.1" min="-30" max="30" value="0">
                 <label title="pitch">pitch</label><input id="gimPitch" type="number" step="0.1" min="-56" max="146" value="0">
               </div>
-              <div class="gim-btns">
-                <button type="button" id="gimMove" title="Send the target to the real gimbal">Move gimbal</button>
-                <button type="button" id="gimUseRead" title="Copy the angles read from the real gimbal into the target">Use read angles</button>
+              <button type="button" id="gimMove" class="gim-move-real" title="Move the real gimbal to the Sim gimbal's angles (takes Move time)">Move real to sim</button>
+              <div class="col-note" id="gimRealVsSim"></div>
+              <div class="gim-btns gim-one">
+                <button type="button" id="gimUseRead" title="Copy the angles read from the real gimbal into the Sim gimbal's target">Copy real pose to sim</button>
               </div>
               <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
               <div class="gim-btns">
@@ -4611,7 +4616,20 @@
         st.textContent = txt;
       }
       const mv = document.getElementById("gimMove");
-      if (mv) mv.disabled = !(g.connected && drive);
+      if (mv) {
+        mv.disabled = !(g.read_ok && drive);
+        mv.title = !g.read_ok ? "The real gimbal is not reading" : (!drive ? "Drive is off (Gimbal properties)" : "Move the real gimbal to the Sim gimbal's angles (takes Move time)");
+      }
+      // How far the real gimbal is from the sim one.
+      const rvs = document.getElementById("gimRealVsSim");
+      if (rvs) {
+        if (!rd) rvs.textContent = "Real gimbal: not reading.";
+        else {
+          const dv = [0, 1, 2].map((i) => Number(tgt[i] || 0) - Number(rd[i] || 0));
+          rvs.textContent = dv.every((v) => Math.abs(v) < 0.5) ? "Real gimbal is at the sim pose."
+            : "Real is off by yaw " + dv[0].toFixed(1) + " · roll " + dv[1].toFixed(1) + " · pitch " + dv[2].toFixed(1) + "°";
+        }
+      }
       ["gimUseRead", "gimUseRead2"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.disabled = !rd;
