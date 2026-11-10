@@ -2,29 +2,28 @@
   "name": "DJI RS 4",
   "about": "Joint axes, offsets and boxes for the sandbox's Gimbal object. Lengths in mm, in the HANDLE's frame (the Gimbal object's mount) with all joints at 0: handle along z, hand end up (+z), camera end down; the camera looks along +x (front); +y is the camera's left. DJI publishes no CAD or axis dimensions for the RS 4: the numbers below are estimates from its overall size (370 x 191 x 189 mm unfolded) and must be measured on the real gimbal. A balanced gimbal has all three axes through the camera's centre of gravity, so 'point' is the same for each joint; only the axis directions (J2's tilt in particular) and the camera centre's distance below the pan motor change where the camera points. Copy this file to make a model for another gimbal or rig; the Gimbal object picks it by file name.",
   "driver": "rs4_can.py",
+  "aim_joints": [
+    "J1",
+    "J3"
+  ],
   "joints": [
-    {"name": "J1", "sdk": "yaw",   "about": "pan motor, handle axis",   "axis": [0, 0, -1], "point": [0, 0, -110], "range": [-180, 180]},
-    {"name": "J2", "sdk": "roll",  "about": "roll motor, behind the camera. Not at right angles to J1: tilted 56.4 deg from the lens line towards the hand end (34 deg from the handle axis), fitted to two level-camera readings with J1, J2 near 180 (hand end up: J 173.5 / -179.0 / -69.4, world pitch -2.2, roll 1.2; J 178.1 / -178.8 / -71.1). Square to J1 would be [1, 0, 0].", "axis": [0.553, 0, 0.833],  "point": [0, 0, -110], "range": [-95, 240]},
+    {"name": "J1", "sdk": "yaw", "about": "pan motor, handle axis", "axis": [0, 0, -1], "point": [0, 0, -110], "range": [-180, 180]},
+    {"name": "J2", "sdk": "roll", "about": "roll motor, behind the camera. Not at right angles to J1: tilted 56.4 deg from the lens line towards the hand end (34 deg from the handle axis), fitted to two level-camera readings with J1, J2 near 180 (hand end up: J 173.5 / -179.0 / -69.4, world pitch -2.2, roll 1.2; J 178.1 / -178.8 / -71.1). Square to J1 would be [1, 0, 0].", "axis": [0.553, 0, 0.833], "point": [0, 0, -110], "range": [-95, 240]},
     {"name": "J3", "sdk": "pitch", "about": "tilt motor, beside the camera; +J3 tilts the lens towards the hand end, -90 looks down the handle", "axis": [0, -1, 0], "point": [0, 0, -110], "range": [-112, 214]}
   ],
-  "aim_joints": ["J1", "J3"],
-  "camera": {
-    "about": "camera centre (on all three axes when balanced) and its lens and right directions at home. No camera body is drawn: the Gimbal's Camera object sits here.",
-    "origin": [0, 0, -110],
-    "lens": [1, 0, 0],
-    "right": [0, -1, 0]
-  },
+  "camera": {"about": "camera centre (on all three axes when balanced) and its lens and right directions at home. No camera body is drawn: the Gimbal's Camera object sits here.", "origin": [0, 0, -110], "lens": [1, 0, 0], "right": [0, -1, 0]},
   "parts": [
-    {"link": 0, "name": "handle",       "from": [0, 0, 25],    "to": [0, 0, 120],     "width": 34},
-    {"link": 0, "name": "hand end",     "center": [0, 0, 120], "radius": 19},
-    {"link": 0, "name": "pan motor",    "center": [0, 0, 10],  "size": [52, 52, 30]},
-    {"link": 1, "name": "pan arm",      "from": [0, 0, -8],    "to": [-100, 0, -8],   "width": 26},
-    {"link": 1, "name": "pan arm drop", "from": [-100, 0, -8], "to": [-100, 0, -110], "width": 26},
-    {"link": 1, "name": "roll motor",   "center": [-100, 0, -110], "size": [30, 52, 52]},
-    {"link": 2, "name": "roll arm",     "from": [-85, 0, -110],  "to": [-85, 78, -110], "width": 24},
-    {"link": 2, "name": "roll arm out", "from": [-85, 78, -110], "to": [0, 78, -110],   "width": 24},
-    {"link": 2, "name": "tilt motor",   "center": [0, 78, -110], "size": [48, 26, 48]},
-    {"link": 3, "name": "tilt bracket", "from": [0, 64, -110],   "to": [0, 64, -158],   "width": 18},
-    {"link": 3, "name": "tilt plate",   "from": [0, 64, -158],   "to": [0, -20, -158],  "width": 18}
+    {"link": 0, "name": "handle", "from": [0, 0, 25], "to": [0, 0, 120], "width": 34},
+    {"link": 0, "name": "hand end", "center": [0, 0, 120], "radius": 19},
+    {"link": 0, "name": "pan motor", "center": [0, 0, 10], "size": [52, 52, 30]},
+    {"link": 1, "name": "pan arm", "from": [0, 0, -8], "to": [-78, 0, -8], "width": 26},
+    {"link": 1, "name": "pan arm drop", "from": [-78, 0, -8], "to": [-78, 0, -193.3], "width": 26},
+    {"link": 1, "name": "pan arm to roll motor", "from": [-78, 0, -193.3], "to": [-55.3, 0.0, -193.3], "width": 26},
+    {"link": 1, "name": "roll motor", "from": [-64.1, 0.0, -206.6], "to": [-46.5, 0.0, -180.0], "width": 52},
+    {"link": 2, "name": "roll arm", "from": [-55.3, 0.0, -193.3], "to": [-55.3, 78, -193.3], "width": 24},
+    {"link": 2, "name": "roll arm out", "from": [-55.3, 78, -193.3], "to": [0, 78, -110], "width": 24},
+    {"link": 2, "name": "tilt motor", "center": [0, 78, -110], "size": [48, 26, 48]},
+    {"link": 3, "name": "tilt bracket", "from": [0, 64, -110], "to": [0, 64, -158], "width": 18},
+    {"link": 3, "name": "tilt plate", "from": [0, 64, -158], "to": [0, -20, -158], "width": 18}
   ]
 }

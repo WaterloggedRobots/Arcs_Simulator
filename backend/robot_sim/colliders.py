@@ -79,6 +79,20 @@ def _norm_owner(owner):
     return o
 
 
+def _gimbal_of(owner):
+    """The gimbal object when owner is a Sim gimbal ("<oid>#sim"), else None."""
+    o = str(owner or "")
+    if not o.endswith("#sim"):
+        return None
+    obj = _sv()._find_object(o[:-4])
+    return obj if obj is not None and obj.get("kind") == "gimbal" else None
+
+
+def _gimbal_mod():
+    import gimbal
+    return gimbal
+
+
 def _vec(v, n, fill):
     a = np.asarray(v if v is not None else fill, dtype=float).reshape(-1)
     if a.size < n:
@@ -143,6 +157,9 @@ def get_collider(owner):
     owner = _norm_owner(owner)
     if owner == "sim":
         return getattr(wp, "sim_collider", None)
+    g = _gimbal_of(owner)
+    if g is not None:
+        return (g.get("gimbal") or {}).get("collider")
     obj = _sv()._find_object(owner)
     return None if obj is None else obj.get("collider")
 
@@ -151,6 +168,14 @@ def _set_record(owner, rec):
     owner = _norm_owner(owner)
     if owner == "sim":
         wp.sim_collider = rec
+        return True
+    g = _gimbal_of(owner)
+    if g is not None:
+        gd = g.setdefault("gimbal", {})
+        if rec:
+            gd["collider"] = _gimbal_mod().clean_collider(rec)
+        else:
+            gd.pop("collider", None)
         return True
     obj = _sv()._find_object(owner)
     if obj is None:
@@ -165,10 +190,13 @@ def collider_status(owner):
     rec = get_collider(owner)
     if not rec:
         return {"added": False, "enabled": False}
-    out = clean_sim_collider(rec) if owner == "sim" else clean_collider(rec)
+    gim = _gimbal_of(owner) is not None
+    out = clean_sim_collider(rec) if (owner == "sim" or gim) else clean_collider(rec)
     out["added"] = True
-    out["robot"] = owner == "sim"
-    obj = None if owner == "sim" else _sv()._find_object(owner)
+    # Model-shaped like the robot's: no boxes to edit, a margin.
+    out["robot"] = owner == "sim" or gim
+    out["gimbal"] = gim
+    obj = None if (owner == "sim" or gim) else _sv()._find_object(owner)
     out["has_parent"] = bool(obj is not None and obj.get("parent_id"))
     out["focused"] = _focus_owner == owner
     out["hit"] = owner in _status["hits"]
@@ -213,6 +241,9 @@ def add_collider_component(owner):
         return collider_status(owner)
     if owner == "sim":
         rec = {"enabled": True, "stop": False, "margin": 0.0}
+    elif _gimbal_of(owner) is not None:
+        wp._push_history()
+        rec = {"enabled": True, "stop": False, "margin": 0.0}
     else:
         obj = _sv()._find_object(owner)
         if obj is None:
@@ -221,7 +252,7 @@ def add_collider_component(owner):
         rec = {"enabled": True, "stop": False, "items": [default_item(obj)]}
     if not _set_record(owner, rec):
         return None
-    if owner != "sim":
+    if owner != "sim" and _gimbal_of(owner) is None:
         _sv().note_component(owner, "collider")
     _refresh_focus_viz()
     return collider_status(owner)
@@ -258,8 +289,9 @@ def update_collider(owner, act="update", enabled=None, stop=None, margin=None,
         rec["stop"] = _truthy(stop)
     if ignore_parent is not None and owner != "sim":
         rec["ignore_parent"] = _truthy(ignore_parent)
-    if owner == "sim":
-        # The robot collider's shape and size come from the URDF; only the margin changes.
+    if owner == "sim" or _gimbal_of(owner) is not None:
+        # The robot's / Sim gimbal's collider is shaped by its URDF / model;
+        # only the margin changes.
         if margin is not None:
             rec["margin"] = margin
         _set_record(owner, clean_sim_collider(rec))
@@ -432,12 +464,26 @@ def _robot_shapes(rec):
     return out
 
 
+def _gimbal_shapes(g, rec):
+    out = []
+    for s in _gimbal_mod().sim_collider_shapes(g, float(rec.get("margin") or 0.0)):
+        if s["kind"] == "sphere":
+            out.append({"t": "sphere", "c": s["c"], "r": s["r"], "br": s["r"], "q": None})
+        else:
+            out.append({"t": "box", "c": s["c"], "R": _qmat(s["q"]), "h": s["h"],
+                        "br": float(np.linalg.norm(s["h"])), "q": s["q"]})
+    return out
+
+
 def _owner_shapes(owner):
     rec = get_collider(owner)
     if not rec or not rec.get("enabled", True):
         return []
     if owner == "sim":
         return _robot_shapes(rec)
+    g = _gimbal_of(owner)
+    if g is not None:
+        return _gimbal_shapes(g, rec)
     return _object_shapes(owner, rec)
 
 
@@ -514,6 +560,8 @@ def _owners():
     for obj in getattr(wp, "scene_objects", None) or []:
         if obj.get("collider"):
             out.append(str(obj.get("id")))
+        if obj.get("kind") == "gimbal" and (obj.get("gimbal") or {}).get("collider"):
+            out.append(str(obj.get("id")) + "#sim")
     return out
 
 
@@ -531,7 +579,10 @@ def _ignored_parent(owner):
         seen.add(pid)
         if get_collider(pid):
             return pid
-        obj = None if pid == "sim" else _sv()._find_object(pid)
+        if pid == "sim":
+            return None
+        g = _gimbal_of(pid)
+        obj = g if g is not None else _sv()._find_object(pid)
     return None
 
 
@@ -548,6 +599,8 @@ def find_contacts():
         for b in owners[i + 1:]:
             if skip[a] == b or skip[b] == a:
                 continue
+            if a.partition("#")[0] == b.partition("#")[0]:
+                continue  # a gimbal's Sim gimbal against its own handle
             hit = False
             for sa in shapes[a]:
                 for sb in shapes[b]:
@@ -590,6 +643,11 @@ def _tint(owner):
                 pass
         _tinted[owner] = True
         return
+    g = _gimbal_of(owner)
+    if g is not None:
+        _gimbal_mod().set_twin_colour(g, "sim", HIT_RGB)
+        _tinted[owner] = True
+        return
     obj = _sv()._find_object(owner)
     h = None if obj is None else obj.get("handle")
     if h is None:
@@ -617,6 +675,10 @@ def _untint(owner):
             except Exception:
                 pass
         return
+    g = _gimbal_of(owner)
+    if g is not None:
+        _gimbal_mod().set_twin_colour(g, "sim")
+        return
     obj = _sv()._find_object(owner)
     h = None if obj is None else obj.get("handle")
     if h is None:
@@ -642,6 +704,9 @@ def _owner_name(owner):
             return arms.name_of()
         except Exception:
             return getattr(_sv(), "SIM_BOT_NAME", "Aubo Arm")
+    g = _gimbal_of(owner)
+    if g is not None:
+        return "%s (Sim gimbal)" % (g.get("name") or "Gimbal")
     obj = _sv()._find_object(owner)
     return str((obj or {}).get("name") or owner)
 
@@ -737,6 +802,9 @@ def _viz_sig(owner):
         return None
     if owner == "sim":
         return ("sim", round(float(rec.get("margin") or 0.0), 6), _robot_geom.get("model_id"))
+    g = _gimbal_of(owner)
+    if g is not None:
+        return ("gimbal", round(float(rec.get("margin") or 0.0), 6), id(g.get("_model_used")))
     return tuple((it.get("shape"), tuple(np.round(it.get("scale"), 6))) for it in rec.get("items") or [])
 
 
@@ -763,6 +831,10 @@ def _make_viz(owner):
                     continue
                 segs = np.stack([V[e[:, 0]], V[e[:, 1]]], axis=1).astype(np.float32)
                 handles.append((_add_lines("%s/l%d" % (base, k), segs), "link", g["link"]))
+        elif _gimbal_of(owner) is not None:
+            for k, s in enumerate(_owner_shapes(owner)):
+                segs = _sphere_edges(s["r"]) if s["t"] == "sphere" else _box_edges(s["h"])
+                handles.append((_add_lines("%s/g%d" % (base, k), segs), "shape", k))
         else:
             for k, it in enumerate(rec.get("items") or []):
                 sc = np.abs(_vec(it.get("scale"), 3, [0.1] * 3))
@@ -779,6 +851,10 @@ def _pose_key(owner):
     try:
         if owner == "sim":
             return tuple(np.round(np.asarray(_rr().robot_sim.angle_vector(), dtype=float).reshape(-1), 6))
+        g = _gimbal_of(owner)
+        if g is not None:
+            return (tuple(np.round(_vec(g.get("pos"), 3, [0, 0, 0]), 6)), tuple(np.round(_vec(g.get("wxyz"), 4, [1, 0, 0, 0]), 6)),
+                    tuple(np.round((g.get("gimbal") or {}).get("target") or [0, 0, 0], 3)))
         pose = _owner_pose(owner)
         if pose is None:
             return None
@@ -805,6 +881,19 @@ def _place_viz(owner, v):
                 xyzw = R.from_matrix(Rm).as_quat()
                 h.position = tuple(float(x) for x in p)
                 h.wxyz = (float(xyzw[3]), float(xyzw[0]), float(xyzw[1]), float(xyzw[2]))
+            except Exception:
+                pass
+        return
+    if _gimbal_of(owner) is not None:
+        shapes = _owner_shapes(owner)
+        for h, _kind, k in v["handles"]:
+            if k >= len(shapes):
+                continue
+            s = shapes[k]
+            try:
+                h.position = tuple(float(x) for x in s["c"])
+                if s.get("q") is not None:
+                    h.wxyz = tuple(float(x) for x in s["q"])
             except Exception:
                 pass
         return
@@ -855,6 +944,8 @@ def _bot_selected():
 
 
 def _show_owner_gizmo(owner, on):
+    if _gimbal_of(owner) is not None:
+        return  # a Sim gimbal has no gizmo
     if owner == "sim":
         # The robot collider belongs to the Aubo Arm: park / bring back its gizmo.
         try:

@@ -293,10 +293,51 @@ def aim(model, mount_pos, mount_wxyz, world_target, prev):
     return out
 
 
+def link_poses(model, angles):
+    """[(wxyz, position)] of link 0 (handle) .. link n in the handle frame."""
+    q = np.array([1.0, 0, 0, 0])
+    p = np.zeros(3)
+    out = [(q, p)]
+    for k in range(len(model["joints"])):
+        lq, lp = joint_local(model, k, angles[k] if k < len(angles) else 0.0)
+        p = p + qrot(q, lp)
+        q = qmul(q, lq)
+        out.append((q, p))
+    return out
+
+
+def world_parts(model, angles, mount_pos, mount_wxyz, margin=0.0, min_link=1):
+    """The model's parts on links >= min_link, in the world, for colliders:
+    [{"kind": "box", "c", "q", "h"} | {"kind": "sphere", "c", "r"}], grown by margin."""
+    mq = np.asarray(mount_wxyz, dtype=float)
+    mq = mq / (np.linalg.norm(mq) or 1.0)
+    mp = np.asarray(mount_pos, dtype=float)
+    links = link_poses(model, angles)
+    out = []
+    for part in model["parts"]:
+        if part["link"] < min_link:
+            continue
+        lq, lp = links[part["link"]]
+        wq = qmul(mq, lq)
+        to_world = lambda v: mp + qrot(mq, lp + qrot(lq, v))
+        if part["kind"] == "sphere":
+            out.append({"kind": "sphere", "c": to_world(part["center"]), "r": part["radius"] + margin})
+        elif part["kind"] == "bar":
+            a, b = part["a"], part["b"]
+            d = b - a
+            L = float(np.linalg.norm(d)) or 1e-4
+            out.append({"kind": "box", "c": to_world((a + b) / 2.0), "q": qmul(wq, qbetween([1, 0, 0], d)),
+                        "h": np.array([L, part["width"], part["width"]]) / 2.0 + margin})
+        else:
+            out.append({"kind": "box", "c": to_world(part["center"]), "q": wq,
+                        "h": np.asarray(part["size"], dtype=float) / 2.0 + margin})
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Scene (viser)
 # ---------------------------------------------------------------------------
-def _add_part(server, name, part, rgb, opacity, on_click):
+def _add_part(server, name, part, rgb, opacity, on_click, out=None):
     if part["kind"] == "bar":
         a, b = part["a"], part["b"]
         d = b - a
@@ -316,6 +357,8 @@ def _add_part(server, name, part, rgb, opacity, on_click):
             h.on_click(on_click)
         except Exception:
             pass
+    if out is not None:
+        out.append(h)
     return h
 
 
@@ -330,9 +373,10 @@ def build_base(server, name, model, rgb, on_click):
 
 def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
     """One twin: nested joint nodes with their link parts, and a camera frame
-    with lens / right arrows (no body). Returns (root, [joint nodes])."""
+    with lens / right arrows (no body). Returns (root, [joint nodes], [part handles])."""
     root = server.scene.add_frame(name, show_axes=False)
     nodes = []
+    parts = []
     path = name
     for k in range(len(model["joints"])):
         path = "%s/j%d" % (path, k + 1)
@@ -340,7 +384,7 @@ def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
         nodes.append(server.scene.add_frame(path, show_axes=False, wxyz=tuple(q), position=tuple(p)))
         for i, part in enumerate(model["parts"]):
             if part["link"] == k + 1:
-                _add_part(server, "%s/p%d" % (path, i), part, rgb, 0.55, on_click)
+                _add_part(server, "%s/p%d" % (path, i), part, rgb, 0.55, on_click, parts)
     cam = path + "/camera"
     server.scene.add_frame(cam, show_axes=False, wxyz=tuple(model["cam_q"]), position=tuple(model["cam_origin"]))
     for sub, axis, length, shaft, head in (("lens", 2, arrow_len, 0.007, 0.018), ("side", 0, arrow_len * 0.4, 0.005, 0.012)):
@@ -348,7 +392,7 @@ def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
         pts[0, 1, axis] = float(length)
         server.scene.add_arrows(name="%s/%s" % (cam, sub), points=pts, colors=np.asarray(rgb, dtype=np.uint8).reshape(3),
                                 shaft_radius=shaft, head_radius=head, head_length=head * 2.2)
-    return root, nodes
+    return root, nodes, parts
 
 
 def pose_twin(model, nodes, angles):

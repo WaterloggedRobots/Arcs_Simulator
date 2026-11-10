@@ -621,6 +621,9 @@ def _restore_objects_snapshot(doc):
             o["offset"] = offsets.clean_offset(rec.get("offset"))
             o["collider"] = colliders.clean_collider(rec.get("collider"))
             o["comp_order"] = list(rec.get("comp_order") or [])
+            if o.get("kind") == "gimbal" and rec.get("gimbal"):
+                # Its Sim gimbal's collider (and settings) come back too.
+                o["gimbal"] = gimbal.clean_gimbal(rec.get("gimbal"))
         offsets.refresh_offset_viz()
         colliders.on_selection_changed()
         return

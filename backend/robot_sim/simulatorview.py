@@ -1187,6 +1187,8 @@ def delete_scene_object(oid):
         return False
     try:
         _colliders().forget_owner(oid)
+        if obj.get("kind") == "gimbal":
+            _colliders().forget_owner(_gimbal().part_id(oid, "sim"))
     except Exception as e:
         print("delete: collider cleanup failed", e)
     for key in ("gizmo", "sim_head", "real_head", "base_root", "handle", "frustum"):
@@ -1305,7 +1307,9 @@ def selected_object_props():
         "local_wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", obj.get("wxyz", [1, 0, 0, 0]))).reshape(4)],
         "camera": dict(obj.get("camera")) if obj.get("camera") else None,
         "offset": _offsets().offset_status(obj.get("id")),
-        "collider": _colliders().collider_status(obj.get("id")),
+        "collider": (_colliders().collider_status(_gimbal().part_id(obj.get("id"), "sim")) if part == "sim"
+                     else {"added": False} if part == "real"
+                     else _colliders().collider_status(obj.get("id"))),
         "parent_offset": _parent_offset(obj) is not None,
         "comp_order": list(obj.get("comp_order") or []),
         "gimbal": _gimbal().status(obj.get("id")) if obj.get("kind") == "gimbal" else None,

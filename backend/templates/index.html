@@ -771,8 +771,7 @@
     .props.gim-part #primBody > :not(#gimbalProps) { display: none !important; }
     .props.gim-part #gimbalProps > hr { display: none; }
     .props.gim-real #simExtraAdd,
-    .props.gim-look #simExtraAdd,
-    .props.gim-part .track-comp:not(#gimbalProps),
+    .props.gim-part .track-comp:not(#gimbalProps):not(#colliderComp),
     .props.gim-part > hr { display: none !important; }
     .gim-err[hidden] { display: none; }
     .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
@@ -2334,7 +2333,7 @@
             <label class="col-stop"><input id="colliderStop" type="checkbox"> stop simulation if collide</label>
             <label class="col-stop" id="colIgnoreRow" hidden><input id="colliderIgnoreParent" type="checkbox"> ignore parent collider</label>
             <div id="colRobot" hidden>
-              <div class="col-note">Covers the whole robot in the shape of its URDF.</div>
+              <div class="col-note" id="colRobotNote">Covers the whole robot in the shape of its URDF.</div>
               <div class="row name-row"><label>Margin</label><input id="colMargin" type="number" step="0.01" min="0" value="0.00"></div>
             </div>
             <div id="colObj" hidden>
@@ -4877,7 +4876,7 @@
             if (!el) return;
             el.value = Number(q[i] || 0).toFixed(4);
           });
-          const eu = quatToEuler(Number(q[0] || 1), Number(q[1] || 0), Number(q[2] || 0), Number(q[3] || 0));
+          const eu = quatToEuler(Number(q[0] != null ? q[0] : 1), Number(q[1] || 0), Number(q[2] || 0), Number(q[3] || 0));  // w can be 0 (a 180 deg turn)
           ["erx", "ery", "erz"].forEach((id, i) => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -5274,7 +5273,7 @@
       const box = document.getElementById("colliderComp");
       const sep = document.getElementById("colliderSep");
       const col = (obj && obj.collider) || {};
-      const kinds = ["bot", "empty", "sphere", "cube", "camera", "mesh", "import"];
+      const kinds = ["bot", "empty", "sphere", "cube", "camera", "mesh", "import", "gimbal"];
       const show = !!(obj && kinds.indexOf(obj.kind) >= 0 && col.added);
       if (box) box.hidden = !show;
       if (sep) sep.hidden = !show;
@@ -5295,6 +5294,10 @@
       const ob = document.getElementById("colObj");
       if (rb) rb.hidden = !robot;
       if (ob) ob.hidden = robot;
+      const rnote = document.getElementById("colRobotNote");
+      if (rnote) rnote.textContent = col.gimbal
+        ? "Covers the Sim gimbal's arms and motors in the shape of its model, not the handle on the arm."
+        : "Covers the whole robot in the shape of its URDF.";
       if (robot) {
         const m = document.getElementById("colMargin");
         if (m && document.activeElement !== m) m.value = Number(col.margin || 0).toFixed(2);
@@ -5339,9 +5342,15 @@
       if (cu) { cu.classList.toggle("deg", fkDeg); cu.classList.toggle("advanced", fkDeg); }
       if (uw) { uw.classList.toggle("deg", fkDeg); uw.classList.toggle("rad", !fkDeg); }
     }
+    function colliderOwnerId(obj) {
+      if (obj.kind === "sim") return "sim";
+      // A gimbal's Sim gimbal has its own (model-shaped) collider.
+      if (obj.kind === "gimbal" && obj.gimbal_part === "sim") return obj.id + "#sim";
+      return obj.id;
+    }
     function postCollider(payload) {
       const obj = window.__lastObject || {};
-      const body = Object.assign({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id }, payload || {});
+      const body = Object.assign({ kind: obj.kind, id: colliderOwnerId(obj) }, payload || {});
       return fetch("/api/collider", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5420,7 +5429,7 @@
       fetch("/api/collider", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: obj.kind, id: obj.kind === "sim" ? "sim" : obj.id, act: "edit" }),
+        body: JSON.stringify({ kind: obj.kind, id: colliderOwnerId(obj), act: "edit" }),
       });
     });
     const colliderTrash = document.getElementById("colliderTrash");
@@ -5591,18 +5600,22 @@
         e.stopPropagation();
         const obj = window.__lastObject || {};
         if (obj.kind === "gimbal" && obj.gimbal_part === "sim") {
-          // The Sim gimbal takes Look At only.
-          const taken = !!(obj.gimbal && obj.gimbal.look && obj.gimbal.look.added);
+          // The Sim gimbal takes Look At and its model-shaped Collider.
+          const has = {
+            track: !!(obj.gimbal && obj.gimbal.look && obj.gimbal.look.added),
+            collider: !!(obj.collider && obj.collider.added),
+          };
           compMenu.querySelectorAll("[data-comp]").forEach((b) => {
-            b.hidden = b.getAttribute("data-comp") !== "track";
-            b.disabled = taken;
-            b.style.opacity = taken ? "0.4" : "";
-            b.style.pointerEvents = taken ? "none" : "";
+            const k = b.getAttribute("data-comp");
+            b.hidden = !(k in has);
+            b.disabled = !!has[k];
+            b.style.opacity = has[k] ? "0.4" : "";
+            b.style.pointerEvents = has[k] ? "none" : "";
           });
           const r0 = extraAddBtn.getBoundingClientRect();
           compMenu.hidden = false;
           compMenu.style.left = Math.max(8, r0.left) + "px";
-          compMenu.style.top = Math.max(8, r0.top - 42) + "px";
+          compMenu.style.top = Math.max(8, r0.top - 74) + "px";
           return;
         }
         const isSim = obj.kind === "sim";
@@ -5637,6 +5650,7 @@
         const gObj = window.__lastObject || {};
         if (gObj.kind === "gimbal" && gObj.gimbal_part === "sim") {
           if (btn.getAttribute("data-comp") === "track") postGimbal({ look: { added: true, on: true } });
+          if (btn.getAttribute("data-comp") === "collider") postCollider({ act: "add" });
           return;
         }
         if (btn.getAttribute("data-comp") === "track") {

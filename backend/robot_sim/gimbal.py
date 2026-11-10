@@ -112,7 +112,20 @@ def clean_gimbal(rec):
     cfg["channel"] = int(_f(cfg["channel"], 0))
     cfg["bitrate"] = int(_f(cfg["bitrate"], 1000000))
     cfg["move_s"] = max(0.1, min(MAX_MOVE_S, _f(cfg["move_s"], 2.0)))
-    return {"cfg": cfg, "target": clamp_angles(rec.get("target")), "look": clean_look(rec.get("look"))}
+    out = {"cfg": cfg, "target": clamp_angles(rec.get("target")), "look": clean_look(rec.get("look"))}
+    col = clean_collider(rec.get("collider"))
+    if col:
+        out["collider"] = col
+    return out
+
+
+def clean_collider(rec):
+    """The Sim gimbal's collider: {enabled, stop, margin} (shaped by the model's
+    moving parts, not the handle), or None."""
+    if not isinstance(rec, dict):
+        return None
+    return {"enabled": bool(rec.get("enabled", True)), "stop": bool(rec.get("stop", False)),
+            "margin": max(0.0, _f(rec.get("margin"), 0.0))}
 
 
 def clean_look(rec):
@@ -410,14 +423,14 @@ def spawn_head(obj):
             except Exception:
                 pass
         try:
-            root, nodes = gmodel.build_twin(
+            root, nodes, handles = gmodel.build_twin(
                 wp.server, "%s/%s" % (_mount_name(obj), part), model,
                 SIM_RGB if part == "sim" else REAL_RGB, gmodel.joint_values(model, target),
                 _clicker(obj["id"], part))
-            obj[part + "_head"], obj[part + "_nodes"] = root, nodes
+            obj[part + "_head"], obj[part + "_nodes"], obj[part + "_parts"] = root, nodes, handles
         except Exception as e:
             print("gimbal %s twin failed" % part, e)
-            obj[part + "_head"], obj[part + "_nodes"] = None, []
+            obj[part + "_head"], obj[part + "_nodes"], obj[part + "_parts"] = None, [], []
         obj.pop("_shown_" + part, None)
         obj.pop("_vis_" + part, None)
     obj["_model_used"] = model
@@ -442,6 +455,25 @@ def twin_camera_world(obj, part="sim"):
     pos = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float) + gmodel.qrot(mq, p)
     wq = gmodel.qmul(mq, q)
     return pos, wq / (np.linalg.norm(wq) or 1.0)
+
+
+def sim_collider_shapes(obj, margin=0.0):
+    """World shapes of the Sim gimbal's moving parts (links 1..n, not the
+    handle, which sits on the arm) for the collision check."""
+    model = obj.get("_model_used") or model_of(obj)[0]
+    g = obj.get("gimbal") or {}
+    return gmodel.world_parts(model, gmodel.joint_values(model, g.get("target")),
+                              obj.get("pos", [0, 0, 0]), obj.get("wxyz", [1, 0, 0, 0]), margin=margin)
+
+
+def set_twin_colour(obj, part, rgb=None):
+    """Tint a twin's parts (red on contact); rgb None = its own colour."""
+    rgb = rgb or (SIM_RGB if part == "sim" else REAL_RGB)
+    for h in obj.get(part + "_parts") or []:
+        try:
+            h.color = tuple(int(v) for v in rgb)
+        except Exception:
+            pass
 
 
 def add_gimbal_camera(obj):
