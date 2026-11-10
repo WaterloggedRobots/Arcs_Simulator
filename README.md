@@ -326,7 +326,9 @@ Components in the properties panel are listed in the order they were added, newe
 
 The twins can't be moved, renamed or deleted on their own; their angles come from the target and from the gimbal.
 
-Angles are the gimbal's three motors, **J1–J3**, in degrees, numbered from the handle: **J1** the handle motor, **J2** the middle motor, **J3** the camera motor (the DJI SDK calls them joint yaw / roll / pitch; saved files keep those keys). Limits for a move: J1 ±180, J2 ±30, J3 −56…+146. They are motor angles, fixed to the gimbal, not world directions, so they mean the same however the gimbal is mounted. The twins use the mount's frame (z forward along the lens arrow, x right, y down) and turn J1 about y, then J2 about z, then J3 about x (with the mount upright: J1 positive turns right, J2 positive drops the right side, J3 positive tilts up).
+Angles are the gimbal's three motors, **J1–J3**, in degrees, numbered from the handle: **J1** the handle motor, **J2** the middle motor, **J3** the camera motor (the DJI SDK calls them joint yaw / roll / pitch; saved files keep those keys). Values are kept as read, in ±180 (the SDK's ±30 / −56…+146 are limits for move commands, not for the joints: an RS4 with the camera looking along the handle reads J3 = −90). They are motor angles, fixed to the gimbal, not world directions, so they mean the same however the gimbal is mounted.
+
+**Mounting the gimbal in the scene.** The mount stands for the gimbal's body: point its **arrow along the handle, from the handle end towards the camera end**, with its side arrow to the camera's right. Then, as on the RS4, **J3 = −90 points the lens along the arrow** and J1 turns the camera around that axis (the 360 roll); with J1–J3 at 0 the lens is at right angles to the handle. For the arm, parent the gimbal to the Sim cursor and set the mount's local rotation to how it is fixed to the flange (the example project *gimbal pose* has the handle pointing forward from a tool-down cursor).
 
 **Properties**
 
@@ -455,7 +457,7 @@ The following are known to be rough or incomplete at this stage:
 | Live target tracking during a run | Not available; tracking is computed before baking. Real-arm face tracking is in progress. |
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
-| Gimbal | Gimbal frames are not covered by undo, and can't be dragged on the timeline (delete and insert again). |
+| Gimbal | Gimbal frames are not covered by undo, and can't be dragged on the timeline (delete and insert again). **Move real to sim**, the initial pose and Run send the target with the SDK's absolute move, which the RS4 tests showed is taken as the camera's *world* angles, not J1–J3: with the gimbal mounted sideways (handle horizontal) the real gimbal goes to the wrong pose. Turn **Drive** off for such mounts until joint control is added. J2's sign and J1's direction as seen on the twins are not yet checked against the hardware. |
 | Several Aubo Arms | Undo and redo belong to the active arm. Timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
 
 ---

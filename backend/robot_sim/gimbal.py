@@ -53,7 +53,11 @@ TWIN_R = {"sim": 0.034, "real": 0.03}
 ARROW_LEN = 0.24
 PARTS = ("sim", "real")
 AXES = ("yaw", "roll", "pitch")
-LIMITS = {"yaw": (-180.0, 180.0), "roll": (-30.0, 30.0), "pitch": (-56.0, 146.0)}
+# Stored J1 / J2 / J3 (keys yaw / roll / pitch) are kept as read, in -180..180.
+# The SDK's -56..146 "pitch" and +/-30 "roll" are limits for MOVE commands,
+# not for the joints: an RS4 with the camera looking along the handle reads
+# J3 = -90. (Clamping to them turned a copied J3 of -90 into -56.)
+LIMITS = {"yaw": (-180.0, 180.0), "roll": (-180.0, 180.0), "pitch": (-180.0, 180.0)}
 
 DEFAULT_CFG = {
     "drive": True,             # send moves (Move, initial pose, Run); reading never stops
@@ -155,9 +159,9 @@ def look_target_pos(oid, name):
 
 
 def aim_angles(obj, world_pos, prev=None):
-    """(yaw, roll, pitch) that point the lens (twin z) at world_pos; roll 0.
-    Pitch is clamped to the gimbal's range. Straight above / below the mount,
-    yaw keeps its previous value (gimbal lock there)."""
+    """(J1, J2, J3) that point the lens at world_pos, with J2 = 0 (see head_wxyz).
+    In the mount's frame the lens is (cos J3 sin J1, cos J3 cos J1, -sin J3).
+    Straight along the handle axis J1 keeps its previous value (gimbal lock)."""
     import simulatorview as sv
     m = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float).reshape(3)
     q = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
@@ -167,10 +171,10 @@ def aim_angles(obj, world_pos, prev=None):
         return None
     d = d / n
     prev = list(prev or [0.0, 0.0, 0.0])
-    pitch = math.degrees(math.asin(max(-1.0, min(1.0, -d[1]))))
-    flat = math.hypot(d[0], d[2])
-    yaw = math.degrees(math.atan2(d[0], d[2])) if flat > 1e-4 else _f(prev[0])
-    return clamp_angles([yaw, 0.0, pitch])
+    j3 = math.degrees(math.asin(max(-1.0, min(1.0, -d[2]))))
+    flat = math.hypot(d[0], d[1])
+    j1 = math.degrees(math.atan2(d[0], d[1])) if flat > 1e-4 else _f(prev[0])
+    return clamp_angles([j1, 0.0, j3])
 
 
 def is_gimbal(obj):
@@ -336,11 +340,21 @@ def _quat_axis(axis, deg):
     return np.array([math.cos(h), axis[0] * s, axis[1] * s, axis[2] * s], dtype=float)
 
 
+# The mount's frame is the gimbal body: its arrow (z) is the handle axis,
+# pointing from the handle end to the camera end; x is the camera's right.
+# With J3 = -90 the lens points along the arrow (the RS4 reads J3 = -90 with
+# the camera looking along the handle, away from it), and J1 turns the camera
+# around that axis. With J1-J3 = 0 the lens is at right angles to the handle
+# (along the mount's +y).
+_BASE = _quat_axis((1, 0, 0), -90.0)
+
+
 def head_wxyz(angles):
-    """Local rotation of a twin for (yaw, roll, pitch) in degrees."""
+    """Local rotation of a twin (lens = its z) for (J1, J2, J3) in degrees."""
     import simulatorview as sv
-    y, r, p = (list(angles or [0, 0, 0]) + [0, 0, 0])[:3]
-    q = sv._qmul(sv._qmul(_quat_axis((0, 1, 0), y), _quat_axis((0, 0, 1), r)), _quat_axis((1, 0, 0), p))
+    j1, j2, j3 = (list(angles or [0, 0, 0]) + [0, 0, 0])[:3]
+    q = sv._qmul(_BASE, sv._qmul(sv._qmul(_quat_axis((0, 1, 0), j1), _quat_axis((0, 0, 1), j2)),
+                                 _quat_axis((1, 0, 0), -j3)))
     n = float(np.linalg.norm(q)) or 1.0
     return q / n
 
