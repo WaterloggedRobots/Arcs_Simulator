@@ -1704,7 +1704,14 @@ def api_gimbal():
         t = data.get("t")
         if t is None:
             t = getattr(viewer_main, "playhead_t", 0.0)
-        ok = wp.gimbal.insert_frame(oid, t)
+        angles = None
+        if data.get("source") == "real":
+            # The timeline's orange +: the real gimbal's reading.
+            angles = (wp.gimbal.status(oid) or {}).get("read")
+            if angles is None:
+                return jsonify({"ok": False, "error": "the real gimbal is not reading",
+                                "gimbal": wp.gimbal.status(oid)})
+        ok = wp.gimbal.insert_frame(oid, t, angles)
     elif act == "delete_frame":
         if rr.edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409

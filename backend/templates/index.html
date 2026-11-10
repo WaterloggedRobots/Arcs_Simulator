@@ -1107,9 +1107,15 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: 78px 1fr;
+      grid-template-columns: var(--tl-names-w, 196px) 1fr;
       overflow: hidden;
+      position: relative;
     }
+    .tl-names-resizer {
+      position: absolute; top: 0; bottom: 0; left: calc(var(--tl-names-w, 196px) - 3px); width: 6px;
+      cursor: col-resize; z-index: 3;
+    }
+    .tl-names-resizer:hover, .tl-names-resizer.drag { background: rgba(120, 160, 255, 0.35); }
     .tl-labels {
       overflow-x: hidden;
       overflow-y: auto;
@@ -1121,7 +1127,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 4px;
-      padding: 0 8px;
+      padding: 0 0 0 8px;
       font-size: 11px;
       color: var(--muted);
       border-bottom: 1px solid #111;
@@ -1145,6 +1151,17 @@
       cursor: pointer;
       flex-shrink: 0;
     }
+    /* + column right of the track names: the same buttons as the lists' +, smaller. */
+    .tl-label-main { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; }
+    .tl-plus-col {
+      display: flex; align-items: center; justify-content: flex-start; gap: 3px;
+      width: 46px; flex-shrink: 0; align-self: stretch; padding-left: 5px; border-left: 1px solid #111;
+    }
+    .tl-plus-col .hier-add { width: 19px; min-width: 19px; height: 18px; font-size: 13px; border-radius: 3px; }
+    .gim-frames-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .props #gimInsert.hier-add { background: var(--azure); color: var(--on-bright); border: 0; }
+    .tl-plus-col .hier-add.real { background: var(--orange); color: var(--on-bright); }
+    .tl-plus-col .hier-add.sim { background: var(--azure); color: var(--on-bright); }
     .tl-label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
     .tl-del-track {
       width: 16px; height: 16px; padding: 0; margin-left: auto;
@@ -2141,9 +2158,11 @@
               <div class="gim-btns gim-one">
                 <button type="button" id="gimUseRead" title="Copy the angles read from the real gimbal into the Sim gimbal's target">Copy real pose to sim</button>
               </div>
-              <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
-              <div class="gim-btns">
-                <button type="button" id="gimInsert" title="Insert a frame with the target angles at the playhead">Insert frame</button>
+              <div class="gim-frames-head">
+                <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
+                <button type="button" id="gimInsert" class="hier-add" title="Insert a frame with the Sim gimbal's angles at the playhead (also the blue + on the gimbal's timeline row)">+</button>
+              </div>
+              <div class="gim-btns gim-one">
                 <button type="button" id="gimDelete" title="Delete the frame at the playhead">Delete frame</button>
               </div>
               <div id="gimFrames" class="gim-frames"></div>
@@ -2403,6 +2422,7 @@
       </div>
       <div class="tl-body">
         <div class="tl-labels" id="tlLabels"></div>
+        <div class="tl-names-resizer" id="tlNamesResizer" title="Drag to resize the track names"></div>
         <div class="tl-scroll" id="tlScroll">
           <canvas id="tlCanvas"></canvas>
         </div>
@@ -2979,20 +2999,48 @@
         const d = document.createElement("div");
         d.className = "tl-label";
         d.style.height = TRACK_H + "px";
+        const main = document.createElement("div");
+        main.className = "tl-label-main";
         const nm = document.createElement("span");
         nm.className = "tl-label-name";
         nm.textContent = vis[i].name;
-        d.appendChild(nm);
+        nm.title = vis[i].name;
+        main.appendChild(nm);
         // The Look At track follows its component; remove the component instead.
-        if (vis[i].custom && vis[i].id !== "look_sim" && !isGimbalTrack(vis[i])) {
+        if (vis[i].custom && String(vis[i].id).indexOf("custom_") === 0) {
           const del = document.createElement("button");
           del.type = "button";
           del.className = "tl-del-track";
           del.title = "Delete track";
           del.textContent = "🗑";
           del.dataset.id = vis[i].id;
-          d.appendChild(del);
+          main.appendChild(del);
         }
+        d.appendChild(main);
+        // + buttons: what the row's own + adds (arm: waypoint from the Real /
+        // Sim cursor, gimbal: frame from the Real reading / Sim target).
+        const col = document.createElement("div");
+        col.className = "tl-plus-col";
+        const tr = vis[i];
+        const plus = (src, title) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "hier-add tl-plus " + src;
+          b.textContent = "+";
+          b.title = title;
+          b.dataset.src = src;
+          b.dataset.track = tr.id;
+          if (tr.armRow) b.dataset.arm = tr.armRow.id;
+          col.appendChild(b);
+        };
+        if (tr.id === "arm" || tr.armRow) {
+          plus("real", "Add waypoint on real robot" + (tr.armRow ? " (" + tr.name + ")" : " (E)"));
+          plus("sim", "Add waypoint from sim cursor" + (tr.armRow ? " (" + tr.name + ")" : " (R)"));
+        } else if (isGimbalTrack(tr)) {
+          plus("real", "Insert a frame with the real gimbal's angles at the playhead");
+          plus("sim", "Insert a frame with the Sim gimbal's angles at the playhead");
+        }
+        d.appendChild(col);
         labelsEl.appendChild(d);
       }
       if (devMode) {
@@ -3019,6 +3067,13 @@
           if (devMode) addExtraTrack();
           return;
         }
+        const plusBtn = ev.target.closest ? ev.target.closest(".tl-plus") : null;
+        if (plusBtn && labelsEl.contains(plusBtn)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          trackPlus(plusBtn.dataset.track, plusBtn.dataset.src, plusBtn.dataset.arm);
+          return;
+        }
         const delBtn = ev.target.closest ? ev.target.closest(".tl-del-track") : null;
         if (delBtn && labelsEl.contains(delBtn)) {
           ev.preventDefault();
@@ -3030,6 +3085,60 @@
       });
     }
 
+
+    (function setupTrackNamesResize() {
+      const h = document.getElementById("tlNamesResizer");
+      const body = h && h.parentElement;
+      if (!h || !body) return;
+      const MIN_W = 110, MAX_W = 520;
+      const apply = (w) => { body.style.setProperty("--tl-names-w", Math.round(w) + "px"); };
+      try {
+        const saved = parseFloat(localStorage.getItem("tlNamesW") || "");
+        if (Number.isFinite(saved)) apply(Math.max(MIN_W, Math.min(MAX_W, saved)));
+      } catch (err) {}
+      h.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        h.setPointerCapture(ev.pointerId);
+        h.classList.add("drag");
+        const left = body.getBoundingClientRect().left;
+        let w = null;
+        const move = (e) => { w = Math.max(MIN_W, Math.min(MAX_W, e.clientX - left)); apply(w); };
+        const up = () => {
+          h.classList.remove("drag");
+          h.removeEventListener("pointermove", move);
+          h.removeEventListener("pointerup", up);
+          h.removeEventListener("pointercancel", up);
+          if (w != null) { try { localStorage.setItem("tlNamesW", String(Math.round(w))); } catch (err) {} }
+          try { renderTimeline(); } catch (err) {}
+        };
+        h.addEventListener("pointermove", move);
+        h.addEventListener("pointerup", up);
+        h.addEventListener("pointercancel", up);
+      });
+    })();
+
+    async function trackPlus(trackId, src, armId) {
+      if (lockEdits) return;
+      if (trackId === "arm" || armId) {
+        if (armId) {
+          // Another arm's row: make it the active arm, then add to it.
+          await fetch("/api/arm", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "activate", id: armId }) });
+        }
+        await add(src === "real" ? "/api/add_waypoint_real" : "/api/add_waypoint_sim");
+        if (armId) refresh();
+        return;
+      }
+      if (isGimbalTrack({ id: trackId })) {
+        const oid = String(trackId).slice("gimbal_".length);
+        const r = await fetch("/api/gimbal", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: oid, action: "insert_frame", t: snapToTick(playhead), source: src }) });
+        let d = {};
+        try { d = await r.json(); } catch (err) {}
+        if (!d.ok && statusEl) statusEl.textContent = d.error || "Insert frame failed";
+        setTimeout(refresh, 80);
+      }
+    }
 
     function pathWinRadius() {
       const v = parseFloat(document.getElementById("pathWinRad").value || "1");

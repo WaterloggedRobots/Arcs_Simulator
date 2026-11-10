@@ -1,6 +1,6 @@
 {
   "name": "DJI RS 4",
-  "about": "Joint axes, offsets and boxes for the sandbox's Gimbal object. Lengths in mm, in the HANDLE's frame (the Gimbal object's mount) with all joints at 0: handle along z, hand end up (+z), camera end down; the camera looks along +x (front); +y is the camera's left. DJI publishes no CAD or axis dimensions for the RS 4: the numbers below are estimates from its overall size (370 x 191 x 189 mm unfolded) and must be measured on the real gimbal. A balanced gimbal has all three axes through the camera's centre of gravity, so 'point' is the same for each joint; only the axis directions (J2's tilt in particular) and the camera centre's distance below the pan motor change where the camera points. Copy this file to make a model for another gimbal or rig; the Gimbal object picks it by file name.",
+  "about": "Parts: the pan arm and roll motor are on the +x side (the roll motor on J2's axis, 100 mm above the camera centre along it) because with J2 reading near 180 the camera looks along -x, away from them. Joint axes, offsets and boxes for the sandbox's Gimbal object. Lengths in mm, in the HANDLE's frame (the Gimbal object's mount) with all joints at 0: handle along z, hand end up (+z), camera end down; the camera looks along +x (front); +y is the camera's left. DJI publishes no CAD or axis dimensions for the RS 4: the numbers below are estimates from its overall size (370 x 191 x 189 mm unfolded) and must be measured on the real gimbal. A balanced gimbal has all three axes through the camera's centre of gravity, so 'point' is the same for each joint; only the axis directions (J2's tilt in particular) and the camera centre's distance below the pan motor change where the camera points. Copy this file to make a model for another gimbal or rig; the Gimbal object picks it by file name.",
   "driver": "rs4_can.py",
   "aim_joints": [
     "J1",
@@ -16,12 +16,12 @@
     {"link": 0, "name": "handle", "from": [0, 0, 25], "to": [0, 0, 120], "width": 34},
     {"link": 0, "name": "hand end", "center": [0, 0, 120], "radius": 19},
     {"link": 0, "name": "pan motor", "center": [0, 0, 10], "size": [52, 52, 30]},
-    {"link": 1, "name": "pan arm", "from": [0, 0, -8], "to": [-78, 0, -8], "width": 26},
-    {"link": 1, "name": "pan arm drop", "from": [-78, 0, -8], "to": [-78, 0, -193.3], "width": 26},
-    {"link": 1, "name": "pan arm to roll motor", "from": [-78, 0, -193.3], "to": [-55.3, 0.0, -193.3], "width": 26},
-    {"link": 1, "name": "roll motor", "from": [-64.1, 0.0, -206.6], "to": [-46.5, 0.0, -180.0], "width": 52},
-    {"link": 2, "name": "roll arm", "from": [-55.3, 0.0, -193.3], "to": [-55.3, 78, -193.3], "width": 24},
-    {"link": 2, "name": "roll arm out", "from": [-55.3, 78, -193.3], "to": [0, 78, -110], "width": 24},
+    {"link": 1, "name": "pan arm", "from": [0, 0, -8], "to": [78, 0, -8], "width": 26},
+    {"link": 1, "name": "pan arm drop", "from": [78, 0, -8], "to": [78, 0, -26.7], "width": 26},
+    {"link": 1, "name": "pan arm to roll motor", "from": [78, 0, -26.7], "to": [55.3, 0.0, -26.7], "width": 26},
+    {"link": 1, "name": "roll motor", "from": [48.7, 0.0, -36.7], "to": [61.9, 0.0, -16.7], "width": 52},
+    {"link": 2, "name": "roll arm", "from": [55.3, 0.0, -26.7], "to": [55.3, 78, -26.7], "width": 24},
+    {"link": 2, "name": "roll arm out", "from": [55.3, 78, -26.7], "to": [0, 78, -110], "width": 24},
     {"link": 2, "name": "tilt motor", "center": [0, 78, -110], "size": [48, 26, 48]},
     {"link": 3, "name": "tilt bracket", "from": [0, 64, -110], "to": [0, 64, -158], "width": 18},
     {"link": 3, "name": "tilt plate", "from": [0, 64, -158], "to": [0, -20, -158], "width": 18}

@@ -534,7 +534,9 @@ def _follow_now(obj):
 
 
 def add_gimbal_camera(obj):
-    """A Camera object on a new gimbal's Sim gimbal, at its camera frame."""
+    """A Camera object on a new gimbal's Sim gimbal, at its camera frame.
+    (Called for new gimbals only: the Sim gimbal also takes the real pose.)"""
+    _rt_for(str(obj.get("id")))["adopt_read"] = True
     import simulatorview as sv
     cam = sv.add_scene_object("camera", name="%s camera" % (obj.get("name") or "Gimbal"))
     if cam is None:
@@ -856,6 +858,12 @@ def _tick_one(obj, clock):
             elif real_on:
                 _drive_run(oid, rt, keys, t)
         _read(oid, rt)
+        # A new gimbal starts where the real one is (first good reading), unless
+        # its pose was set by hand, frames were added or Look At aims it.
+        if rt.get("adopt_read") and rt["read_ok"]:
+            rt["adopt_read"] = False
+            if not keys_for(oid) and not aiming:
+                g["target"] = clamp_angles(rt["read"])
         if "calib_rec" in rt:
             _calib_sample(rt)
     elif calib or "calib_rec" in rt:
@@ -1108,6 +1116,7 @@ def update(oid, data):
         g["cfg"] = cfg
     if data.get("target") is not None:
         g["target"] = data.get("target")
+        _rt_for(oid)["adopt_read"] = False  # set by hand: don't take the real pose
     if isinstance(data.get("look"), dict):
         look = dict(g.get("look") or {})
         look.update(data["look"])
