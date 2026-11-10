@@ -728,7 +728,6 @@
     .gim-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 6px 0 2px; }
     .gim-btns button { margin: 0; background: #3a3b44; }
     .gim-btns.gim-one { grid-template-columns: 1fr; }
-    .gim-btns.gim-calib-row { grid-template-columns: 1fr auto; }
     .gim-move-real { display: block; width: 100%; margin: 8px 0 2px; background: #b8752a; color: #fff; }
     .gim-move-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
     .gim-move-row select { margin: 8px 0 2px; height: 30px; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; }
@@ -2128,9 +2127,8 @@
               <div class="col-note" id="gimState"></div>
               <div class="row name-row gim-model-row"><label>Model</label><select id="gimModel" class="gim-select" title="Gimbal model file (user_files/gimbal_models): joint axes, offsets and shape"></select></div>
               <div id="gimModelErr" class="track-err" hidden></div>
-              <div class="gim-btns gim-one gim-calib-row">
-                <button type="button" id="gimCalibrate" title="Hold the handle still and vertical, hand end up, press, then move the camera around with the gimbal's joystick and press Finish: J2's axis and the J2 / J3 directions and zero offsets are fitted to all the readings and saved in the model file">Recalibrate gimbal</button>
-                <button type="button" id="gimCalibCancel" hidden>Cancel</button>
+              <div class="gim-btns gim-one">
+                <button type="button" id="gimCalibrate" title="Put the gimbal in its home pose (handle vertical, hand end up, camera looking at the front, +x, level, no roll), then press: the joint readings there become the model's zero pose. Nothing moves.">Recalibrate gimbal</button>
               </div>
               <div class="col-note" id="gimCalib" hidden></div>
               <details class="gim-conn" open>
@@ -4862,16 +4860,7 @@
         }
       }
       const cb = document.getElementById("gimCalibrate");
-      const crec = !!(g.calib && g.calib.recording), cfit = !!(g.calib && g.calib.fitting);
-      const calign = !!(g.calib && g.calib.aligning);
-      if (cb) {
-        cb.disabled = cfit || (!crec && !g.read_ok);
-        setText(cb, crec ? "Finish recalibration (" + (g.calib.n || 0) + " samples)" : cfit ? "Fitting…"
-          : calign ? "Start recording (camera at the front, level)" : "Recalibrate gimbal");
-        cb.dataset.step = crec ? "finish" : calign ? "start" : "align";
-      }
-      const ccx = document.getElementById("gimCalibCancel");
-      if (ccx) ccx.hidden = !(crec || calign);
+      if (cb) cb.disabled = !g.read_ok || !!(g.calib && g.calib.ok === null);
       const cl = document.getElementById("gimCalib");
       if (cl) {
         const c = g.calib;
@@ -4985,9 +4974,7 @@
       }));
       try { gimWorld = localStorage.getItem("gimWorld") === "1"; } catch (err) {}
       const calBtn = byId("gimCalibrate");
-      if (calBtn) calBtn.addEventListener("click", () => postGimbal({ action: "calibrate", step: calBtn.dataset.step || "align" }));
-      const calCx = byId("gimCalibCancel");
-      if (calCx) calCx.addEventListener("click", () => postGimbal({ action: "calibrate", step: "cancel" }));
+      if (calBtn) calBtn.addEventListener("click", () => postGimbal({ action: "calibrate" }));
       const msel = byId("gimModel");
       if (msel) msel.addEventListener("change", () => postGimbal({ cfg: { model: msel.value } }));
       const cfgFields = { gimScript: "script", gimIface: "interface", gimChannel: "channel", gimBitrate: "bitrate", gimMoveS: "move_s" };

@@ -1741,8 +1741,8 @@ def api_gimbal():
     if act == "move":
         ok = wp.gimbal.request_move(oid, direction=str(data.get("direction") or "short"))
     elif act == "calibrate":
-        # step start: record samples (handle still, hand end up, camera moved); finish: fit and save; cancel.
-        ok = wp.gimbal.request_calibrate(oid, str(data.get("step") or "align"))
+        # The gimbal is in its home pose (camera at +x, level): its reading becomes the model's zero pose.
+        ok = wp.gimbal.request_calibrate(oid)
     elif act == "use_read":
         st = wp.gimbal.status(oid) or {}
         ok = st.get("read") is not None
