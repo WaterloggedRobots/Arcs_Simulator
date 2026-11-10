@@ -92,7 +92,7 @@ def _dump_track(tr):
                 continue
         if "rec" in k or "record" in k or "v" in k:
             item["rec"] = bool(k.get("rec") if "rec" in k else (k.get("record") if "record" in k else k.get("v")))
-        for extra in ("kind", "name", "on", "yaw", "roll", "pitch"):
+        for extra in ("kind", "name", "on", "yaw", "roll", "pitch", "spin"):
             if k.get(extra) is not None:
                 item[extra] = k.get(extra)
         if item:
