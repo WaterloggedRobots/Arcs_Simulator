@@ -49,7 +49,7 @@ can = rs4_can.can
 
 RESEND_S = 0.05       # speed command period
 READ_EVERY_S = 0.25   # angle read period (joint + attitude)
-READ_TIMEOUT_S = 0.2  # reply wait per read; a speed command is sent between the two reads
+READ_TIMEOUT_S = 0.2  # reply wait per read; a speed command is sent between the two reads (late replies are skipped)
 PROBE_S = 0.8         # time at the start to see which angle moves, and which way
 STALL_S = 1.5         # no progress for this long -> stop
 PULLBACK_DEG = 8.0    # moved this far against the command -> stop
@@ -61,8 +61,8 @@ def read_set(g, which, timeout=READ_TIMEOUT_S):
     """(yaw, roll, pitch) in degrees. which: 'joint' (0x02) or 'attitude' (0x01)."""
     g.seq = (g.seq + 1) & 0xFFFF
     g._send(build_packet(0x0E, 0x02, bytes([0x02 if which == "joint" else 0x01]), g.seq, 0x03))
-    reply = g._read_reply(timeout)
-    if reply is None or len(reply) < 10 or reply[0:2] != b"\x0e\x02" or reply[2] != 0x00:
+    reply = g._read_reply(timeout, want=(0x0E, 0x02))
+    if reply is None or len(reply) < 10 or reply[2] != 0x00:
         return None
     y, r, p = struct.unpack_from("<hhh", reply, 4)
     return y / 10, r / 10, p / 10

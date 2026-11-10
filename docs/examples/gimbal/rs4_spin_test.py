@@ -101,7 +101,16 @@ class DjiGimbal:
                                       data=pkt[i:i + 8],
                                       is_extended_id=False))
 
-    def _read_reply(self, timeout: float = 1.0):
+    def _read_reply(self, timeout: float = 1.0, want=None):
+        """DATA segment of the next valid packet (of `want` = (cmd_set, cmd_id) if given).
+
+        Changed from the reference: an 0xAA inside data, a late reply or a
+        packet cut in half used to end in "bad CRC" (None) or a struct.error
+        when the length read was too short. Now a start is only trusted when
+        its length is possible and its header CRC16 is right; otherwise the
+        search goes on to the next 0xAA. Replies to other commands are
+        skipped, until timeout.
+        """
         buf = bytearray()
         end = time.time() + timeout
         while time.time() < end:
@@ -109,25 +118,40 @@ class DjiGimbal:
             if msg is None or msg.arbitration_id != RX_ID:
                 continue
             buf += msg.data
-            start = buf.find(b"\xAA")
-            if start < 0:
-                buf.clear()
-                continue
-            del buf[:start]
-            if len(buf) >= 3:
+            while True:
+                start = buf.find(b"\xAA")
+                if start < 0:
+                    buf.clear()
+                    break
+                del buf[:start]
+                if len(buf) < 3:
+                    break
                 length = struct.unpack_from("<H", buf, 1)[0] & 0x03FF
-                if len(buf) >= length:
-                    pkt = bytes(buf[:length])
-                    if crc32(pkt[:-4]) != struct.unpack("<I", pkt[-4:])[0]:
-                        return None                          # bad CRC
-                    return pkt[12:-4]                        # DATA segment
+                if length < 18:                              # header 12 + CmdSet/CmdID 2 + CRC32 4
+                    del buf[:1]                              # not a packet start: look further
+                    continue
+                if len(buf) < 12:
+                    break
+                if crc16(bytes(buf[:10])) != struct.unpack_from("<H", buf, 10)[0]:
+                    del buf[:1]                              # header CRC16 wrong: not a packet start
+                    continue
+                if len(buf) < length:
+                    break                                    # wait for the rest
+                pkt = bytes(buf[:length])
+                if crc32(pkt[:-4]) != struct.unpack("<I", pkt[-4:])[0]:
+                    del buf[:1]                              # bad CRC: not a packet start
+                    continue
+                del buf[:length]
+                data = pkt[12:-4]                            # DATA segment
+                if want is None or (len(data) >= 2 and data[0] == want[0] and data[1] == want[1]):
+                    return data
         return None
 
     def send_command(self, cmd_set, cmd_id, payload, want_reply=True, timeout=1.0):
         self.seq = (self.seq + 1) & 0xFFFF
         self._send(build_packet(cmd_set, cmd_id, payload, self.seq,
                                 0x03 if want_reply else 0x00))
-        return self._read_reply(timeout) if want_reply else None
+        return self._read_reply(timeout, want=(cmd_set, cmd_id)) if want_reply else None
 
     # --- CmdSet 0x0E, CmdID 0x00: position control (SDK 2.3.4.1) ---
     def move_abs(self, yaw=None, roll=None, pitch=None, duration=2.0):
