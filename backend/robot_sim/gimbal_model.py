@@ -351,22 +351,29 @@ def _cam_pitch_roll(model, angles):
     return pitch, roll, lens, down
 
 
+CAL_MAX_ERR = 3.0  # deg: the best fit must put the camera within this of the measured pitch / roll
+
+
 def fit_j2_axis(raw, reading, world_pitch, world_roll):
     """Fit J2's axis in a model file's JSON (raw) to one reading taken with the
-    gimbal held HAND END UP, the camera facing the FRONT (the model's +x at
-    zero) and the gimbal's own world pitch / roll. J2's axis is the lens line
-    at zero tilted towards the hand end ("tilt") and sideways ("side").
-    Returns {axis, tilt, side, pitch, roll, residual} or raises ValueError."""
+    gimbal held HAND END UP (handle vertical) and the gimbal's own world pitch /
+    roll. Which way the camera faces around the handle doesn't matter. J2's
+    axis is the lens line at zero tilted towards the hand end ("tilt") and
+    sideways ("side"); among fits that match, the one nearest the model's
+    current axis wins. Returns {axis, tilt, side, pitch, roll, error} or
+    raises ValueError with the reading and the best fit in the message."""
     from scipy.optimize import minimize
     import copy
     names = [j.get("sdk") for j in raw.get("joints") or []]
     if "roll" not in names:
         raise ValueError("the model has no J2 (sdk 'roll') joint")
     k2 = names.index("roll")
-    j2 = float((list(reading) + [0, 0, 0])[1])
-    if abs(((j2 + 180) % 360) - 180) < CAL_MIN_J2:
-        raise ValueError("J2 reads %.1f deg: near 0 its axis makes no difference, so this pose can't "
-                         "calibrate it (in the reference pose the RS 4 reads J2 near 180)" % j2)
+    reading = [float(v) for v in (list(reading) + [0, 0, 0])[:3]]
+    seen = "reading J1 %.1f, J2 %.1f, J3 %.1f; world pitch %.1f, roll %.1f" % (
+        reading[0], reading[1], reading[2], world_pitch, world_roll)
+    if abs(((reading[1] + 180) % 360) - 180) < CAL_MIN_J2:
+        raise ValueError("J2 is near 0, where its axis makes no difference, so this pose can't calibrate it "
+                         "(in the reference pose the RS 4 reads J2 near 180). " + seen)
     lens0 = np.asarray((raw.get("camera") or {}).get("lens") or [1, 0, 0], float)
     lens0 /= np.linalg.norm(lens0)
     up0 = np.array([0.0, 0.0, 1.0])
@@ -381,25 +388,41 @@ def fit_j2_axis(raw, reading, world_pitch, world_roll):
         r["joints"][k2]["axis"] = [float(v) for v in axis_of(tilt, side)]
         return parse(r)
 
-    def cost(x):
+    def errors(x):
         m = model_for(x[0], x[1])
         p, ro, lens, down = _cam_pitch_roll(m, joint_values(m, reading))
-        c = (p - world_pitch) ** 2 + 0.3 * (ro - world_roll) ** 2
-        # Facing the front (lens along +x) with the image the right way up.
-        c += 400.0 * max(0.0, -float(np.dot(lens, lens0))) + 400.0 * max(0.0, float(down[2]))
-        return c
+        return p - world_pitch, ro - world_roll, float(down[2])
 
-    grid = [(t, s) for t in range(-85, 86, 5) for s in range(-30, 31, 10)]
-    start = min(grid, key=lambda x: cost(x))
-    r = minimize(cost, np.asarray(start, float), method="Nelder-Mead", options={"xatol": 0.01, "fatol": 1e-6})
-    tilt, side = float(r.x[0]), float(r.x[1])
+    def cost(x):
+        dp, dr, dz = errors(x)
+        # The image the right way up (image-down pointing down).
+        return dp * dp + 0.3 * dr * dr + 400.0 * max(0.0, dz)
+
+    # Current tilt / side of the model's J2 axis, to prefer the nearest fit.
+    cur = np.asarray(raw["joints"][k2].get("axis") or lens0, float)
+    cur /= (np.linalg.norm(cur) or 1.0)
+    cur_tilt = math.degrees(math.asin(max(-1.0, min(1.0, float(np.dot(cur, up0))))))
+    flat = cur - up0 * float(np.dot(cur, up0))
+    cur_side = math.degrees(math.atan2(float(np.cross(lens0, flat)[2]), float(np.dot(lens0, flat)))) if np.linalg.norm(flat) > 1e-6 else 0.0
+    starts = [(cur_tilt, cur_side)] + [(t, sd) for t in range(-85, 86, 10) for sd in (-20, 0, 20)]
+    fits = []
+    for st in starts:
+        r = minimize(cost, np.asarray(st, float), method="Nelder-Mead", options={"xatol": 0.01, "fatol": 1e-6, "maxiter": 400})
+        dp, dr, dz = errors(r.x)
+        err = max(abs(dp), abs(dr))
+        fits.append((err if dz < 0 else 999.0, abs(r.x[0] - cur_tilt) + abs(r.x[1] - cur_side), r.x))
+    good = [f for f in fits if f[0] <= CAL_MAX_ERR]
+    best = min(good, key=lambda f: f[1]) if good else min(fits, key=lambda f: f[0])
+    tilt, side = float(best[2][0]), float(best[2][1])
     m = model_for(tilt, side)
     p, ro, lens, down = _cam_pitch_roll(m, joint_values(m, reading))
-    if float(np.dot(lens, lens0)) < 0.5 or down[2] > 0:
-        raise ValueError("no J2 tilt makes this reading look to the front, the right way up: was the gimbal "
-                         "held hand end up with the camera level and facing the front?")
+    if not good:
+        raise ValueError("no J2 tilt makes this reading match (best: tilt %.1f, side %.1f puts the camera at "
+                         "pitch %.1f, roll %.1f%s). Is the handle vertical, hand end up? %s" % (
+                             tilt, side, p, ro, ", upside down" if down[2] > 0 else "", seen))
     return {"axis": [round(float(v), 4) for v in axis_of(tilt, side)], "tilt": round(tilt, 2), "side": round(side, 2),
-            "pitch": round(p, 2), "roll": round(ro, 2), "residual": round(float(r.fun), 3)}
+            "was_tilt": round(cur_tilt, 2), "was_side": round(cur_side, 2),
+            "pitch": round(p, 2), "roll": round(ro, 2), "error": round(float(best[0]), 2), "reading": seen}
 
 
 def write_axis(name, sdk, axis, note):

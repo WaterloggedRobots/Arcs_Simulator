@@ -774,6 +774,10 @@
     .props.gim-part .track-comp:not(#gimbalProps):not(#colliderComp),
     .props.gim-part > hr { display: none !important; }
     .gim-err[hidden] { display: none; }
+    /* Messages can be selected and copied. */
+    .props .gim-comp .col-note, .props .gim-err, .props .track-err, .props #gimCalib {
+      user-select: text; -webkit-user-select: text; cursor: text;
+    }
     .use-offset-btn { display: block; width: calc(100% - 20px); margin: 6px auto 0; background: #3a3b44; }
     .use-offset-btn:disabled { opacity: 0.45; cursor: default; }
     #offsetWrap.simple .mode-simple { color: #8a8a92 !important; }
@@ -2100,7 +2104,7 @@
               <div class="row name-row gim-model-row"><label>Model</label><select id="gimModel" class="gim-select" title="Gimbal model file (user_files/gimbal_models): joint axes, offsets and shape"></select></div>
               <div id="gimModelErr" class="track-err" hidden></div>
               <div class="gim-btns gim-one">
-                <button type="button" id="gimCalibrate" title="Hold the gimbal hand end up, camera level and facing the front, then press: J2's axis is fitted to the reading and saved in the model file">Calibrate (hand end up, camera level, facing front)</button>
+                <button type="button" id="gimCalibrate" title="Hold the gimbal with the handle vertical, hand end up, camera level, then press: J2's axis is fitted to the reading and saved in the model file">Recalibrate gimbal</button>
               </div>
               <div class="col-note" id="gimCalib" hidden></div>
               <details class="gim-conn" open>
@@ -4606,6 +4610,10 @@
         return isFinite(v) ? v : 0;
       });
     }
+    // Rewriting a message every refresh clears a selection in it; only change it when it changed.
+    function setText(el, txt) {
+      if (el && el.textContent !== txt) el.textContent = txt;
+    }
     function renderGimbal(obj) {
       const box = document.getElementById("gimbalProps");
       const panel = document.getElementById("propsPanel");
@@ -4647,7 +4655,7 @@
         let txt = g.read_ok ? "Reading the real gimbal." : (g.connected ? "Connected, angle read failing." : "Real gimbal not connected (retrying).");
         txt += drive ? " Moves are sent to it." : " Moves are not sent (Drive off).";
         if (g.cmd_err) txt += " " + g.cmd_err;
-        st.textContent = txt;
+        setText(st, txt);
       }
       const mv = document.getElementById("gimMove");
       if (mv) {
@@ -4657,11 +4665,11 @@
       // How far the real gimbal is from the sim one.
       const rvs = document.getElementById("gimRealVsSim");
       if (rvs) {
-        if (!rd) rvs.textContent = "Real gimbal: not reading.";
+        if (!rd) setText(rvs, "Real gimbal: not reading.");
         else {
           const dv = [0, 1, 2].map((i) => Number(tgt[i] || 0) - Number(rd[i] || 0));
-          rvs.textContent = dv.every((v) => Math.abs(v) < 0.5) ? "Real gimbal is at the sim pose."
-            : "Real is off by J1 " + dv[0].toFixed(1) + " · J2 " + dv[1].toFixed(1) + " · J3 " + dv[2].toFixed(1) + "°";
+          setText(rvs, dv.every((v) => Math.abs(v) < 0.5) ? "Real gimbal is at the sim pose."
+            : "Real is off by J1 " + dv[0].toFixed(1) + " · J2 " + dv[1].toFixed(1) + " · J3 " + dv[2].toFixed(1) + "°");
         }
       }
       ["gimUseRead", "gimUseRead2"].forEach((id) => {
@@ -4689,18 +4697,18 @@
         const c = g.calib;
         cl.hidden = !c;
         if (c) {
-          cl.textContent = c.text || "";
+          setText(cl, c.text || "");
           cl.style.color = c.ok === false ? "#e05555" : "";
         }
       }
       const merr = document.getElementById("gimModelErr");
-      if (merr) { merr.textContent = mi.error || ""; merr.hidden = !mi.error; }
+      if (merr) { setText(merr, mi.error || ""); merr.hidden = !mi.error; }
       const jn = {};
       (mi.joints || []).forEach((j) => { jn[j.sdk] = j.name; });
       [["gimYaw", "yaw"], ["gimRoll", "roll"], ["gimPitch", "pitch"], ["gimReadYaw", "yaw"], ["gimReadRoll", "roll"], ["gimReadPitch", "pitch"]].forEach((r) => {
         const el = document.getElementById(r[0]);
         const lab = el && el.previousElementSibling;
-        if (lab && jn[r[1]]) lab.textContent = jn[r[1]];
+        if (lab && jn[r[1]]) setText(lab, jn[r[1]]);
       });
       setVal("gimScript", cfg.script || "");
       setVal("gimIface", cfg.interface || "canalystii");
@@ -4709,7 +4717,7 @@
       setVal("gimMoveS", cfg.move_s != null ? cfg.move_s : 2);
       const keys = g.keys || [];
       const cnt = document.getElementById("gimFrameCount");
-      if (cnt) cnt.textContent = "(" + keys.length + ")";
+      if (cnt) setText(cnt, "(" + keys.length + ")");
       const atIdx = keys.findIndex((k) => Math.abs(Number(k.t) - playhead) < 1e-4);
       const del = document.getElementById("gimDelete");
       if (del) del.disabled = atIdx < 0;
@@ -4750,10 +4758,10 @@
         }
       }
       const le = document.getElementById("gimLookErr");
-      if (le) { le.textContent = aiming ? (g.look_err || "") : ""; le.hidden = !(aiming && g.look_err); }
+      if (le) { setText(le, aiming ? (g.look_err || "") : ""); le.hidden = !(aiming && g.look_err); }
       // Red under the Sim gimbal when the real angles can't be read.
       if (errEl) {
-        errEl.textContent = g.read_err || "";
+        setText(errEl, g.read_err || "");
         errEl.hidden = !g.read_err;
       }
     }

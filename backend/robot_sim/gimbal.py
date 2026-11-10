@@ -795,7 +795,7 @@ def _tick_one(obj, clock):
         _read(oid, rt)
     elif calib:
         rt["calib"] = {"ok": False, "time": time.time(),
-                       "text": "Calibrate failed: the real gimbal is not connected (%s)" % (rt.get("conn_err") or "no reply")}
+                       "text": "Recalibrate failed: the real gimbal is not connected (%s)" % (rt.get("conn_err") or "no reply")}
     rt["running"] = real_on
     _set_twin(obj, "sim", g.get("target"))
     ok = real_ok(oid)
@@ -825,12 +825,13 @@ def _calibrate(obj, cfg, rt):
         gmodel.write_axis(cfg.get("model"), "roll", fit["axis"], note)
         rt["calib"] = {"ok": True, "time": time.time(), "joints": joints, "world": world, **fit,
                        "file": os.path.basename(path),
-                       "text": "J2 axis %s: tilt %.1f deg, side %.1f deg (camera then at pitch %.1f, roll %.1f). "
-                               "Saved to %s (previous in .bak)." % (fit["axis"], fit["tilt"], fit["side"],
-                                                                     fit["pitch"], fit["roll"], os.path.basename(path))}
+                       "text": "Recalibrated: J2 axis %s, tilt %.1f deg (was %.1f), side %.1f deg (was %.1f); camera "
+                               "then at pitch %.1f, roll %.1f. Saved to %s (previous in .bak). %s." % (
+                                   fit["axis"], fit["tilt"], fit["was_tilt"], fit["side"], fit["was_side"],
+                                   fit["pitch"], fit["roll"], os.path.basename(path), fit["reading"])}
         print("gimbal calibrate:", rt["calib"]["text"])
     except Exception as e:
-        rt["calib"] = {"ok": False, "time": time.time(), "text": "Calibrate failed: %s" % e}
+        rt["calib"] = {"ok": False, "time": time.time(), "text": "Recalibrate failed: %s" % e}
         print("gimbal calibrate failed:", e)
 
 
@@ -839,7 +840,7 @@ def request_calibrate(oid):
         return False
     rt = _rt_for(oid)
     rt["calib_req"] = True
-    rt["calib"] = {"ok": None, "time": time.time(), "text": "Calibrating…"}
+    rt["calib"] = {"ok": None, "time": time.time(), "text": "Recalibrating…"}
     return True
 
 
