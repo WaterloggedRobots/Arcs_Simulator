@@ -433,7 +433,7 @@ def _model_sig(obj):
 
 def twin_camera_world(obj, part="sim"):
     """World (pos, wxyz) of a twin's camera frame: z lens, x right, y image
-    down, as a viser camera / the Camera object."""
+    down (a Camera object, which looks along -z, sits on it turned 180 deg about x)."""
     model = obj.get("_model_used") or model_of(obj)[0]
     g = obj.get("gimbal") or {}
     angles = g.get("target") if part == "sim" else (_rt.get(str(obj.get("id"))) or {}).get("read")
@@ -453,7 +453,9 @@ def add_gimbal_camera(obj):
     cam["parent_id"] = part_id(obj["id"], "sim")
     cam["space"] = "local"
     cam["local_pos"] = np.zeros(3)
-    cam["local_wxyz"] = np.array([1.0, 0.0, 0.0, 0.0])
+    # Camera objects look along their local -z with +y up (OpenGL); the
+    # gimbal's camera frame looks along +z with y down: 180 deg about x.
+    cam["local_wxyz"] = np.array([0.0, 1.0, 0.0, 0.0])
     sv._set_world_from_local(cam)
     sv._apply_object_xform(cam)
     sv._refresh_camera_viz(cam)
