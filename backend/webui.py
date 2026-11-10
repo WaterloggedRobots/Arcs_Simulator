@@ -128,12 +128,20 @@ def _merged_status(fn):
     return mine
 
 
+def _with_solo(st, kind):
+    """No arm playing: the gimbal-only playback of that kind, if any (gimbal.solo_status)."""
+    if st.get("active") or getattr(wp, "gimbal", None) is None:
+        return st
+    solo = wp.gimbal.solo_status(kind)
+    return {**st, **solo} if solo else st
+
+
 def _sim_status_all():
-    return _merged_status(rr.sim_status)
+    return _with_solo(_merged_status(rr.sim_status), "sim")
 
 
 def _real_status_all():
-    return _merged_status(rr.real_path_status)
+    return _with_solo(_merged_status(rr.real_path_status), "real")
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 
@@ -304,11 +312,19 @@ def start_viewer_thread():
     _viewer_thread = t
 
 
+def _solo_playable():
+    """Gimbal frames to play while no arm has a path (gimbal-only timeline)."""
+    try:
+        return (not any(r for _aid, r in _each_arm(_arm_has_path))) and wp.gimbal.solo_playable()
+    except Exception:
+        return False
+
+
 def _edits_locked():
     try:
         sim = rr.sim_status() if hasattr(rr, "sim_status") else {}
         real = rr.real_path_status() if hasattr(rr, "real_path_status") else {}
-        return bool(sim.get("active") or real.get("active"))
+        return bool(sim.get("active") or real.get("active") or wp.gimbal.solo_active())
     except Exception:
         return False
 
@@ -392,8 +408,8 @@ def _build_status_heavy():
         ],
         "samples": tl.get("samples") or [],
         "spans": tl.get("spans") or [],
-        "runnable": bool(tl.get("runnable") or st.get("runnable")),
-        "sim_runnable": bool(tl.get("sim_runnable") or st.get("sim_runnable") or st.get("runnable")),
+        "runnable": bool(tl.get("runnable") or st.get("runnable") or _solo_playable()),
+        "sim_runnable": bool(tl.get("sim_runnable") or st.get("sim_runnable") or st.get("runnable") or _solo_playable()),
     })
     try:
         st["object"] = rr.get_selected_props() if hasattr(rr, "get_selected_props") else {}
@@ -561,8 +577,11 @@ def api_status():
         "keyframes": [] if not getattr(wp, "waypoints", None) else (heavy.get("keyframes") or []),
         "samples": [] if not getattr(wp, "waypoints", None) else (heavy.get("samples") or []),
         "spans": [] if not getattr(wp, "waypoints", None) else (heavy.get("spans") or []),
-        "runnable": bool(heavy.get("runnable")),
-        "sim_runnable": bool(heavy.get("sim_runnable") or heavy.get("runnable")),
+        "runnable": bool(heavy.get("runnable") or _solo_playable()),
+        "sim_runnable": bool(heavy.get("sim_runnable") or heavy.get("runnable") or _solo_playable()),
+        # Gimbal-only timeline with a real gimbal reading: Upload / Run work without the arm.
+        "gimbal_only_real": bool(_solo_playable() and any(
+            wp.gimbal.real_ok(o.get("id")) for o in wp.gimbal.gimbal_objects())),
         "sim": _sim_status_all(),
         "real": _real_status_all(),
         "arms": heavy.get("arms") or [],
@@ -615,6 +634,10 @@ def api_clock():
         lin_real = float(rr._motion["real"]["lin_mps"] or 0.0)
     except Exception:
         lin_sim = lin_real = 0.0
+    for kind in ("sim", "real"):
+        solo = wp.gimbal.solo_status(kind) if getattr(wp, "gimbal", None) else None
+        if solo and solo.get("active"):
+            t = solo["t"]
     return jsonify({
         "ok": True,
         "t": t,
@@ -985,6 +1008,9 @@ def api_simulate():
     # Every arm with a path plays it, on one clock.
     res = _each_arm(lambda: bool(_arm_has_path() and rr.enter_simulation_mode(loops=loops, delay=delay)))
     ok = any(r for _aid, r in res)
+    if not ok and _solo_playable():
+        # Gimbal-only timeline: play the gimbal frames on their own clock.
+        ok = wp.gimbal.solo_sim_start(loops, delay, restore=getattr(viewer_main, "playhead_t", 0.0))
     return jsonify({"ok": bool(ok), "sim": _sim_status_all()})
 
 
@@ -992,6 +1018,8 @@ def api_simulate():
 def api_sim_pause():
     res = _each_arm(lambda: rr.toggle_sim_pause() if rr._pb.get("active") else None)
     paused = any(r for _aid, r in res if r is not None)
+    if (wp.gimbal.solo_status("sim") or {}).get("active"):
+        paused = bool(wp.gimbal.solo_pause())
     return jsonify({"ok": True, "paused": bool(paused), "sim": _sim_status_all()})
 
 
@@ -1007,6 +1035,11 @@ def api_real_upload():
             delay=data.get("delay") or 0.0,
         ))
     ok = any(r for _aid, r in _each_arm(_up))
+    if not ok and _solo_playable():
+        # Gimbal-only timeline: "upload" sends the gimbals to their initial pose.
+        ok = wp.gimbal.solo_upload(data.get("loops", data.get("repeat")) or 0, data.get("delay") or 0.0)
+        if not ok:
+            return jsonify({"ok": False, "real": _real_status_all(), "error": "the real gimbal is not reading"})
     st = _real_status_all()
     return jsonify({"ok": bool(ok), "real": st, "error": None if ok else (st.get("phase") or "upload not started")})
 
@@ -1015,6 +1048,11 @@ def api_real_upload():
 def api_real_start():
     ok = False
     err = None
+    solo = wp.gimbal.solo_status("real")
+    if solo is not None:
+        ok = wp.gimbal.solo_real_start()
+        return jsonify({"ok": bool(ok), "real": _real_status_all(),
+                        "error": None if ok else (solo.get("phase") or "not uploaded")})
 
     def _fire():
         if rr.robot is None or not (rr._rp.get("uploaded") or rr._rp.get("uploading")):
@@ -1044,6 +1082,9 @@ def api_real_start():
 
 @app.route("/api/real/pause", methods=["POST"])
 def api_real_pause():
+    if (wp.gimbal.solo_status("real") or {}).get("active"):
+        wp.gimbal.solo_pause()
+        return jsonify({"ok": True, "real": _real_status_all()})
     viewer_main.real_requests.append(("pause", None))
     return jsonify({"ok": True})
 
@@ -1052,6 +1093,7 @@ def api_real_pause():
 def api_real_stop():
     # Stop here, not on the viewer queue: a busy viewer loop must not delay it.
     _each_arm(rr.stop_real_path)
+    wp.gimbal.solo_stop()
     return jsonify({"ok": True, "real": _real_status_all()})
 
 
@@ -1100,6 +1142,7 @@ def api_snap_sim_to_real():
 @app.route("/api/halt", methods=["POST"])
 def api_halt():
     _each_arm(rr.request_halt)
+    wp.gimbal.solo_stop()
     return jsonify({"ok": True, "sim": _sim_status_all(), "real": _real_status_all()})
 
 
@@ -1699,7 +1742,7 @@ def api_gimbal():
         if ok:
             wp.gimbal.update(oid, {"target": st.get("read")})
     elif act == "insert_frame":
-        if rr.edits_locked():
+        if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
         t = data.get("t")
         if t is None:
@@ -1713,7 +1756,7 @@ def api_gimbal():
                                 "gimbal": wp.gimbal.status(oid)})
         ok = wp.gimbal.insert_frame(oid, t, angles)
     elif act == "delete_frame":
-        if rr.edits_locked():
+        if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
         ok = wp.gimbal.delete_frame(oid, t=data.get("t"), index=data.get("index"))
     _status_dirty.set()

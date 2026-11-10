@@ -7646,8 +7646,10 @@
       ].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
-        el.disabled = !realOn;
-        el.classList.toggle("off-real", !realOn);
+        // A gimbal-only timeline runs on the real gimbal with the arm offline.
+        const on = realOn || (!!(d && d.gimbal_only_real) && ["uploadReal", "runReal", "realStop"].includes(id));
+        el.disabled = !on;
+        el.classList.toggle("off-real", !on);
       });
       const moveBtn = document.getElementById("moveRobotPose");
       if (moveBtn) {

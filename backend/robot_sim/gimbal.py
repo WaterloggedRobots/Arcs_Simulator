@@ -726,9 +726,157 @@ def _run_states():
     return out
 
 
+# ---------------------------------------------------------------------------
+# Gimbal-only playback: a timeline with gimbal frames and no arm path plays on
+# its own clock (Simulate; Upload = move the gimbals to their initial pose,
+# then Run). The page sees it as the sim / real status (webui._merged_status).
+# ---------------------------------------------------------------------------
+_solo_lock = threading.RLock()
+_solo = {"kind": None, "active": False, "paused": False, "t": 0.0, "t_end": 0.0, "wall": None,
+         "plays": 1, "played": 0, "delay": 0.0, "uploaded": False, "ready_at": None, "restore": None}
+
+
+def solo_t_end():
+    """Length of the gimbal-only timeline: the last frame of a gimbal track
+    with 2 frames or more, or None when there is nothing to play."""
+    ends = []
+    for obj in gimbal_objects():
+        keys = keys_for(obj.get("id"))
+        if len(keys) >= 2:
+            ends.append(max(k["t"] for k in keys))
+    return max(ends) if ends and max(ends) > 0 else None
+
+
+def solo_playable():
+    return solo_t_end() is not None
+
+
+def _solo_tick_locked(now=None):
+    """Advance the clock (looping / ending); call with _solo_lock held."""
+    st = _solo
+    if not st["active"] or st["paused"] or st["wall"] is None:
+        return
+    now = time.time() if now is None else now
+    t = now - st["wall"]
+    if t < st["t_end"]:
+        st["t"] = max(0.0, t)
+        return
+    st["t"] = st["t_end"]
+    if t < st["t_end"] + st["delay"]:
+        return  # holding at the end between plays
+    st["played"] += 1
+    if st["plays"] < 0 or st["played"] < st["plays"]:
+        st["wall"] = now
+        st["t"] = 0.0
+        if st["kind"] == "real":
+            go_to_initial_pose()  # back to the start for the next play
+            st["wall"] = now + max(_move_time_all(), 0.0)
+        return
+    st["active"] = False
+    st["uploaded"] = False
+
+
+def _move_time_all():
+    ts = [_f(((o.get("gimbal") or {}).get("cfg") or {}).get("move_s"), 2.0) for o in gimbal_objects()]
+    return max(ts) + 0.3 if ts else 0.0
+
+
+def solo_active():
+    with _solo_lock:
+        _solo_tick_locked()
+        return bool(_solo["active"])
+
+
+def _plays(loops):
+    try:
+        n = int(loops)
+    except Exception:
+        n = 0
+    return -1 if n < 0 else 1 + n
+
+
+def solo_sim_start(loops=0, delay=0.0, restore=None):
+    t_end = solo_t_end()
+    if t_end is None:
+        return False
+    with _solo_lock:
+        _solo.update(kind="sim", active=True, paused=False, t=0.0, t_end=t_end, wall=time.time(),
+                     plays=_plays(loops), played=0, delay=max(0.0, _f(delay)), uploaded=False,
+                     ready_at=None, restore=restore)
+    return True
+
+
+def solo_upload(loops=0, delay=0.0):
+    """Real, step 1: the gimbals go to their initial pose; Run once there."""
+    t_end = solo_t_end()
+    if t_end is None or not any(real_ok(o.get("id")) for o in gimbal_objects()):
+        return False
+    go_to_initial_pose()
+    with _solo_lock:
+        _solo.update(kind="real", active=False, paused=False, t=0.0, t_end=t_end, wall=None,
+                     plays=_plays(loops), played=0, delay=max(0.0, _f(delay)), uploaded=True,
+                     ready_at=time.time() + _move_time_all(), restore=None)
+    return True
+
+
+def solo_real_start():
+    with _solo_lock:
+        if _solo["kind"] != "real" or not _solo["uploaded"] or _solo["active"]:
+            return False
+        if _solo["ready_at"] is not None and time.time() < _solo["ready_at"]:
+            return False
+        _solo.update(active=True, paused=False, t=0.0, wall=time.time())
+    return True
+
+
+def solo_pause():
+    with _solo_lock:
+        _solo_tick_locked()
+        if not _solo["active"]:
+            return None
+        if _solo["paused"]:
+            _solo["paused"] = False
+            _solo["wall"] = time.time() - _solo["t"]
+        else:
+            _solo["paused"] = True
+        return _solo["paused"]
+
+
+def solo_stop():
+    with _solo_lock:
+        was = _solo["active"] or _solo["uploaded"]
+        _solo.update(active=False, paused=False, uploaded=False, ready_at=None)
+        return was
+
+
+def solo_status(kind):
+    """Like robot_runtime.sim_status / real_path_status, for the gimbal-only
+    playback of that kind, or None when it isn't the one in use."""
+    with _solo_lock:
+        _solo_tick_locked()
+        st = dict(_solo)
+    if st["kind"] != kind or not (st["active"] or st["uploaded"]):
+        return None
+    out = {"active": st["active"], "paused": st["paused"], "t": st["t"], "t_end": st["t_end"],
+           "gimbal_only": True}
+    if kind == "sim":
+        out.update(lin_mps=0.0, playhead_restore=st["restore"])
+    else:
+        moving = (not st["active"]) and st["ready_at"] is not None and time.time() < st["ready_at"]
+        out.update(armed=st["active"], uploading=moving, uploaded=st["uploaded"] and not moving,
+                   phase="gimbal moving to its initial pose" if moving else "", at_start=not moving,
+                   start_q=None)
+    return out
+
+
 def _clock():
     """(timeline t, real run active, sim playing)."""
     import simulatorview as sv
+    with _solo_lock:
+        _solo_tick_locked()
+        if _solo["active"]:
+            on = not _solo["paused"]
+            return _solo["t"], on and _solo["kind"] == "real", on and _solo["kind"] == "sim"
     real_t, real_on, sim_on = None, False, False
     try:
         for rp, pb in _run_states():
