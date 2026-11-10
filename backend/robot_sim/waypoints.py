@@ -2228,17 +2228,24 @@ def _set_list_visible(kind, on):
         for aid in arms.each():
             with arms.using(aid):
                 try:
+                    simulatorview.set_sim_bot_visible(shown_list and item_vis.get("obj:%s" % arms.cid("sim_bot"), True))
+                except Exception:
+                    pass
+                try:
                     import robot_runtime as rr
                     if rr._cursor_sim is not None:
                         rr._cursor_sim.visible = shown_list and item_vis.get("obj:%s" % arms.cid("sim_cursor"), True)
+                    if rr._cursor_real is not None:
+                        rr._cursor_real.visible = shown_list and item_vis.get("obj:%s" % arms.cid("real_cursor"), True)
                 except Exception:
                     pass
         for obj in scene_objects:
             shown = shown_list and item_vis.get("obj:%s" % obj.get("id"), True)
+            obj["visible"] = shown
             h = obj.get("handle")
             if h is not None:
                 try:
-                    h.visible = shown
+                    h.visible = shown and obj.get("vis_src", True) is not False
                 except Exception:
                     pass
     return list_vis[kind]

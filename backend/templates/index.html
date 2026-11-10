@@ -757,13 +757,20 @@
     #gimConnect { background: #8a8a92 !important; }
     #gimConnect.advanced { background: #4aa3ff !important; }
     .gim-err { color: #e05555; font-size: 12px; padding: 8px 0 4px; word-break: break-word; }
+    .gim-look[hidden] { display: none; }
+    .gim-select { width: 100%; background: #1c1d21; color: #e8e8ea; border: 1px solid #111; border-radius: 6px; padding: 6px; }
+    #gimLookWrap.simple .mode-simple { color: #8a8a92 !important; }
+    #gimLookWrap.advanced .mode-advanced { color: #4aa3ff !important; }
+    #gimLookToggle { background: #8a8a92 !important; }
+    #gimLookToggle.advanced { background: #4aa3ff !important; }
     .gim-twin::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
     .gim-twin.sim::before { background: rgb(80, 200, 255); }
     .gim-twin.real::before { background: rgb(255, 180, 80); }
     #gimMountBlock[hidden], #gimSimBlock[hidden], #gimRealBlock[hidden] { display: none; }
     .props.gim-part #primBody > :not(#gimbalProps) { display: none !important; }
     .props.gim-part #gimbalProps > hr { display: none; }
-    .props.gim-part #simExtraAdd,
+    .props.gim-real #simExtraAdd,
+    .props.gim-look #simExtraAdd,
     .props.gim-part .track-comp:not(#gimbalProps),
     .props.gim-part > hr { display: none !important; }
     .gim-err[hidden] { display: none; }
@@ -2090,7 +2097,6 @@
                 </div>
               </div>
               <div class="col-note" id="gimState"></div>
-              <div class="col-note">Select <b>Sim gimbal</b> under it for the target and frames, <b>Real gimbal</b> for the angles read.</div>
               <details class="gim-conn" open>
                 <summary>Connection</summary>
                 <div class="row name-row"><label>Script</label><input id="gimScript" type="text" placeholder="rs4_can.py (bundled)" title="Driver script; empty = user_files/gimbal_scripts/rs4_can.py"></div>
@@ -2119,6 +2125,23 @@
                 <button type="button" id="gimDelete" title="Delete the frame at the playhead">Delete frame</button>
               </div>
               <div id="gimFrames" class="gim-frames"></div>
+              <div id="gimLookComp" class="gim-look" hidden>
+                <hr>
+                <div class="track-head">
+                  <span>Look At</span>
+                  <div class="track-head-right">
+                    <div class="tl-mode simple" id="gimLookWrap" title="Enable Look At">
+                      <span class="mode-simple">Off</span>
+                      <button type="button" class="slide" id="gimLookToggle"></button>
+                      <span class="mode-advanced">On</span>
+                    </div>
+                    <button type="button" id="gimLookTrash" class="track-trash" title="Remove component">🗑</button>
+                  </div>
+                </div>
+                <label class="field tight">Look At Target:</label>
+                <select id="gimLookTarget" class="gim-select"></select>
+                <div id="gimLookErr" class="track-err" hidden></div>
+              </div>
               <div id="gimbalReadErr" class="gim-err" hidden></div>
             </div>
             <div id="gimRealBlock">
@@ -4584,8 +4607,13 @@
       const g = (obj && obj.kind === "gimbal") ? (obj.gimbal || {}) : null;
       const part = g ? (obj.gimbal_part || "") : "";
       if (box) box.hidden = !g;
-      if (panel) panel.classList.toggle("gim-part", !!part);
+      if (panel) {
+        panel.classList.toggle("gim-part", !!part);
+        panel.classList.toggle("gim-real", part === "real");
+        panel.classList.toggle("gim-look", part === "sim" && !!(g && g.look && g.look.added));
+      }
       if (!g) {
+        if (panel) { panel.classList.remove("gim-real"); panel.classList.remove("gim-look"); }
         window.__gimbal = null;
         return;
       }
@@ -4654,8 +4682,35 @@
           "<span>" + Number(k.t).toFixed(2) + "s</span>" +
           "<span>y " + Number(k.yaw).toFixed(1) + " · r " + Number(k.roll).toFixed(1) + " · p " + Number(k.pitch).toFixed(1) + "</span>" +
           "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button></div>"
-        ).join("") || "<div class='col-note'>No frames. Set the target, move the playhead and press Insert frame.</div>";
+        ).join("");
       }
+      // Look At on the Sim gimbal: the target aims at it (target fields locked).
+      const look = g.look || {};
+      const lc = document.getElementById("gimLookComp");
+      if (lc) lc.hidden = !look.added;
+      const aiming = !!(look.added && look.on);
+      ["gimYaw", "gimRoll", "gimPitch"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = aiming;
+      });
+      const lt = document.getElementById("gimLookToggle");
+      const lw = document.getElementById("gimLookWrap");
+      if (lt) lt.classList.toggle("advanced", !!look.on);
+      if (lw) { lw.classList.toggle("advanced", !!look.on); lw.classList.toggle("simple", !look.on); }
+      const sel = document.getElementById("gimLookTarget");
+      if (sel && document.activeElement !== sel) {
+        const names = (g.look_targets || []).slice();
+        if (look.target && names.indexOf(look.target) < 0) names.unshift(look.target);
+        const sig = JSON.stringify(names) + "|" + (look.target || "");
+        if (sel.dataset.sig !== sig) {
+          sel.dataset.sig = sig;
+          sel.innerHTML = "<option value=''>—</option>" + names.map((n) =>
+            "<option" + (n === look.target ? " selected" : "") + ">" + String(n).replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;") + "</option>").join("");
+          sel.value = look.target || "";
+        }
+      }
+      const le = document.getElementById("gimLookErr");
+      if (le) { le.textContent = aiming ? (g.look_err || "") : ""; le.hidden = !(aiming && g.look_err); }
       // Red under the Sim gimbal when the real angles can't be read.
       if (errEl) {
         errEl.textContent = g.read_err || "";
@@ -4703,7 +4758,17 @@
         });
       });
       const mv = byId("gimMove");
-      if (mv) mv.addEventListener("click", () => postGimbal({ action: "move", target: gimbalTarget() }));
+      if (mv) mv.addEventListener("click", () => {
+        const g = window.__lastObject && window.__lastObject.gimbal;
+        const aiming = !!(g && g.look && g.look.added && g.look.on);
+        postGimbal(aiming ? { action: "move" } : { action: "move", target: gimbalTarget() });
+      });
+      const lt = byId("gimLookToggle");
+      if (lt) lt.addEventListener("click", () => postGimbal({ look: { on: !lt.classList.contains("advanced") } }));
+      const ltr = byId("gimLookTrash");
+      if (ltr) ltr.addEventListener("click", () => postGimbal({ look: { added: false } }));
+      const lsel = byId("gimLookTarget");
+      if (lsel) lsel.addEventListener("change", () => postGimbal({ look: { target: lsel.value } }));
       ["gimUseRead", "gimUseRead2"].forEach((id) => {
         const ur = byId(id);
         if (ur) ur.addEventListener("click", () => postGimbal({ action: "use_read" }));
@@ -5497,6 +5562,21 @@
         e.preventDefault();
         e.stopPropagation();
         const obj = window.__lastObject || {};
+        if (obj.kind === "gimbal" && obj.gimbal_part === "sim") {
+          // The Sim gimbal takes Look At only.
+          const taken = !!(obj.gimbal && obj.gimbal.look && obj.gimbal.look.added);
+          compMenu.querySelectorAll("[data-comp]").forEach((b) => {
+            b.hidden = b.getAttribute("data-comp") !== "track";
+            b.disabled = taken;
+            b.style.opacity = taken ? "0.4" : "";
+            b.style.pointerEvents = taken ? "none" : "";
+          });
+          const r0 = extraAddBtn.getBoundingClientRect();
+          compMenu.hidden = false;
+          compMenu.style.left = Math.max(8, r0.left) + "px";
+          compMenu.style.top = Math.max(8, r0.top - 42) + "px";
+          return;
+        }
         const isSim = obj.kind === "sim";
         const hasCam = !!(obj.camera);
         const hasTrack = !!(obj.track && obj.track.added);
@@ -5526,6 +5606,11 @@
         e.preventDefault();
         e.stopPropagation();
         compMenu.hidden = true;
+        const gObj = window.__lastObject || {};
+        if (gObj.kind === "gimbal" && gObj.gimbal_part === "sim") {
+          if (btn.getAttribute("data-comp") === "track") postGimbal({ look: { added: true, on: true } });
+          return;
+        }
         if (btn.getAttribute("data-comp") === "track") {
           const tc = document.getElementById("trackComp");
           const ts = document.getElementById("trackSep");

@@ -1289,9 +1289,10 @@ def api_dev_mode():
 @app.route("/api/list_vis", methods=["POST"])
 def api_list_vis():
     data = request.get_json(silent=True) or {}
-    if hasattr(wp, "set_list_vis"):
-        wp.set_list_vis(data)
-    return jsonify({"ok": True})
+    # The list's own eye: toggles every item of that list (each item's own eye still counts).
+    on = wp.set_list_visible(data.get("kind"), data.get("on"))
+    _status_dirty.set()
+    return jsonify({"ok": True, "on": bool(on)})
 
 
 @app.route("/api/vis", methods=["POST"])
@@ -1667,7 +1668,7 @@ def api_cam_script():
 @app.route("/api/gimbal", methods=["POST"])
 def api_gimbal():
     """Gimbal object: {id, action, ...}.
-    update {cfg?, target?} | move {target?} | insert_frame {t?, target?} |
+    update {cfg?, target?, look?} | move {target?} | insert_frame {t?, target?} |
     delete_frame {t | index} | use_read (target = angles read from the gimbal)."""
     data = request.get_json(silent=True) or {}
     oid = str(data.get("id") or getattr(wp, "selected_obj_id", None) or "")
@@ -1675,7 +1676,7 @@ def api_gimbal():
     if wp.gimbal._find(oid) is None:
         return jsonify({"ok": False, "error": "no such gimbal"}), 404
     ok = True
-    if data.get("cfg") is not None or data.get("target") is not None:
+    if any(data.get(k) is not None for k in ("cfg", "target", "look")):
         ok = wp.gimbal.update(oid, data)
     if act == "move":
         ok = wp.gimbal.request_move(oid)

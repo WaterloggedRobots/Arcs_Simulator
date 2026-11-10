@@ -102,7 +102,73 @@ def clean_gimbal(rec):
     cfg["channel"] = int(_f(cfg["channel"], 0))
     cfg["bitrate"] = int(_f(cfg["bitrate"], 1000000))
     cfg["move_s"] = max(0.1, min(MAX_MOVE_S, _f(cfg["move_s"], 2.0)))
-    return {"cfg": cfg, "target": clamp_angles(rec.get("target"))}
+    return {"cfg": cfg, "target": clamp_angles(rec.get("target")), "look": clean_look(rec.get("look"))}
+
+
+def clean_look(rec):
+    """Look At on the Sim gimbal: {added, on, target (a name)}."""
+    rec = rec if isinstance(rec, dict) else {}
+    return {"added": bool(rec.get("added")), "on": bool(rec.get("on", True)),
+            "target": str(rec.get("target") or "").strip()}
+
+
+# ---------------------------------------------------------------------------
+# Look At: the Sim gimbal aims its lens at a target
+# ---------------------------------------------------------------------------
+SIM_CURSOR_TARGET = "Sim cursor"
+PRIMARY_TARGET = "Primary target"
+
+
+def look_targets(oid):
+    """Names the Look At target list offers: scene objects (not this gimbal),
+    the Sim cursor and the camera scripts' primary target."""
+    names = [str(o.get("name") or "") for o in list(wp.scene_objects or [])
+             if str(o.get("id")) != str(oid) and o.get("name")]
+    return names + [SIM_CURSOR_TARGET, PRIMARY_TARGET]
+
+
+def look_target_pos(oid, name):
+    """World position of a Look At target, or None. Read-only, safe on the gimbal thread."""
+    key = str(name or "").strip().lower()
+    if not key:
+        return None
+    if key == PRIMARY_TARGET.lower():
+        try:
+            p = wp.primary_target_pos()
+            return None if p is None else np.asarray(p, dtype=float).reshape(3)
+        except Exception:
+            return None
+    if key == SIM_CURSOR_TARGET.lower():
+        try:
+            import robot_runtime as rr
+            with arms.LOCK:
+                p, _ = rr.get_sim_cursor_pose()
+            return None if p is None else np.asarray(p, dtype=float).reshape(3)
+        except Exception:
+            return None
+    for o in list(wp.scene_objects or []):
+        if str(o.get("id")) != str(oid) and str(o.get("name") or "").strip().lower() == key:
+            return np.asarray(o.get("pos"), dtype=float).reshape(3)
+    return None
+
+
+def aim_angles(obj, world_pos, prev=None):
+    """(yaw, roll, pitch) that point the lens (twin z) at world_pos; roll 0.
+    Pitch is clamped to the gimbal's range. Straight above / below the mount,
+    yaw keeps its previous value (gimbal lock there)."""
+    import simulatorview as sv
+    m = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float).reshape(3)
+    q = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
+    d = sv._qrot(sv._qinv(q), np.asarray(world_pos, dtype=float).reshape(3) - m)
+    n = float(np.linalg.norm(d))
+    if n < 1e-6:
+        return None
+    d = d / n
+    prev = list(prev or [0.0, 0.0, 0.0])
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, -d[1]))))
+    flat = math.hypot(d[0], d[2])
+    yaw = math.degrees(math.atan2(d[0], d[2])) if flat > 1e-4 else _f(prev[0])
+    return clamp_angles([yaw, 0.0, pitch])
 
 
 def is_gimbal(obj):
@@ -124,9 +190,25 @@ def track_id(oid):
     return TRACK_PREFIX + str(oid)
 
 
+def numbered_name(i):
+    """'Gimbal' for the first gimbal, then 'Gimbal 1', 'Gimbal 2' ... (as Aubo Arms)."""
+    return "Gimbal" if i <= 0 else "Gimbal %d" % i
+
+
 def _track_name(obj):
-    raw = str((obj or {}).get("name") or (obj or {}).get("id") or "Gimbal").strip()
-    return raw if raw.lower().endswith("gimbal") else raw + " gimbal"
+    """Track name by the gimbal's place among the gimbals in the scene."""
+    ids = [str(o.get("id")) for o in gimbal_objects()]
+    oid = str((obj or {}).get("id"))
+    return numbered_name(ids.index(oid) if oid in ids else len(ids))
+
+
+def default_name():
+    """Name for a new gimbal object: the first free of Gimbal, Gimbal 1, ..."""
+    used = {str(o.get("name") or "") for o in list(wp.scene_objects or [])}
+    i = 0
+    while numbered_name(i) in used:
+        i += 1
+    return numbered_name(i)
 
 
 def sync_tracks(tracks):
@@ -516,6 +598,18 @@ def _drive_run(oid, rt, keys, t):
         rt["cmd_end"] = t + 0.2  # retry soon
 
 
+LOOK_STEP_DEG = 0.3
+LOOK_MOVE_S = 0.2
+
+
+def _drive_look(oid, rt, angles):
+    """During a run with Look At on: follow the aim live, in short moves."""
+    last = rt.get("last_cmd")
+    if last is not None and max(abs(a - b) for a, b in zip(angles, last)) < LOOK_STEP_DEG:
+        return
+    _move(oid, rt, angles, LOOK_MOVE_S)
+
+
 def _read(oid, rt):
     try:
         a = rt["mod"].get_angles()
@@ -553,6 +647,18 @@ def _tick_one(obj, clock):
         g["target"] = clamp_angles(angles_at(keys, t))
     rt["follow"] = False
     rt["last_play"] = t
+    # Look At overrides the track: the target aims at the Look At target, live.
+    look = clean_look(g.get("look"))
+    aiming = False
+    rt["look_err"] = ""
+    if look["added"] and look["on"]:
+        tp = look_target_pos(oid, look["target"])
+        aim = None if tp is None else aim_angles(obj, tp, g.get("target"))
+        if aim is None:
+            rt["look_err"] = "no valid look at target."
+        else:
+            g["target"] = aim
+            aiming = True
     with _rt_lock:
         reqs, rt["requests"] = rt["requests"], []
     # Reading is always attempted; moves go out only with Drive on.
@@ -562,7 +668,9 @@ def _tick_one(obj, clock):
                 _move(oid, rt, angles, dur)
             if real_on and not rt["running"]:
                 rt["cmd_end"] = -1.0
-            if real_on:
+            if real_on and aiming:
+                _drive_look(oid, rt, g["target"])
+            elif real_on:
                 _drive_run(oid, rt, keys, t)
         _read(oid, rt)
     rt["running"] = real_on
@@ -658,6 +766,10 @@ def update(oid, data):
         g["cfg"] = cfg
     if data.get("target") is not None:
         g["target"] = data.get("target")
+    if isinstance(data.get("look"), dict):
+        look = dict(g.get("look") or {})
+        look.update(data["look"])
+        g["look"] = look
     obj["gimbal"] = clean_gimbal(g)
     if isinstance(data.get("cfg"), dict) and set(data["cfg"]) & {"script", "interface", "channel", "bitrate"}:
         _rt_for(oid)["next_try"] = 0.0  # try the new settings now
@@ -686,6 +798,9 @@ def status(oid):
         "read": rt["read"] if real_ok(oid) else None,
         "read_ok": real_ok(oid),
         "part": part_of(oid),
+        "look": clean_look(g.get("look")),
+        "look_err": rt.get("look_err", ""),
+        "look_targets": look_targets(oid),
         "read_age": (time.time() - rt["read_at"]) if rt["read_at"] else None,
         "read_err": err,
         "cmd_err": rt["cmd_err"] if connected else "",

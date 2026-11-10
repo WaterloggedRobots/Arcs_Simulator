@@ -1004,6 +1004,8 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
             label = Path(str(mesh_path)).stem or ("Import %d" % wp._obj_seq)
         elif add_cam:
             label = "Camera %d" % wp._obj_seq
+        elif kind == "gimbal":
+            label = _gimbal().default_name()
         else:
             label = "%s %d" % (names.get(kind, "Object"), wp._obj_seq)
     obj = {
