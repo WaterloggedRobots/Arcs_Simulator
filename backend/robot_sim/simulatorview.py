@@ -848,8 +848,12 @@ def _spawn_object_mesh(obj):
             except Exception:
                 pass
             try:
-                wp.add_forward_arrow(name, colors=EMPTY_RGB)
-                wp.add_side_arrow(name, colors=EMPTY_RGB)
+                if kind == "gimbal":
+                    # A gimbal's mount is its handle (bar to the hand end, front arrow).
+                    _gimbal().spawn_mount_marker(obj, name)
+                else:
+                    wp.add_forward_arrow(name, colors=EMPTY_RGB)
+                    wp.add_side_arrow(name, colors=EMPTY_RGB)
             except Exception as e:
                 print("empty arrows failed", e)
     obj["handle"] = handle

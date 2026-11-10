@@ -320,7 +320,7 @@ Components in the properties panel are listed in the order they were added, newe
 
 *Add > Gimbal* (or **+** in the Objects tab) adds a gimbal, named **Gimbal**, then **Gimbal 1**, **Gimbal 2** and so on. Like an Aubo Arm with its Sim and Real cursors, it has a mount and two twins, listed under it:
 
-- **Gimbal** (the mount) — a grey empty (sphere with forward and side arrows). This is what you move: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm).
+- **Gimbal** (the mount) — the gimbal's **handle**: a grey bar from the gimbal's centre to the hand end (the knob), and a short grey arrow for the gimbal's front. This is what you move, and it stores the handle's pose: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm). Unrotated, the hand end faces up and the camera end down.
 - **Sim gimbal** — a large blue waypoint-like marker (sphere, long lens arrow, side arrow) on the mount, turned by the **target** angles: what you set, and the track when the playhead moves.
 - **Real gimbal** — the same in orange, turned by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
 
@@ -328,7 +328,7 @@ The twins can't be moved, renamed or deleted on their own; their angles come fro
 
 Angles are the gimbal's three motors, **J1–J3**, in degrees, numbered from the handle: **J1** the handle motor, **J2** the middle motor, **J3** the camera motor (the DJI SDK calls them joint yaw / roll / pitch; saved files keep those keys). Values are kept as read, in ±180 (the SDK's ±30 / −56…+146 are limits for move commands, not for the joints: an RS4 with the camera looking along the handle reads J3 = −90). They are motor angles, fixed to the gimbal, not world directions, so they mean the same however the gimbal is mounted.
 
-**Mounting the gimbal in the scene.** The mount stands for the gimbal's body: point its **arrow along the handle, from the handle end towards the camera end**, with its side arrow to the camera's right. Then, as on the RS4, **J3 = −90 points the lens along the arrow** and J1 turns the camera around that axis (the 360 roll); with J1–J3 at 0 the lens is at right angles to the handle. For the arm, parent the gimbal to the Sim cursor and set the mount's local rotation to how it is fixed to the flange (the example project *gimbal pose* has the handle pointing forward from a tool-down cursor).
+**Handle and camera.** The mount stores the handle's pose; J1–J3 store the camera's orientation relative to the handle. With the mount unrotated (hand end up, camera end down) and J1–J3 at 0, the camera looks along the front arrow, level, at right angles to the handle. **J3 = −90** turns the lens down the handle towards the camera end, as the RS4 reads with the camera looking along the handle; positive J3 tilts it up towards the hand end. **J1** turns the camera around the handle axis (the 360 roll when J3 = −90), J2 around the lens. To fit the gimbal to the arm, parent it to the Sim cursor and rotate the mount to how the handle is fixed to the flange: the example project *gimbal pose* has the hand end towards the robot and the camera end forward, so J3 = −90 looks straight ahead.
 
 **Properties**
 

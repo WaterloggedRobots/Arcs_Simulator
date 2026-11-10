@@ -3,8 +3,9 @@
 A Gimbal is one scene object (kind "gimbal") with two twins under it, like the
 Aubo Arm's Sim and Real cursors (list rows "<oid>#sim" and "<oid>#real"):
 
-- the mount: an empty (grey sphere + arrows) at the object's transform. The
-  user moves it like any other object (gizmo, Properties, parenting).
+- the mount: the gimbal's HANDLE (grey bar + small front arrow) at the
+  object's transform. The user moves it like any other object (gizmo,
+  Properties, parenting): it stores the pose of the handle.
 - the Sim gimbal: a large blue waypoint-like marker (sphere, long lens arrow,
   side arrow) parented to the mount, rotated by the target angles (the track).
 - the Real gimbal: the same in orange, rotated by the angles read from the
@@ -13,10 +14,12 @@ Aubo Arm's Sim and Real cursors (list rows "<oid>#sim" and "<oid>#real"):
 
 Angles are the gimbal's joint angles in degrees: J1 (handle motor), J2
 (middle motor), J3 (camera motor); the SDK and the saved data call them
-yaw, roll, pitch. The twins' frame matches the
-mount's: z forward (lens), x right, y down. Yaw turns about y (positive turns
-right), roll about the yawed z (positive drops the right side), pitch about
-the yawed and rolled x (positive tilts up), in the motor order yaw > roll > pitch.
+yaw, roll, pitch. They give the camera's orientation relative to the handle
+(see head_wxyz): in the mount's frame the handle runs along z, hand end at +z
+(up with the mount unrotated) and camera end at -z (down). With J1-J3 = 0 the
+camera looks along the mount's +x (the front arrow), at right angles to the
+handle; J3 = -90 points it along the handle towards the camera end, as the
+RS4 reads; J1 turns the camera around the handle axis.
 
 Timeline: every gimbal gets a track "gimbal_<id>" with frames
 {t, yaw, roll, pitch}. The target follows the track (linear between frames)
@@ -160,7 +163,8 @@ def look_target_pos(oid, name):
 
 def aim_angles(obj, world_pos, prev=None):
     """(J1, J2, J3) that point the lens at world_pos, with J2 = 0 (see head_wxyz).
-    In the mount's frame the lens is (cos J3 sin J1, cos J3 cos J1, -sin J3).
+    In the mount's (handle's) frame the lens is
+    (cos J3 cos J1, -cos J3 sin J1, sin J3).
     Straight along the handle axis J1 keeps its previous value (gimbal lock)."""
     import simulatorview as sv
     m = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float).reshape(3)
@@ -171,9 +175,9 @@ def aim_angles(obj, world_pos, prev=None):
         return None
     d = d / n
     prev = list(prev or [0.0, 0.0, 0.0])
-    j3 = math.degrees(math.asin(max(-1.0, min(1.0, -d[2]))))
+    j3 = math.degrees(math.asin(max(-1.0, min(1.0, d[2]))))
     flat = math.hypot(d[0], d[1])
-    j1 = math.degrees(math.atan2(d[0], d[1])) if flat > 1e-4 else _f(prev[0])
+    j1 = math.degrees(math.atan2(-d[1], d[0])) if flat > 1e-4 else _f(prev[0])
     return clamp_angles([j1, 0.0, j3])
 
 
@@ -340,21 +344,39 @@ def _quat_axis(axis, deg):
     return np.array([math.cos(h), axis[0] * s, axis[1] * s, axis[2] * s], dtype=float)
 
 
-# The mount's frame is the gimbal body: its arrow (z) is the handle axis,
-# pointing from the handle end to the camera end; x is the camera's right.
-# With J3 = -90 the lens points along the arrow (the RS4 reads J3 = -90 with
-# the camera looking along the handle, away from it), and J1 turns the camera
-# around that axis. With J1-J3 = 0 the lens is at right angles to the handle
-# (along the mount's +y).
-_BASE = _quat_axis((1, 0, 0), -90.0)
+def _quat_from_matrix(m):
+    m = np.asarray(m, dtype=float)
+    w = math.sqrt(max(0.0, 1.0 + m[0, 0] + m[1, 1] + m[2, 2])) / 2.0
+    if w > 1e-6:
+        return np.array([w, (m[2, 1] - m[1, 2]) / (4 * w), (m[0, 2] - m[2, 0]) / (4 * w),
+                         (m[1, 0] - m[0, 1]) / (4 * w)])
+    i = int(np.argmax(np.diag(m)))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    v = [0.0, 0.0, 0.0]
+    v[i] = math.sqrt(max(0.0, 1.0 + m[i, i] - m[j, j] - m[k, k])) / 2.0
+    v[j] = (m[j, i] + m[i, j]) / (4 * v[i])
+    v[k] = (m[k, i] + m[i, k]) / (4 * v[i])
+    return np.array([(m[k, j] - m[j, k]) / (4 * v[i])] + v)
+
+
+# The mount is the HANDLE. In its frame the handle runs along z, the hand end
+# at +z (up with the mount unrotated) and the camera end at -z (down).
+# The twins' own frame is the camera's: z = lens, x = right, y = image down.
+# With J1-J3 = 0 the camera looks along the mount's +x (front), right = -y,
+# image down = -z (towards the camera end): _BASE maps the twin's x, y, z to
+# the mount's -y, -z, +x. Then, in motor order from the handle:
+#   J1 about the handle axis (twin y), J2 about the lens (z), J3 about the
+#   camera's right (x). J3 = -90 turns the lens to the handle's camera end
+#   (mount -z), as the RS4 reads with the camera looking along the handle.
+_BASE = _quat_from_matrix([[0, 0, 1], [-1, 0, 0], [0, -1, 0]])
 
 
 def head_wxyz(angles):
-    """Local rotation of a twin (lens = its z) for (J1, J2, J3) in degrees."""
+    """Camera (twin) rotation relative to the handle (mount) for (J1, J2, J3) in degrees."""
     import simulatorview as sv
     j1, j2, j3 = (list(angles or [0, 0, 0]) + [0, 0, 0])[:3]
     q = sv._qmul(_BASE, sv._qmul(sv._qmul(_quat_axis((0, 1, 0), j1), _quat_axis((0, 0, 1), j2)),
-                                 _quat_axis((1, 0, 0), -j3)))
+                                 _quat_axis((1, 0, 0), j3)))
     n = float(np.linalg.norm(q)) or 1.0
     return q / n
 
@@ -400,6 +422,41 @@ def _spawn_twin(obj, part, angles):
     except Exception:
         pass
     return sph
+
+
+HANDLE_LEN = 0.16
+HANDLE_W = 0.032
+HANDLE_RGB = (150, 150, 158)
+
+
+def spawn_mount_marker(obj, name):
+    """The mount drawn as the handle: a grey bar from the gimbal centre up the
+    mount's +z to the hand end, and a short arrow along +x (the camera's front
+    with J1-J3 at 0). Children of the mount node; a click selects the gimbal."""
+    if wp.server is None:
+        return
+    oid = obj["id"]
+
+    def _on_click(_e=None, _oid=oid):
+        import simulatorview as sv
+        mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
+        sv.select_scene_object(_oid, mode=mode)
+    try:
+        bar = wp.server.scene.add_box(
+            name=name + "/handle", dimensions=(HANDLE_W, HANDLE_W, HANDLE_LEN), color=HANDLE_RGB,
+            position=(0.0, 0.0, 0.03 + HANDLE_LEN / 2.0))
+        try:
+            bar.opacity = 0.7
+        except Exception:
+            pass
+        bar.on_click(_on_click)
+        cap = wp.server.scene.add_icosphere(
+            name=name + "/hand_end", radius=HANDLE_W * 0.75, color=HANDLE_RGB,
+            position=(0.0, 0.0, 0.03 + HANDLE_LEN))
+        cap.on_click(_on_click)
+        _arrow(name + "/front", 0.07, 0.003, 0.008, HANDLE_RGB, 0)
+    except Exception as e:
+        print("gimbal handle marker failed", e)
 
 
 def spawn_head(obj):
