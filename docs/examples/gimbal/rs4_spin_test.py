@@ -18,6 +18,11 @@ Run from a terminal on the PC with the CANalyst-II adapter:
     python docs/examples/gimbal/rs4_spin_test.py
     python docs/examples/gimbal/rs4_spin_test.py --reverse      # then the other way
     python docs/examples/gimbal/rs4_spin_test.py --speed 20 --seconds 18
+    python docs/examples/gimbal/rs4_spin_test.py --pitch 0      # level the camera first
+
+With the lens near pitch +/-90 (pointing along the yaw axis) the gimbal's
+attitude stabilisation sees a yaw spin as camera roll and pulls it back
+(gimbal lock): the spin sways instead. --pitch moves the camera there first.
 
 Needs: pip install python-can pyusb libusb-package
 """
@@ -187,7 +192,7 @@ def spin(g, speed_dps, seconds):
     late = 0
     last_send = None
     next_read = 0.0
-    print("   t(s)    yaw read   step   unwrapped total   note")
+    print("   t(s)    yaw read   step   unwrapped total   roll   pitch   note")
     t0 = time.time()
     while time.time() - t0 < seconds:
         now = time.time()
@@ -226,8 +231,8 @@ def spin(g, speed_dps, seconds):
                         note = "<-- WRAP (%+.1f -> %+.1f)" % (prev, yaw)
                     unwrapped += step
                 prev = yaw
-                print("  %6.2f   %8.1f  %+6.1f   %+10.1f        %s%s" % (
-                    now - t0, yaw, step, unwrapped, note,
+                print("  %6.2f   %8.1f  %+6.1f   %+10.1f     %6.1f  %6.1f   %s%s" % (
+                    now - t0, yaw, step, unwrapped, a[1], a[2], note,
                     ("  (read %.0f ms)" % read_ms) if read_ms > 100 else ""))
         time.sleep(RESEND_S)
     g.speed(0, 0, 0)
@@ -275,13 +280,22 @@ if __name__ == "__main__":
     ap.add_argument("--seconds", type=float, default=12.0, help="spin time in s (default 12 -> 360 deg at 30 deg/s)")
     ap.add_argument("--reverse", action="store_true", help="after the spin, spin back with the opposite speed")
     ap.add_argument("--no-level", action="store_true", help="don't level the pitch at the end")
+    ap.add_argument("--pitch", type=float, default=None,
+                    help="move to this pitch (and roll 0) before spinning, e.g. 0 for a level camera")
     args = ap.parse_args()
 
     print("RS4 spin test: interface %(interface)s, channel %(channel)s, bitrate %(bitrate)s" % BUS_KWARGS)
     results = []
     with can.Bus(**BUS_KWARGS) as bus:
         g = DjiGimbal(bus)
-        read_settled(g, "start:")
+        start = read_settled(g, "start:")
+        if start is not None and abs(start[2]) > 80 and args.pitch is None:
+            print("NOTE: pitch is %.1f deg: the lens points along the yaw axis. A yaw spin here may "
+                  "sway back (gimbal lock). Try --pitch 0." % start[2])
+        if args.pitch is not None:
+            ok = g.move_abs(roll=0, pitch=args.pitch, duration=3.0)
+            print("moved to pitch %.1f, roll 0: %s" % (args.pitch, "ok" if ok else "no reply / refused"))
+            read_settled(g, "after pitch:")
         results.append(ask_direction(spin(g, args.speed, args.seconds)))
         if args.reverse:
             time.sleep(1.0)
@@ -295,4 +309,5 @@ if __name__ == "__main__":
     for r in results:
         print("speed %+6.1f deg/s: turned %+7.1f deg, wraps %d, late resends %d, failed reads %d, seen: %s" % (
             r["speed"], r["turned"], r["wraps"], r["late"], r["fails"], r.get("seen", "not given")))
+    print("start pitch %s, --pitch %s" % ("%.1f" % start[2] if start else "?", args.pitch))
     print("=" * 72)
