@@ -1113,15 +1113,26 @@ def _tick_one(obj, clock):
         rt["calib"] = {"ok": None, "time": time.time(), "text": "Recalibration cancelled."}
         calib = None
     if _ensure_connected(oid, cfg, rt):
-        if not (real_on and not aiming) and "track" in rt:
+        if not (real_on and not aiming) and "track" in rt and "jmove" not in rt:
             _track_end(rt)  # run stopped or paused: normal mode before any other move
-        if calib == "start":
+        if calib == "align":
+            _calib_align(rt, cfg)
+        elif calib == "start":
             _calib_start(rt)
         elif calib == "finish":
             _calib_finish(obj, cfg, rt)
         if cfg.get("drive", True):
-            for kind, angles, dur in reqs:
-                _move(oid, rt, angles, dur)
+            for kind, angles, dur, direction in reqs:
+                if real_on:
+                    continue
+                if direction in ("cw", "ccw") and _can_track(rt) and rt["read_ok"]:
+                    _jmove_start(rt, angles, dur, direction)
+                else:
+                    rt.pop("jmove", None)
+                    _track_end(rt)
+                    _move(oid, rt, angles, dur)
+            if "jmove" in rt and not real_on:
+                _jmove_tick(oid, rt)
             if real_on and not rt["running"]:
                 rt["cmd_end"] = -1.0
             if real_on and aiming:
@@ -1152,14 +1163,44 @@ def _tick_one(obj, clock):
 CALIB_MAX = 3000  # samples (5 min at 10 Hz)
 
 
-def _calib_start(rt):
-    """Recalibrate, step 1: record (joints, camera world angles) every tick
-    while the handle is held still, hand end up, and the camera is moved."""
+def _calib_align(rt, cfg):
+    """Recalibrate, step 1: the camera turns to the gimbal's front (+x in the
+    model), level, with no roll; its reading there fixes J1's zero."""
     if not callable(getattr(rt.get("mod"), "get_world", None)):
         rt["calib"] = {"ok": False, "time": time.time(),
                        "text": "Recalibrate failed: the driver script has no get_world() (camera world angles)"}
         return
-    rt["calib_rec"] = {"samples": [], "start": time.time(), "err": ""}
+    _track_end(rt)
+    rt.pop("jmove", None)
+    moved = False
+    if cfg.get("drive", True):
+        try:
+            # The SDK's absolute move is in camera attitude: 0 / 0 / 0 = facing
+            # the handle's front, level, no roll.
+            moved = rt["mod"].move_to(0.0, 0.0, 0.0, duration=_f(cfg.get("move_s"), 2.0)) is not False
+        except Exception as e:
+            rt["cmd_err"] = "move failed: %s" % e
+    rt["calib"] = {"ok": None, "aligning": True, "time": time.time(), "text": (
+        ("The camera is turning to the front (+x), level, with no roll. " if moved else
+         "Drive is off: turn the camera to the front (+x), level, with no roll, with the joystick. ") +
+        "Hold the handle still and vertical, hand end up. When the camera faces the gimbal's front "
+        "(the Sim gimbal's front arrow) with the horizon level, press Start recording.")}
+
+
+def _calib_start(rt):
+    """Recalibrate, step 2: the reading now is the front / level anchor; then
+    record (joints, camera world angles) every tick while the camera is moved."""
+    if not callable(getattr(rt.get("mod"), "get_world", None)):
+        rt["calib"] = {"ok": False, "time": time.time(),
+                       "text": "Recalibrate failed: the driver script has no get_world() (camera world angles)"}
+        return
+    anchor = None
+    if (rt.get("calib") or {}).get("aligning") and rt["read_ok"] and rt["read"]:
+        try:
+            anchor = {"joints": list(rt["read"]), "world": [float(v) for v in list(rt["mod"].get_world())[:3]]}
+        except Exception:
+            anchor = {"joints": list(rt["read"]), "world": None}
+    rt["calib_rec"] = {"samples": [], "start": time.time(), "err": "", "anchor": anchor}
     rt["calib"] = {"ok": None, "recording": True, "n": 0, "time": time.time(),
                    "text": "Recording: hold the handle still, hand end up, and move the camera around "
                            "with the joystick (pan all the way round, tilt up and down) for 10 s or more, then press Finish."}
@@ -1219,6 +1260,7 @@ def _calib_finish(obj, cfg, rt):
         stem = os.path.splitext(os.path.basename(gmodel.path_of(model_file)))[0]
         log_path = str(d / ("%s_%s.json" % (stem, time.strftime("%Y%m%d-%H%M%S"))))
         rec_doc = {"model": os.path.basename(gmodel.path_of(model_file)), "samples": samples,
+                   "anchor": rec.get("anchor"),
                    "raw": rec.get("raw", []), "skipped_moving": rec.get("skipped", 0)}
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(rec_doc, f)
@@ -1246,7 +1288,8 @@ def _calib_finish(obj, cfg, rt):
             # J3's direction isn't fitted: it is always the current file's (edited by hand).
             cur3 = next((j.get("sign", 1) for j in raw["joints"] if j.get("sdk") == "pitch"), 1)
             raw["joints"] = [dict(j, sign=cur3) if j.get("sdk") == "pitch" else j for j in ojs]
-            fit = gmodel.fit_calibration(raw, samples)
+            anchor = (rec.get("anchor") or {}).get("joints")
+            fit = gmodel.fit_calibration(raw, samples, anchor=anchor)
             if log_path:
                 with open(log_path, "r", encoding="utf-8") as f:
                     rec_doc = json.load(f)
@@ -1265,9 +1308,11 @@ def _calib_finish(obj, cfg, rt):
             note = ("%s: %d samples, hand end up; rms %.2f deg, worst %.2f deg; handle %.1f / %.1f deg off vertical" % (
                 time.strftime("%Y-%m-%d %H:%M"), fit["samples"], fit["rms"], fit["worst"],
                 fit["handle_tilt"][0], fit["handle_tilt"][1]))
-            gmodel.write_joints(model_file, {
-                "roll": {"axis": fit["axis"], "sign": fit["j2_sign"], "offset": fit["j2_offset"]},
-                "pitch": {"sign": fit["j3_sign"], "offset": fit["j3_offset"]}}, note)
+            upd = {"roll": {"axis": fit["axis"], "sign": fit["j2_sign"], "offset": fit["j2_offset"]},
+                   "pitch": {"sign": fit["j3_sign"], "offset": fit["j3_offset"]}}
+            if fit.get("j1_offset") is not None:
+                upd["yaw"] = {"sign": 1.0, "offset": fit["j1_offset"]}  # front / level reading = lens +x
+            gmodel.write_joints(model_file, upd, note)
             quality = "good" if fit["rms"] < 1.5 else "fair"
             text = ("Recalibrated from %d samples: fit %s (rms %.2f deg, worst %.2f deg). J2 axis %s (tilt %.1f deg, side %.1f deg; "
                     "was %s), J2 %s offset %.1f (was %s %.1f), J3 %s offset %.1f (was %s %.1f); handle held %.1f / %.1f deg off "
@@ -1279,6 +1324,12 @@ def _calib_finish(obj, cfg, rt):
                         "+" if fit["j3_sign"] > 0 else "reversed", fit["j3_offset"],
                         "+" if was[2]["sign"] > 0 else "reversed", was[2]["offset"],
                         fit["handle_tilt"][0], fit["handle_tilt"][1], os.path.basename(path), conv, where))
+            if fit.get("j1_offset") is not None:
+                text += (" J1 zero from the front / level reading: offset %.1f (was %.1f); the model then has the "
+                         "camera %.1f deg off +x and rolled %.1f deg there." % (
+                             fit["j1_offset"], was[0]["offset"], fit["anchor_heading"], fit["anchor_roll"]))
+            else:
+                text += " J1's zero is unchanged (no front / level reading: start with Recalibrate gimbal)."
             rt["calib"] = {"ok": True, "time": time.time(), **fit, "file": os.path.basename(path), "text": text}
             print("gimbal calibrate:", text)
         except Exception as e:
@@ -1289,16 +1340,20 @@ def _calib_finish(obj, cfg, rt):
     threading.Thread(target=work, name="gimbal-calibrate", daemon=True).start()
 
 
-def request_calibrate(oid, step="start"):
-    """step: start (record samples), finish (fit and save) or cancel."""
-    if _find(oid) is None or step not in ("start", "finish", "cancel"):
+def request_calibrate(oid, step="align"):
+    """step: align (camera to the front, level), start (anchor + record
+    samples), finish (fit and save) or cancel."""
+    if _find(oid) is None or step not in ("align", "start", "finish", "cancel"):
         return False
     rt = _rt_for(oid)
-    if step == "start" and (rt.get("calib") or {}).get("fitting"):
+    if step in ("align", "start") and (rt.get("calib") or {}).get("fitting"):
         return False
-    rt["calib_req"] = step
     if step == "start":
-        rt["calib"] = {"ok": None, "recording": True, "n": 0, "time": time.time(), "text": "Starting…"}
+        # Keep the aligning flag until the gimbal thread takes the anchor.
+        rt["calib"] = dict(rt.get("calib") or {}, text="Starting…")
+    rt["calib_req"] = step
+    if step == "align":
+        rt["calib"] = {"ok": None, "aligning": True, "time": time.time(), "text": "Turning the camera to the front…"}
     return True
 
 
@@ -1348,7 +1403,14 @@ def ensure_thread():
 # ---------------------------------------------------------------------------
 # Requests from the web server
 # ---------------------------------------------------------------------------
-def request_move(oid, angles=None, duration=None):
+MOVE_DIRS = ("short", "cw", "ccw")
+JMOVE_DPS = 60.0  # J1 speed of a CW / CCW move (at least Move time)
+
+
+def request_move(oid, angles=None, duration=None, direction="short"):
+    """Move the real gimbal to the target: direction "short" = one absolute
+    move (J1 the short way, at most 180 deg), "cw" / "ccw" = J1 turned that way
+    round by speed (any amount, as the run drive does), J2 / J3 absolute."""
     obj = _find(oid)
     if obj is None:
         return False
@@ -1356,10 +1418,40 @@ def request_move(oid, angles=None, duration=None):
     if angles is not None:
         g["target"] = clamp_angles(angles)
     dur = _f(duration, 0.0) or _f((g.get("cfg") or {}).get("move_s"), 2.0)
+    direction = direction if direction in MOVE_DIRS else "short"
     rt = _rt_for(oid)
     with _rt_lock:
-        rt["requests"] = [("move", list(g["target"]), dur)]
+        rt["requests"] = [("move", list(g["target"]), dur, direction)]
     return True
+
+
+def _jmove_start(rt, angles, dur, direction):
+    """CW / CCW: J1 from its reading to the target's angle, turning that way
+    (CCW = J1 rising, as the RS4 spin tests watched it); J2 / J3 to the target."""
+    r = list(rt["read"])
+    want = _f(angles[0]) % 360.0
+    if direction == "ccw":
+        delta = (want - r[0]) % 360.0
+    else:
+        delta = -((r[0] - want) % 360.0)
+    if abs(delta) < 0.5 or abs(delta) > 359.5:
+        delta = 0.0  # already there (to within half a degree): no full turn
+    dur = max(_f(dur, 2.0), abs(delta) / JMOVE_DPS)
+    _track_end(rt)
+    rt["jmove"] = {"t0": time.time(), "dur": dur, "keys": [
+        {"t": 0.0, "yaw": r[0], "roll": r[1], "pitch": r[2]},
+        {"t": dur, "yaw": r[0] + delta, "roll": _f(angles[1]), "pitch": _f(angles[2])}]}
+    rt["cmd_end"] = -1.0
+
+
+def _jmove_tick(oid, rt):
+    jm = rt["jmove"]
+    t = time.time() - jm["t0"]
+    if t > jm["dur"] + 1.0:
+        rt.pop("jmove", None)
+        _track_end(rt)
+        return
+    _drive_run(oid, rt, jm["keys"], min(t, jm["dur"]))
 
 
 def go_to_initial_pose():

@@ -566,6 +566,10 @@ def _snapshot():
     }
 
 
+# Called after every new undo step (webui: autosave soon after an edit).
+on_edit = []
+
+
 def _push_history():
     if _suspend_history:
         return
@@ -573,6 +577,11 @@ def _push_history():
     if len(undo_stack) > _MAX:
         undo_stack.pop(0)
     redo_stack.clear()
+    for fn in list(on_edit):
+        try:
+            fn()
+        except Exception:
+            pass
 
 
 def checkpoint():

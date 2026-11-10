@@ -730,6 +730,8 @@
     .gim-btns.gim-one { grid-template-columns: 1fr; }
     .gim-btns.gim-calib-row { grid-template-columns: 1fr auto; }
     .gim-move-real { display: block; width: 100%; margin: 8px 0 2px; background: #b8752a; color: #fff; }
+    .gim-move-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
+    .gim-move-row select { margin: 8px 0 2px; height: 30px; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; }
     .gim-move-real:hover:not(:disabled) { background: #cf8735; }
     .gim-move-real:disabled { opacity: 0.45; cursor: default; }
     .gim-btns button:disabled { opacity: 0.45; cursor: default; }
@@ -2156,7 +2158,14 @@
                 <label title="J3: camera motor (SDK pitch)">J3</label><input id="gimPitch" type="number" step="0.1" min="-180" max="180" value="0">
               </div>
               <div class="col-note" id="gimIkNote" hidden></div>
-              <button type="button" id="gimMove" class="gim-move-real" title="Move the real gimbal to the Sim gimbal's angles (takes Move time)">Move real to sim</button>
+              <div class="gim-move-row">
+                <button type="button" id="gimMove" class="gim-move-real" title="Move the real gimbal to the Sim gimbal's angles (takes Move time)">Move real to sim</button>
+                <select id="gimMoveDir" title="Which way J1 turns: Shortest = one absolute move (at most 180°); CW / CCW = J1 turned that way round by speed, any amount (as during Run). CCW = J1 rising, as watched in the RS 4 spin tests.">
+                  <option value="short">Shortest</option>
+                  <option value="cw">CW</option>
+                  <option value="ccw">CCW</option>
+                </select>
+              </div>
               <div class="col-note" id="gimRealVsSim"></div>
               <div class="gim-btns gim-one">
                 <button type="button" id="gimUseRead" title="Copy the angles read from the real gimbal into the Sim gimbal's target">Copy real pose to sim</button>
@@ -4854,13 +4863,15 @@
       }
       const cb = document.getElementById("gimCalibrate");
       const crec = !!(g.calib && g.calib.recording), cfit = !!(g.calib && g.calib.fitting);
+      const calign = !!(g.calib && g.calib.aligning);
       if (cb) {
         cb.disabled = cfit || (!crec && !g.read_ok);
-        setText(cb, crec ? "Finish recalibration (" + (g.calib.n || 0) + " samples)" : cfit ? "Fitting…" : "Recalibrate gimbal");
-        cb.dataset.step = crec ? "finish" : "start";
+        setText(cb, crec ? "Finish recalibration (" + (g.calib.n || 0) + " samples)" : cfit ? "Fitting…"
+          : calign ? "Start recording (camera at the front, level)" : "Recalibrate gimbal");
+        cb.dataset.step = crec ? "finish" : calign ? "start" : "align";
       }
       const ccx = document.getElementById("gimCalibCancel");
-      if (ccx) ccx.hidden = !crec;
+      if (ccx) ccx.hidden = !(crec || calign);
       const cl = document.getElementById("gimCalib");
       if (cl) {
         const c = g.calib;
@@ -4974,7 +4985,7 @@
       }));
       try { gimWorld = localStorage.getItem("gimWorld") === "1"; } catch (err) {}
       const calBtn = byId("gimCalibrate");
-      if (calBtn) calBtn.addEventListener("click", () => postGimbal({ action: "calibrate", step: calBtn.dataset.step || "start" }));
+      if (calBtn) calBtn.addEventListener("click", () => postGimbal({ action: "calibrate", step: calBtn.dataset.step || "align" }));
       const calCx = byId("gimCalibCancel");
       if (calCx) calCx.addEventListener("click", () => postGimbal({ action: "calibrate", step: "cancel" }));
       const msel = byId("gimModel");
@@ -4993,7 +5004,8 @@
       if (mv) mv.addEventListener("click", () => {
         const g = window.__lastObject && window.__lastObject.gimbal;
         const aiming = !!(g && g.look && g.look.added && g.look.on);
-        postGimbal(aiming ? { action: "move" } : { action: "move", target: gimbalTarget() });
+        const dir = (byId("gimMoveDir") || {}).value || "short";
+        postGimbal(aiming ? { action: "move", direction: dir } : { action: "move", target: gimbalTarget(), direction: dir });
       });
       const lt = byId("gimLookToggle");
       if (lt) lt.addEventListener("click", () => postGimbal({ look: { on: !lt.classList.contains("advanced") } }));

@@ -540,7 +540,7 @@ def _wrap(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
-def fit_calibration(raw, samples, log=None):
+def fit_calibration(raw, samples, log=None, anchor=None):
     """Fit J2's axis (tilt, side), J2 / J3 offsets and directions, and the
     handle's small tilt in the hand to samples [(reading [yaw, roll, pitch],
     world [yaw, roll, pitch])] taken with the handle held still, hand end up,
@@ -680,7 +680,31 @@ def fit_calibration(raw, samples, log=None):
         s2, x[2] = -s2, -x[2]
     rms = float(np.sqrt(np.mean(r.fun ** 2)))
     axis = axis_of(x[0], x[1])
+    # J1's zero: the readings only see the camera against gravity, so its
+    # heading around the handle comes from the front / level anchor reading
+    # (camera looking along +x): the J1 offset that makes the lens point at +x there.
+    j1_off = anchor_heading = anchor_roll = None
+    if anchor is not None:
+        m = model_for(x, s2, s3)
+        m["joints"][0] = dict(m["joints"][0], offset=0.0)
+        q0, _ = camera_pose(m, joint_values(m, anchor))
+        l0 = qrot(q0, [0, 0, 1])
+        h = math.degrees(math.atan2(l0[1], l0[0]))
+        best_o = None
+        for o in (h, -h):  # which sign undoes the heading depends on J1's axis
+            m["joints"][0] = dict(m["joints"][0], offset=o)
+            q1, _ = camera_pose(m, joint_values(m, anchor))
+            l1 = qrot(q1, [0, 0, 1])
+            off_deg = abs(math.degrees(math.atan2(l1[1], l1[0])))
+            if best_o is None or off_deg < best_o[1]:
+                best_o = (o, off_deg, q1)
+        j1_off = _wrap(best_o[0])
+        anchor_heading = best_o[1]
+        anchor_roll = dji_ypr(best_o[2])[2]
     return {
+        "j1_offset": None if j1_off is None else round(float(j1_off), 2),
+        "anchor_heading": None if anchor_heading is None else round(float(anchor_heading), 2),
+        "anchor_roll": None if anchor_roll is None else round(float(anchor_roll), 2),
         "axis": [round(float(v), 4) for v in axis],
         "tilt": round(float(x[0]), 2), "side": round(float(x[1]), 2),
         "j2_sign": s2, "j2_offset": round(float(_wrap(x[2])), 2),

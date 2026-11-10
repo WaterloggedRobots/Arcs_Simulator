@@ -1739,10 +1739,10 @@ def api_gimbal():
             return jsonify({"ok": False, "error": "Look At is aiming the gimbal",
                             "gimbal": wp.gimbal.status(oid)})
     if act == "move":
-        ok = wp.gimbal.request_move(oid)
+        ok = wp.gimbal.request_move(oid, direction=str(data.get("direction") or "short"))
     elif act == "calibrate":
         # step start: record samples (handle still, hand end up, camera moved); finish: fit and save; cancel.
-        ok = wp.gimbal.request_calibrate(oid, str(data.get("step") or "start"))
+        ok = wp.gimbal.request_calibrate(oid, str(data.get("step") or "align"))
     elif act == "use_read":
         st = wp.gimbal.status(oid) or {}
         ok = st.get("read") is not None
@@ -1839,14 +1839,26 @@ def _open_ui():
         pass
 
 
+_autosave_soon = threading.Event()
+AUTOSAVE_EVERY_S = 60.0
+AUTOSAVE_AFTER_EDIT_S = 2.0
+
+
 def _autosave_loop():
-    time.sleep(60)
+    """Every minute, and a couple of seconds after each edit (an undo step:
+    waypoints, objects, gimbal settings / target / frames, ...). Unchanged
+    documents are skipped (write_autosave compares a hash)."""
+    wp.on_edit.append(_autosave_soon.set)
+    _autosave_soon.wait(AUTOSAVE_EVERY_S)
     while True:
+        if _autosave_soon.is_set():
+            time.sleep(AUTOSAVE_AFTER_EDIT_S)  # let a burst of edits finish
+            _autosave_soon.clear()
         try:
             fman.write_autosave()
         except Exception as e:
             print("autosave failed", e)
-        time.sleep(60)
+        _autosave_soon.wait(AUTOSAVE_EVERY_S)
 
 
 def _start_controller():
