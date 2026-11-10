@@ -1170,7 +1170,12 @@ def _calibrate_home(obj, cfg, rt):
         if err:
             raise ValueError("the model file can't be read: %s" % err)
         was = {j["sdk"]: j["offset"] for j in model["joints"]}
-        offs = gmodel.home_offsets(model, reading)
+        # Home = the camera looking along WORLD +x, level, with the handle where
+        # the gimbal object is in the scene (unrotated: the all-zero pose).
+        offs, ik_err = gmodel.home_offsets(model, reading, obj.get("wxyz", [1, 0, 0, 0]))
+        if ik_err > 2.0:
+            raise ValueError("with the gimbal object turned as it is in the scene, the model can't look along "
+                             "world +x level (%.1f deg off): set its rotation to match the real handle" % ik_err)
         note = "%s: home pose (camera at +x, level) read J %.1f / %.1f / %.1f%s" % (
             time.strftime("%Y-%m-%d %H:%M"), reading[0], reading[1], reading[2],
             "" if world is None else ", world roll %.1f pitch %.1f" % (world[1], world[2]))
@@ -1184,8 +1189,8 @@ def _calibrate_home(obj, cfg, rt):
             text += (" The gimbal reads roll %.1f, pitch %.1f against gravity: the camera wasn't level, so the "
                      "Sim gimbal will be off by that much; level it and recalibrate." % (world[1], world[2]))
         g = obj.get("gimbal") or {}
-        if not keys_for(obj.get("id")) and not _aiming(obj):
-            g["target"] = clamp_angles(reading)  # the Sim gimbal at the home pose too
+        if not _aiming(obj):
+            g["target"] = clamp_angles(reading)  # the Sim gimbal at the home pose too (frames follow when the playhead moves)
         rt["calib"] = {"ok": True, "time": time.time(), "reading": reading, "world": world, "offsets": offs, "text": text}
         print("gimbal calibrate:", text)
     except Exception as e:

@@ -433,10 +433,34 @@ def _wrap(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
-def home_offsets(model, reading):
-    """{sdk: offset} that make `reading` [yaw, roll, pitch] the all-zero pose."""
+# The camera in the home pose, in the WORLD: lens along +x, right along -y,
+# image down along -z (camera frame: x right, y down, z lens).
+HOME_WORLD_Q = None
+
+
+def home_world_q():
+    global HOME_WORLD_Q
+    if HOME_WORLD_Q is None:
+        HOME_WORLD_Q = qfrom_matrix(np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]))
+    return HOME_WORLD_Q
+
+
+def home_offsets(model, reading, mount_wxyz=None):
+    """({sdk: offset}, error deg): offsets that put the camera, at `reading`
+    [yaw, roll, pitch], looking along WORLD +x, level, no roll, with the
+    handle at mount_wxyz (the gimbal object's pose in the scene). Unrotated
+    mount: the reading becomes the all-zero pose. Signs and axes stay."""
     r = (list(reading) + [0, 0, 0])[:3]
-    return {j["sdk"]: round(_wrap(-j["sign"] * float(r[SDK_KEYS.index(j["sdk"])])), 2) for j in model["joints"]}
+    mq = np.asarray(mount_wxyz if mount_wxyz is not None else [1, 0, 0, 0], float)
+    plain = dict(model)
+    plain["joints"] = [dict(j, sign=1.0, offset=0.0) for j in model["joints"]]
+    # Model angles that give that camera pose (stored == model with sign 1, offset 0),
+    # nearest the all-zero pose.
+    angles, err = ik(plain, mq, home_world_q(), [0.0, 0.0, 0.0])
+    out = {}
+    for k, j in enumerate(model["joints"]):
+        out[j["sdk"]] = round(_wrap(float(angles[k]) - j["sign"] * float(r[SDK_KEYS.index(j["sdk"])])), 2)
+    return out, float(err)
 
 
 def write_joints(name, updates, note):
