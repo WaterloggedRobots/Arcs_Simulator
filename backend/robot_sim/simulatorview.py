@@ -969,6 +969,17 @@ def sync_camera_tracks():
     return wp.extra_tracks
 
 
+def _vec_or(v, default, n):
+    """v as a float vector of n (lists from files, numpy arrays from undo
+    snapshots: `v or default` fails on an array), else default."""
+    if v is None:
+        return np.asarray(default, dtype=float).reshape(n)
+    a = np.asarray(v, dtype=float).reshape(-1)
+    if a.size != n:
+        return np.asarray(default, dtype=float).reshape(n)
+    return a
+
+
 def restore_scene_object(rec):
     kind = str((rec or {}).get("kind") or "empty").lower()
     if kind == "import":
@@ -985,17 +996,18 @@ def restore_scene_object(rec):
                 wp._obj_seq = max(wp._obj_seq, int(oid[1:]))
         except Exception:
             pass
+    r = rec or {}
     obj = {
         "id": oid,
         "kind": kind,
         "name": str((rec or {}).get("name") or kind),
-        "pos": np.asarray((rec or {}).get("pos") or [1, 0, 0.2], dtype=float).reshape(3),
-        "wxyz": np.asarray((rec or {}).get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4),
-        "local_pos": np.asarray((rec or {}).get("local_pos") or (rec or {}).get("pos") or [1, 0, 0.2], dtype=float).reshape(3),
-        "local_wxyz": np.asarray((rec or {}).get("local_wxyz") or (rec or {}).get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4),
+        "pos": _vec_or(r.get("pos"), [1, 0, 0.2], 3),
+        "wxyz": _vec_or(r.get("wxyz"), [1, 0, 0, 0], 4),
+        "local_pos": _vec_or(r.get("local_pos"), _vec_or(r.get("pos"), [1, 0, 0.2], 3), 3),
+        "local_wxyz": _vec_or(r.get("local_wxyz"), _vec_or(r.get("wxyz"), [1, 0, 0, 0], 4), 4),
         "parent_id": (rec or {}).get("parent_id"),
         "space": (rec or {}).get("space") or "world",
-        "scale": np.asarray((rec or {}).get("scale") or [1, 1, 1], dtype=float).reshape(3),
+        "scale": _vec_or(r.get("scale"), [1, 1, 1], 3),
         "handle": None,
         "gizmo": None,
         "camera": dict((rec or {}).get("camera") or {}) if ((rec or {}).get("camera") or kind == "camera") else None,

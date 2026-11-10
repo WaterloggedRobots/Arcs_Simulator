@@ -317,13 +317,13 @@ def initial_angles(oid):
 FRAME_EPS = 1e-4
 
 
-def insert_frame(oid, t, angles=None):
+def insert_frame(oid, t, angles=None, reading=False):
     """Frame at t with the given (or the target) angles; replaces one at t."""
     obj = _find(oid)
     if obj is None:
         return False
     g = obj.setdefault("gimbal", clean_gimbal(None))
-    if angles is not None:
+    if angles is not None and reading:
         # A reading (+/-180): J1 nearest the track (or target) there, not turns back.
         here = angles_at(keys_for(oid), t) or g.get("target")
         angles = list(angles)
@@ -337,6 +337,17 @@ def insert_frame(oid, t, angles=None):
     tr["keys"] = clean_keys(keys)
     _note_keys_changed(oid)
     return True
+
+
+def restore_track_keys(tracks):
+    """Undo / redo: every gimbal's frames as in the snapshot {track id: keys}."""
+    for obj in gimbal_objects():
+        oid = obj.get("id")
+        tr = _track(oid, create=True)
+        keys = clean_keys(tracks.get(track_id(oid)) or [])
+        if keys != clean_keys(tr.get("keys")):
+            tr["keys"] = keys
+            _note_keys_changed(oid)  # the target follows the restored frames
 
 
 def delete_frame(oid, t=None, index=None):

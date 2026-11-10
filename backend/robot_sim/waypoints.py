@@ -551,9 +551,15 @@ def _snapshot():
         arm_base = {"pos": bpos, "wxyz": bq}
     except Exception:
         arm_base = None
+    # Gimbal frames (they live on the extra tracks).
+    gtracks = {}
+    for tr in list(extra_tracks or []):
+        if isinstance(tr, dict) and str(tr.get("id") or "").startswith(gimbal.TRACK_PREFIX):
+            gtracks[str(tr.get("id"))] = [dict(k) for k in (tr.get("keys") or []) if isinstance(k, dict)]
     return {
         "waypoints": snaps,
         "selected_idx": selected_idx,
+        "gimbal_tracks": gtracks,
         "objects": objs,
         "selected_obj_id": selected_obj_id,
         "arm_base": arm_base,
@@ -615,7 +621,19 @@ def _restore_objects_snapshot(doc):
     want = list(doc.get("objects") or [])
     have = [str(o.get("id")) for o in scene_objects]
     want_ids = [str(o.get("id")) for o in want]
-    if have == want_ids and len(have) == len(want):
+    def _same_place(o, rec):
+        # Pose, name, parent and camera unchanged: the quick path is enough.
+        try:
+            return (str(o.get("name") or "") == str(rec.get("name") or "")
+                    and str(o.get("parent_id") or "") == str(rec.get("parent_id") or "")
+                    and (o.get("space") or "world") == (rec.get("space") or "world")
+                    and np.allclose(np.asarray(o.get("pos", [0, 0, 0]), float), np.asarray(rec.get("pos", [0, 0, 0]), float), atol=1e-7)
+                    and np.allclose(np.asarray(o.get("wxyz", [1, 0, 0, 0]), float), np.asarray(rec.get("wxyz", [1, 0, 0, 0]), float), atol=1e-7)
+                    and np.allclose(np.asarray(o.get("scale", [1, 1, 1]), float), np.asarray(rec.get("scale", [1, 1, 1]), float), atol=1e-7)
+                    and (o.get("camera") or None) == (rec.get("camera") or None))
+        except Exception:
+            return False
+    if have == want_ids and len(have) == len(want) and all(_same_place(o, r) for o, r in zip(scene_objects, want)):
         selected_obj_id = doc.get("selected_obj_id")
         for o, rec in zip(scene_objects, want):
             o["offset"] = offsets.clean_offset(rec.get("offset"))
@@ -626,6 +644,8 @@ def _restore_objects_snapshot(doc):
                 o["gimbal"] = gimbal.clean_gimbal(rec.get("gimbal"))
         offsets.refresh_offset_viz()
         colliders.on_selection_changed()
+        if "gimbal_tracks" in doc:
+            gimbal.restore_track_keys(doc.get("gimbal_tracks") or {})
         return
     try:
         simulatorview.clear_scene_objects()
@@ -647,6 +667,8 @@ def _restore_objects_snapshot(doc):
         simulatorview.sync_camera_tracks()
     except Exception:
         pass
+    if "gimbal_tracks" in doc:
+        gimbal.restore_track_keys(doc.get("gimbal_tracks") or {})
 
 
 def _rebuild_from_snapshot(doc):

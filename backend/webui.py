@@ -826,6 +826,8 @@ def api_object_props():
                 except Exception:
                     pass
         elif hasattr(wp, "update_scene_object"):
+            # Properties edits are undo steps too (gizmo drags already are).
+            wp._push_history()
             wp.update_scene_object(
                 oid,
                 name=data.get("name"),
@@ -1722,6 +1724,11 @@ def api_gimbal():
     if wp.gimbal._find(oid) is None:
         return jsonify({"ok": False, "error": "no such gimbal"}), 404
     ok = True
+    # One undo step per edit of the gimbal's settings, target or frames (without
+    # one, Undo went back past them to before the gimbal was added).
+    if (any(data.get(k) is not None for k in ("cfg", "target", "look", "world_target"))
+            or act in ("use_read", "insert_frame", "delete_frame")) and not _edits_locked():
+        wp._push_history()
     if any(data.get(k) is not None for k in ("cfg", "target", "look")):
         ok = wp.gimbal.update(oid, data)
     if data.get("world_target") is not None:
@@ -1740,7 +1747,9 @@ def api_gimbal():
         st = wp.gimbal.status(oid) or {}
         ok = st.get("read") is not None
         if ok:
-            wp.gimbal.update(oid, {"target": st.get("read")})
+            read = list(st.get("read"))
+            read[0] = wp.gimbal.unwrap_yaw(read[0], (st.get("target") or [None])[0])
+            wp.gimbal.update(oid, {"target": read})
     elif act == "insert_frame":
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
@@ -1754,7 +1763,7 @@ def api_gimbal():
             if angles is None:
                 return jsonify({"ok": False, "error": "the real gimbal is not reading",
                                 "gimbal": wp.gimbal.status(oid)})
-        ok = wp.gimbal.insert_frame(oid, t, angles)
+        ok = wp.gimbal.insert_frame(oid, t, angles, reading=angles is not None)
     elif act == "delete_frame":
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
