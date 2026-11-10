@@ -957,10 +957,16 @@ def _calib_finish(obj, cfg, rt):
                 raw = json.load(f)
             was = gmodel.parse(raw)["joints"]
             # Start from the model as it was before any recalibration, so a bad
-            # result doesn't steer the next one.
-            if os.path.exists(path + ".orig"):
-                with open(path + ".orig", "r", encoding="utf-8") as f:
-                    raw["joints"] = json.load(f).get("joints") or raw["joints"]
+            # result doesn't steer the next one. A file never recalibrated (new,
+            # or restored / updated by hand) becomes the new .orig.
+            import shutil
+            if not any(j.get("calibrated") for j in raw.get("joints") or []) or not os.path.exists(path + ".orig"):
+                shutil.copyfile(path, path + ".orig")
+            with open(path + ".orig", "r", encoding="utf-8") as f:
+                ojs = json.load(f).get("joints") or raw["joints"]
+            # J3's direction isn't fitted: it is always the current file's (edited by hand).
+            cur3 = next((j.get("sign", 1) for j in raw["joints"] if j.get("sdk") == "pitch"), 1)
+            raw["joints"] = [dict(j, sign=cur3) if j.get("sdk") == "pitch" else j for j in ojs]
             fit = gmodel.fit_calibration(raw, samples)
             if log_path:
                 with open(log_path, "r", encoding="utf-8") as f:

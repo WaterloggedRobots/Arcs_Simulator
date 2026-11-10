@@ -9,7 +9,7 @@
   "joints": [
     {"name": "J1", "sdk": "yaw", "about": "pan motor, handle axis", "axis": [0, 0, -1], "point": [0, 0, -110], "range": [-180, 180]},
     {"name": "J2", "sdk": "roll", "about": "roll motor, behind the camera. Not at right angles to J1: tilted 56.4 deg from the lens line towards the hand end (34 deg from the handle axis), fitted to two level-camera readings with J1, J2 near 180 (hand end up: J 173.5 / -179.0 / -69.4, world pitch -2.2, roll 1.2; J 178.1 / -178.8 / -71.1). Square to J1 would be [1, 0, 0].", "axis": [0.553, 0, 0.833], "point": [0, 0, -110], "range": [-95, 240]},
-    {"name": "J3", "sdk": "pitch", "about": "tilt motor, beside the camera; +J3 tilts the lens towards the hand end, -90 looks down the handle", "axis": [0, -1, 0], "point": [0, 0, -110], "range": [-112, 214]}
+    {"name": "J3", "sdk": "pitch", "about": "tilt motor, beside the camera. The RS 4's J3 reading runs the other way to this axis (sign -1: a rising J3 reading tilts the lens away from the hand end); the offset keeps the level-camera reading (J3 -69.4) level. Recalibrate refits the offset but not the sign: if the Sim gimbal tilts up when the real one tilts down, flip the sign.", "axis": [0, -1, 0], "point": [0, 0, -110], "range": [-112, 214], "sign": -1, "offset": -138.8}
   ],
   "camera": {"about": "camera centre (on all three axes when balanced) and its lens and right directions at home. No camera body is drawn: the Gimbal's Camera object sits here.", "origin": [0, 0, -110], "lens": [1, 0, 0], "right": [0, -1, 0]},
   "parts": [
