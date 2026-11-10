@@ -1,0 +1,364 @@
+"""Gimbal models from files: joint axes, offsets and boxes, nothing built in.
+
+A model is a JSON file in user_files/gimbal_models/ (see dji_rs4.json). The
+Gimbal object stores only the file name (cfg["model"]); swapping a gimbal or
+correcting a measurement means picking or editing a file. Files are re-read
+when they change on disk.
+
+Format (lengths in mm, in the HANDLE's frame = the Gimbal object's mount,
+with all joints at 0):
+
+    name, about, driver           text; driver = default driver script
+    joints: [ {name, sdk, axis, point, range, about}, ... ]
+        in order from the handle. axis: direction (any length, need not be at
+        right angles to the others); a positive angle turns right-handed
+        about it. point: a point on the axis. sdk: which value of the gimbal
+        reading / frames it is ("yaw", "roll" or "pitch" for DJI R SDK
+        joints J1-J3).
+    aim_joints: [name, name]      joints Look At may turn (others held at 0)
+    camera: {origin, lens, right, size}
+        camera centre, lens and right directions with all joints at 0, and
+        the body's length (along the lens), width and height.
+    parts: [ ... ]                what to draw, each on a link:
+        link 0 = the handle (drawn once, grey), link k = moves with joint k
+        {from, to, width}        a bar between two points
+        {center, size}           a box, sides along x / y / z
+        {center, radius}         a sphere
+
+Kinematics: product of exponentials. Joint k with unit axis w and point p
+turns by angle a: R = rot(w, a), translation p - R p, applied in the frame
+of the joint before it. The camera frame (z = lens, x = right, y = image
+down) sits at camera.origin on the last joint.
+"""
+import json
+import math
+import os
+
+import numpy as np
+
+import app_paths
+
+SDK_KEYS = ("yaw", "roll", "pitch")
+DEFAULT_FILE = "dji_rs4.json"
+_cache = {}  # path -> (mtime, model or None, error)
+
+
+# ---------------------------------------------------------------------------
+# Small maths (wxyz quaternions)
+# ---------------------------------------------------------------------------
+def qmul(a, b):
+    w0, x0, y0, z0 = a
+    w1, x1, y1, z1 = b
+    return np.array([w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
+                     w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
+                     w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
+                     w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1])
+
+
+def qrot(q, v):
+    w, x, y, z = q
+    v = np.asarray(v, dtype=float)
+    uv = 2.0 * np.cross([x, y, z], v)
+    return v + w * uv + np.cross([x, y, z], uv)
+
+
+def qinv(q):
+    return np.array([q[0], -q[1], -q[2], -q[3]])
+
+
+def qaxis(axis, deg):
+    a = np.asarray(axis, dtype=float)
+    a = a / (np.linalg.norm(a) or 1.0)
+    h = math.radians(float(deg)) * 0.5
+    return np.concatenate([[math.cos(h)], a * math.sin(h)])
+
+
+def qfrom_matrix(m):
+    m = np.asarray(m, dtype=float)
+    t = m[0, 0] + m[1, 1] + m[2, 2]
+    if t > 0:
+        s = math.sqrt(t + 1.0) * 2
+        q = [0.25 * s, (m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2
+        q = [(m[2, 1] - m[1, 2]) / s, 0.25 * s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s]
+    elif m[1, 1] > m[2, 2]:
+        s = math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2
+        q = [(m[0, 2] - m[2, 0]) / s, (m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s]
+    else:
+        s = math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2
+        q = [(m[1, 0] - m[0, 1]) / s, (m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s]
+    q = np.asarray(q)
+    return q / (np.linalg.norm(q) or 1.0)
+
+
+def qbetween(a, b):
+    """Rotation turning direction a onto direction b."""
+    a = np.asarray(a, float) / (np.linalg.norm(a) or 1.0)
+    b = np.asarray(b, float) / (np.linalg.norm(b) or 1.0)
+    c = float(np.dot(a, b))
+    if c < -0.999999:
+        perp = np.cross(a, [1, 0, 0])
+        if np.linalg.norm(perp) < 1e-6:
+            perp = np.cross(a, [0, 1, 0])
+        return qaxis(perp, 180.0)
+    v = np.cross(a, b)
+    q = np.array([1.0 + c, v[0], v[1], v[2]])
+    return q / np.linalg.norm(q)
+
+
+# ---------------------------------------------------------------------------
+# Files
+# ---------------------------------------------------------------------------
+def models_dir():
+    return app_paths.GIMBAL_MODELS_DIR
+
+
+def list_models():
+    d = models_dir()
+    try:
+        return sorted(f for f in os.listdir(d) if f.lower().endswith(".json"))
+    except OSError:
+        return []
+
+
+def path_of(name):
+    name = str(name or "").strip() or DEFAULT_FILE
+    return name if os.path.isabs(name) else os.path.join(str(models_dir()), name)
+
+
+def _vec(v, n=3, scale=1.0, what="value"):
+    a = [float(x) for x in list(v)]
+    if len(a) != n:
+        raise ValueError("%s needs %d numbers" % (what, n))
+    return np.asarray(a) * scale
+
+
+def parse(raw):
+    """Model dict (metres, unit axes) from a file's JSON. Raises ValueError."""
+    mm = 0.001
+    joints = []
+    for i, j in enumerate(raw.get("joints") or []):
+        axis = _vec(j.get("axis"), what="joint %d axis" % (i + 1))
+        if np.linalg.norm(axis) < 1e-9:
+            raise ValueError("joint %d axis is zero" % (i + 1))
+        sdk = str(j.get("sdk") or SDK_KEYS[min(i, 2)])
+        if sdk not in SDK_KEYS:
+            raise ValueError("joint %d sdk must be one of %s" % (i + 1, ", ".join(SDK_KEYS)))
+        rng = j.get("range") or [-180, 180]
+        joints.append({"name": str(j.get("name") or "J%d" % (i + 1)), "sdk": sdk,
+                       "axis": axis / np.linalg.norm(axis),
+                       "point": _vec(j.get("point") or [0, 0, 0], scale=mm, what="joint %d point" % (i + 1)),
+                       "range": [float(rng[0]), float(rng[1])]})
+    if not joints:
+        raise ValueError("no joints")
+    cam = raw.get("camera") or {}
+    lens = _vec(cam.get("lens") or [1, 0, 0], what="camera lens")
+    right = _vec(cam.get("right") or [0, -1, 0], what="camera right")
+    lens = lens / (np.linalg.norm(lens) or 1.0)
+    right = right - lens * float(np.dot(right, lens))
+    if np.linalg.norm(right) < 1e-6:
+        raise ValueError("camera right is along the lens")
+    right = right / np.linalg.norm(right)
+    down = np.cross(lens, right)
+    cam_q = qfrom_matrix(np.column_stack([right, down, lens]))  # camera x, y, z
+    names = [j["name"] for j in joints]
+    aim = [n for n in (raw.get("aim_joints") or [names[0], names[-1]]) if n in names][:2]
+    parts = []
+    for p in raw.get("parts") or []:
+        link = int(p.get("link", 0))
+        if not 0 <= link <= len(joints):
+            raise ValueError("part %r: link %d out of range" % (p.get("name"), link))
+        rec = {"link": link, "name": str(p.get("name") or "part")}
+        if "from" in p and "to" in p:
+            rec.update(kind="bar", a=_vec(p["from"], scale=mm), b=_vec(p["to"], scale=mm),
+                       width=float(p.get("width") or 20) * mm)
+        elif "radius" in p:
+            rec.update(kind="sphere", center=_vec(p.get("center") or [0, 0, 0], scale=mm),
+                       radius=float(p["radius"]) * mm)
+        else:
+            rec.update(kind="box", center=_vec(p.get("center") or [0, 0, 0], scale=mm),
+                       size=_vec(p.get("size") or [20, 20, 20], scale=mm))
+        parts.append(rec)
+    return {
+        "name": str(raw.get("name") or "gimbal"),
+        "driver": str(raw.get("driver") or ""),
+        "joints": joints,
+        "aim": [names.index(n) for n in aim],
+        "cam_origin": _vec(cam.get("origin") or [0, 0, 0], scale=mm, what="camera origin"),
+        "cam_q": cam_q,
+        "cam_size": _vec(cam.get("size") or [120, 70, 85], scale=mm, what="camera size"),
+        "parts": parts,
+    }
+
+
+# A gimbal with no usable model file: three plain axes through the mount
+# origin, no parts, so the sandbox still shows something and says why.
+_FALLBACK = parse({"joints": [{"sdk": "yaw", "axis": [0, 0, -1]}, {"sdk": "roll", "axis": [1, 0, 0]},
+                              {"sdk": "pitch", "axis": [0, -1, 0]}],
+                   "camera": {"lens": [1, 0, 0], "right": [0, -1, 0], "size": [60, 40, 40]}})
+_FALLBACK["name"] = "no model"
+
+
+def load(name):
+    """(model, error, mtime). Re-reads the file when it changes; on any
+    problem returns the fallback model and the error text."""
+    path = path_of(name)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return _FALLBACK, "model file not found: %s" % path, None
+    hit = _cache.get(path)
+    if hit and hit[0] == mtime:
+        return (hit[1] or _FALLBACK), hit[2], mtime
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            model = parse(json.load(f))
+        err = ""
+    except Exception as e:
+        model, err = None, "model %s: %s" % (os.path.basename(path), e)
+        print("gimbal", err)
+    _cache[path] = (mtime, model, err)
+    return (model or _FALLBACK), err, mtime
+
+
+# ---------------------------------------------------------------------------
+# Kinematics
+# ---------------------------------------------------------------------------
+def joint_values(model, target):
+    """Joint angles in model order from a stored [yaw, roll, pitch] list."""
+    t = (list(target or [0, 0, 0]) + [0, 0, 0])[:3]
+    return [float(t[SDK_KEYS.index(j["sdk"])]) for j in model["joints"]]
+
+
+def joint_local(model, k, deg):
+    """(wxyz, position) of joint k's node in the frame of the one before it."""
+    j = model["joints"][k]
+    q = qaxis(j["axis"], deg)
+    return q, j["point"] - qrot(q, j["point"])
+
+
+def camera_pose(model, angles):
+    """Camera (wxyz, position) in the handle frame for joint angles (model order)."""
+    q = np.array([1.0, 0, 0, 0])
+    p = np.zeros(3)
+    for k, a in enumerate(angles):
+        lq, lp = joint_local(model, k, a)
+        p = p + qrot(q, lp)
+        q = qmul(q, lq)
+    return qmul(q, model["cam_q"]), p + qrot(q, model["cam_origin"])
+
+
+def aim(model, mount_pos, mount_wxyz, world_target, prev):
+    """Stored [yaw, roll, pitch] that point the lens at world_target, turning
+    only the model's aim joints (from prev; the others at 0). None if the
+    target is at the camera."""
+    from scipy.optimize import minimize
+    tgt = qrot(qinv(np.asarray(mount_wxyz, float)), np.asarray(world_target, float) - np.asarray(mount_pos, float))
+    base = joint_values(model, prev)
+    ai = model["aim"]
+    angles0 = [0.0] * len(model["joints"])
+
+    def cost(x):
+        a = list(angles0)
+        for i, k in enumerate(ai):
+            a[k] = x[i]
+        q, p = camera_pose(model, a)
+        d = tgt - p
+        n = np.linalg.norm(d)
+        if n < 1e-6:
+            return 0.0
+        return 1.0 - float(np.dot(qrot(q, [0, 0, 1]), d / n))
+
+    _, p0 = camera_pose(model, angles0)
+    if np.linalg.norm(tgt - p0) < 1e-6:
+        return None
+    starts = [[base[k] for k in ai]] + [[a, b] for a in (-135, -45, 45, 135) for b in (-60, 0, 60)]
+    best = None
+    for s in starts:
+        r = minimize(cost, np.asarray(s[:len(ai)], float), method="Nelder-Mead",
+                     options={"xatol": 0.01, "fatol": 1e-9, "maxiter": 400})
+        # Prefer the solution nearest the previous angles among equally good ones.
+        dist = sum(abs(((r.x[i] - base[k]) + 180) % 360 - 180) for i, k in enumerate(ai))
+        key = (round(float(r.fun), 6), dist)
+        if best is None or key < best[0]:
+            best = (key, r.x)
+        if r.fun < 1e-8 and s is starts[0]:
+            break
+    a = list(angles0)
+    for i, k in enumerate(ai):
+        a[k] = ((float(best[1][i]) + 180) % 360) - 180
+    out = [0.0, 0.0, 0.0]
+    for k, j in enumerate(model["joints"]):
+        out[SDK_KEYS.index(j["sdk"])] = a[k]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Scene (viser)
+# ---------------------------------------------------------------------------
+def _add_part(server, name, part, rgb, opacity, on_click):
+    if part["kind"] == "bar":
+        a, b = part["a"], part["b"]
+        d = b - a
+        L = float(np.linalg.norm(d)) or 1e-4
+        h = server.scene.add_box(name=name, dimensions=(L, part["width"], part["width"]), color=rgb,
+                                 wxyz=tuple(qbetween([1, 0, 0], d)), position=tuple((a + b) / 2.0))
+    elif part["kind"] == "sphere":
+        h = server.scene.add_icosphere(name=name, radius=part["radius"], color=rgb, position=tuple(part["center"]))
+    else:
+        h = server.scene.add_box(name=name, dimensions=tuple(part["size"]), color=rgb, position=tuple(part["center"]))
+    try:
+        h.opacity = opacity
+    except Exception:
+        pass
+    if on_click is not None:
+        try:
+            h.on_click(on_click)
+        except Exception:
+            pass
+    return h
+
+
+def build_base(server, name, model, rgb, on_click):
+    """Link-0 parts (the handle) under `name`; returns the root node."""
+    root = server.scene.add_frame(name, show_axes=False)
+    for i, part in enumerate(model["parts"]):
+        if part["link"] == 0:
+            _add_part(server, "%s/p%d" % (name, i), part, rgb, 0.7, on_click)
+    return root
+
+
+def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
+    """One twin: nested joint nodes with their link parts, the camera body and
+    lens / right arrows. Returns (root, [joint nodes])."""
+    root = server.scene.add_frame(name, show_axes=False)
+    nodes = []
+    path = name
+    for k in range(len(model["joints"])):
+        path = "%s/j%d" % (path, k + 1)
+        q, p = joint_local(model, k, angles[k] if k < len(angles) else 0.0)
+        nodes.append(server.scene.add_frame(path, show_axes=False, wxyz=tuple(q), position=tuple(p)))
+        for i, part in enumerate(model["parts"]):
+            if part["link"] == k + 1:
+                _add_part(server, "%s/p%d" % (path, i), part, rgb, 0.55, on_click)
+    cam = path + "/camera"
+    server.scene.add_frame(cam, show_axes=False, wxyz=tuple(model["cam_q"]), position=tuple(model["cam_origin"]))
+    _add_part(server, cam + "/body", {"kind": "box", "center": np.zeros(3), "size": model["cam_size"][[1, 2, 0]]},
+              rgb, 0.6, on_click)  # camera frame: x right (width), y down (height), z lens (length)
+    for sub, axis, length, shaft, head in (("lens", 2, arrow_len, 0.007, 0.018), ("side", 0, arrow_len * 0.4, 0.005, 0.012)):
+        pts = np.zeros((1, 2, 3), dtype=np.float32)
+        pts[0, 1, axis] = float(length)
+        server.scene.add_arrows(name="%s/%s" % (cam, sub), points=pts, colors=np.asarray(rgb, dtype=np.uint8).reshape(3),
+                                shaft_radius=shaft, head_radius=head, head_length=head * 2.2)
+    return root, nodes
+
+
+def pose_twin(model, nodes, angles):
+    for k, node in enumerate(nodes):
+        q, p = joint_local(model, k, angles[k] if k < len(angles) else 0.0)
+        try:
+            node.wxyz = tuple(float(v) for v in q)
+            node.position = tuple(float(v) for v in p)
+        except Exception:
+            pass

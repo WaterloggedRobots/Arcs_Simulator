@@ -1167,7 +1167,7 @@ def delete_scene_object(oid):
         _colliders().forget_owner(oid)
     except Exception as e:
         print("delete: collider cleanup failed", e)
-    for key in ("gizmo", "sim_head", "real_head", "handle", "frustum"):
+    for key in ("gizmo", "sim_head", "real_head", "base_root", "handle", "frustum"):
         h = obj.get(key)
         if h is not None:
             try:

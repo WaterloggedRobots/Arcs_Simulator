@@ -3,23 +3,24 @@
 A Gimbal is one scene object (kind "gimbal") with two twins under it, like the
 Aubo Arm's Sim and Real cursors (list rows "<oid>#sim" and "<oid>#real"):
 
-- the mount: the gimbal's HANDLE (grey bar + small front arrow) at the
-  object's transform. The user moves it like any other object (gizmo,
-  Properties, parenting): it stores the pose of the handle.
-- the Sim gimbal: a large blue waypoint-like marker (sphere, long lens arrow,
-  side arrow) parented to the mount, rotated by the target angles (the track).
-- the Real gimbal: the same in orange, rotated by the angles read from the
-  gimbal. It is shown only while reading the angles works. Reading is tried
+- the mount: the gimbal's HANDLE at the object's transform. The user moves
+  it like any other object (gizmo, Properties, parenting): it stores the
+  pose of the handle.
+- the Sim gimbal: the gimbal's moving parts and camera in blue, posed by the
+  target angles (the track).
+- the Real gimbal: the same in orange, posed by the angles read from the
+  gimbal.
+
+Shape, joint axes and offsets come from a MODEL FILE (cfg["model"], in
+user_files/gimbal_models/, read by gimbal_model.py); nothing about a
+particular gimbal is in the code. It is shown only while reading the angles works. Reading is tried
   all the time (reconnecting every 2 s).
 
 Angles are the gimbal's joint angles in degrees: J1 (handle motor), J2
 (middle motor), J3 (camera motor); the SDK and the saved data call them
-yaw, roll, pitch. They give the camera's orientation relative to the handle
-(see head_wxyz): in the mount's frame the handle runs along z, hand end at +z
-(up with the mount unrotated) and camera end at -z (down). With J1-J3 = 0 the
-camera looks along the mount's +x (the front arrow), at right angles to the
-handle; J3 = -90 points it along the handle towards the camera end, as the
-RS4 reads; J1 turns the camera around the handle axis.
+yaw, roll, pitch. They give the camera's pose relative to the handle through
+the model's joint axes (the RS 4 file: handle along z, hand end up, camera
+looking along +x at 0, J3 = -90 looking down the handle).
 
 Timeline: every gimbal gets a track "gimbal_<id>" with frames
 {t, yaw, roll, pitch}. The target follows the track (linear between frames)
@@ -52,8 +53,6 @@ RECONNECT_S = 2.0
 MAX_MOVE_S = 25.0  # the SDK's time_for_action tops out at 25.5 s
 SIM_RGB = (80, 200, 255)    # as the Sim cursor
 REAL_RGB = (255, 180, 80)   # as the Real cursor
-TWIN_R = {"sim": 0.034, "real": 0.03}
-ARROW_LEN = 0.24
 PARTS = ("sim", "real")
 AXES = ("yaw", "roll", "pitch")
 # Stored J1 / J2 / J3 (keys yaw / roll / pitch) are kept as read, in -180..180.
@@ -64,7 +63,8 @@ LIMITS = {"yaw": (-180.0, 180.0), "roll": (-180.0, 180.0), "pitch": (-180.0, 180
 
 DEFAULT_CFG = {
     "drive": True,             # send moves (Move, initial pose, Run); reading never stops
-    "script": "",              # driver script; "" = the bundled RS4 script
+    "script": "",              # driver script; "" = the model's driver (rs4_can.py)
+    "model": "",               # model file in user_files/gimbal_models; "" = dji_rs4.json
     "interface": "canalystii",  # python-can interface
     "channel": 0,
     "bitrate": 1000000,
@@ -107,6 +107,7 @@ def clean_gimbal(rec):
             cfg[k] = src[k]
     cfg["drive"] = bool(cfg["drive"])
     cfg["script"] = str(cfg["script"] or "")
+    cfg["model"] = str(cfg["model"] or "")
     cfg["interface"] = str(cfg["interface"] or "canalystii")
     cfg["channel"] = int(_f(cfg["channel"], 0))
     cfg["bitrate"] = int(_f(cfg["bitrate"], 1000000))
@@ -162,23 +163,11 @@ def look_target_pos(oid, name):
 
 
 def aim_angles(obj, world_pos, prev=None):
-    """(J1, J2, J3) that point the lens at world_pos, with J2 = 0 (see head_wxyz).
-    In the mount's (handle's) frame the lens is
-    (cos J3 cos J1, -cos J3 sin J1, sin J3).
-    Straight along the handle axis J1 keeps its previous value (gimbal lock)."""
-    import simulatorview as sv
-    m = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float).reshape(3)
-    q = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
-    d = sv._qrot(sv._qinv(q), np.asarray(world_pos, dtype=float).reshape(3) - m)
-    n = float(np.linalg.norm(d))
-    if n < 1e-6:
-        return None
-    d = d / n
-    prev = list(prev or [0.0, 0.0, 0.0])
-    j3 = math.degrees(math.asin(max(-1.0, min(1.0, d[2]))))
-    flat = math.hypot(d[0], d[1])
-    j1 = math.degrees(math.atan2(-d[1], d[0])) if flat > 1e-4 else _f(prev[0])
-    return clamp_angles([j1, 0.0, j3])
+    """Stored [yaw, roll, pitch] pointing the lens at world_pos, turning only
+    the model's aim joints (gimbal_model.aim). None if the target is at the camera."""
+    model, _ = model_of(obj)
+    out = gmodel.aim(model, obj.get("pos", [0, 0, 0]), obj.get("wxyz", [1, 0, 0, 0]), world_pos, prev)
+    return None if out is None else clamp_angles(out)
 
 
 def is_gimbal(obj):
@@ -336,49 +325,30 @@ def _note_keys_changed(oid):
 
 
 # ---------------------------------------------------------------------------
-# Scene: the head cube under the mount empty
+# Scene: the gimbal drawn from its model file (gimbal_model.py)
 # ---------------------------------------------------------------------------
+import gimbal_model as gmodel  # noqa: E402
+
+HANDLE_RGB = (150, 150, 158)
+
+
 def _quat_axis(axis, deg):
-    h = math.radians(_f(deg)) * 0.5
-    s = math.sin(h)
-    return np.array([math.cos(h), axis[0] * s, axis[1] * s, axis[2] * s], dtype=float)
+    return gmodel.qaxis(axis, deg)
 
 
-def _quat_from_matrix(m):
-    m = np.asarray(m, dtype=float)
-    w = math.sqrt(max(0.0, 1.0 + m[0, 0] + m[1, 1] + m[2, 2])) / 2.0
-    if w > 1e-6:
-        return np.array([w, (m[2, 1] - m[1, 2]) / (4 * w), (m[0, 2] - m[2, 0]) / (4 * w),
-                         (m[1, 0] - m[0, 1]) / (4 * w)])
-    i = int(np.argmax(np.diag(m)))
-    j, k = (i + 1) % 3, (i + 2) % 3
-    v = [0.0, 0.0, 0.0]
-    v[i] = math.sqrt(max(0.0, 1.0 + m[i, i] - m[j, j] - m[k, k])) / 2.0
-    v[j] = (m[j, i] + m[i, j]) / (4 * v[i])
-    v[k] = (m[k, i] + m[i, k]) / (4 * v[i])
-    return np.array([(m[k, j] - m[j, k]) / (4 * v[i])] + v)
+def model_of(obj):
+    """(model, error) for a gimbal object, from cfg["model"] (a file name)."""
+    cfg = ((obj or {}).get("gimbal") or {}).get("cfg") or {}
+    m, err, _ = gmodel.load(cfg.get("model"))
+    return m, err
 
 
-# The mount is the HANDLE. In its frame the handle runs along z, the hand end
-# at +z (up with the mount unrotated) and the camera end at -z (down).
-# The twins' own frame is the camera's: z = lens, x = right, y = image down.
-# With J1-J3 = 0 the camera looks along the mount's +x (front), right = -y,
-# image down = -z (towards the camera end): _BASE maps the twin's x, y, z to
-# the mount's -y, -z, +x. Then, in motor order from the handle:
-#   J1 about the handle axis (twin y), J2 about the lens (z), J3 about the
-#   camera's right (x). J3 = -90 turns the lens to the handle's camera end
-#   (mount -z), as the RS4 reads with the camera looking along the handle.
-_BASE = _quat_from_matrix([[0, 0, 1], [-1, 0, 0], [0, -1, 0]])
-
-
-def head_wxyz(angles):
-    """Camera (twin) rotation relative to the handle (mount) for (J1, J2, J3) in degrees."""
-    import simulatorview as sv
-    j1, j2, j3 = (list(angles or [0, 0, 0]) + [0, 0, 0])[:3]
-    q = sv._qmul(_BASE, sv._qmul(sv._qmul(_quat_axis((0, 1, 0), j1), _quat_axis((0, 0, 1), j2)),
-                                 _quat_axis((1, 0, 0), j3)))
-    n = float(np.linalg.norm(q)) or 1.0
-    return q / n
+def head_wxyz(angles, model=None):
+    """Camera rotation relative to the handle for stored [yaw, roll, pitch]."""
+    if model is None:
+        model, _, _ = gmodel.load(None)
+    q, _ = gmodel.camera_pose(model, gmodel.joint_values(model, angles))
+    return q
 
 
 def part_id(oid, part):
@@ -391,106 +361,97 @@ def split_part(oid):
     return (base, part) if part in PARTS else (str(oid or ""), None)
 
 
-def _arrow(name, length, shaft, head, rgb, axis):
-    pts = np.zeros((1, 2, 3), dtype=np.float32)
-    pts[0, 1, axis] = float(length)
-    return wp.server.scene.add_arrows(
-        name=name, points=pts, colors=np.asarray(rgb, dtype=np.uint8).reshape(3),
-        shaft_radius=shaft, head_radius=head, head_length=head * 2.2)
-
-
-def _spawn_twin(obj, part, angles):
-    rgb = SIM_RGB if part == "sim" else REAL_RGB
-    name = "/obj_%s/mesh/%s" % (obj["id"], part)
-    sph = wp.server.scene.add_icosphere(
-        name=name, radius=TWIN_R[part], color=rgb,
-        wxyz=tuple(float(v) for v in head_wxyz(angles)), position=(0.0, 0.0, 0.0))
-    try:
-        sph.opacity = 0.55
-    except Exception:
-        pass
-    # Lens direction (z) and right (x), large like a waypoint's.
-    _arrow(name + "/lens", ARROW_LEN, 0.007, 0.018, rgb, 2)
-    _arrow(name + "/side", ARROW_LEN * 0.4, 0.005, 0.012, rgb, 0)
-    oid = obj["id"]
-
-    def _on_click(_e=None, _id=part_id(oid, part)):
+def _clicker(oid, part=None):
+    def _on_click(_e=None):
         import simulatorview as sv
-        sv.select_scene_object(_id)
-    try:
-        sph.on_click(_on_click)
-    except Exception:
-        pass
-    return sph
+        if part:
+            sv.select_scene_object(part_id(oid, part))
+        else:
+            mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
+            sv.select_scene_object(oid, mode=mode)
+    return _on_click
 
 
-HANDLE_LEN = 0.16
-HANDLE_W = 0.032
-HANDLE_RGB = (150, 150, 158)
+def _mount_name(obj):
+    return "/obj_%s/mesh" % obj["id"]
 
 
-def spawn_mount_marker(obj, name):
-    """The mount drawn as the handle: a grey bar from the gimbal centre up the
-    mount's +z to the hand end, and a short arrow along +x (the camera's front
-    with J1-J3 at 0). Children of the mount node; a click selects the gimbal."""
+def spawn_mount_marker(obj, name=None):
+    """The handle (the model's link-0 parts), under the mount node."""
     if wp.server is None:
         return
-    oid = obj["id"]
-
-    def _on_click(_e=None, _oid=oid):
-        import simulatorview as sv
-        mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
-        sv.select_scene_object(_oid, mode=mode)
-    try:
-        bar = wp.server.scene.add_box(
-            name=name + "/handle", dimensions=(HANDLE_W, HANDLE_W, HANDLE_LEN), color=HANDLE_RGB,
-            position=(0.0, 0.0, 0.03 + HANDLE_LEN / 2.0))
+    model, _ = model_of(obj)
+    old = obj.get("base_root")
+    if old is not None:
         try:
-            bar.opacity = 0.7
+            old.remove()
         except Exception:
             pass
-        bar.on_click(_on_click)
-        cap = wp.server.scene.add_icosphere(
-            name=name + "/hand_end", radius=HANDLE_W * 0.75, color=HANDLE_RGB,
-            position=(0.0, 0.0, 0.03 + HANDLE_LEN))
-        cap.on_click(_on_click)
-        _arrow(name + "/front", 0.07, 0.003, 0.008, HANDLE_RGB, 0)
+    try:
+        obj["base_root"] = gmodel.build_base(wp.server, (name or _mount_name(obj)) + "/handle", model,
+                                             HANDLE_RGB, _clicker(obj["id"]))
     except Exception as e:
-        print("gimbal handle marker failed", e)
+        obj["base_root"] = None
+        print("gimbal handle failed", e)
 
 
 def spawn_head(obj):
-    """The Sim and Real gimbal markers, children of the mount's node (they
-    follow its pose and visibility). The Real one starts hidden."""
+    """The Sim and Real gimbals (the model's moving links and camera), under
+    the mount node. The Real one starts hidden."""
     if wp.server is None or obj.get("handle") is None:
         return
+    model, _ = model_of(obj)
     target = (obj.get("gimbal") or {}).get("target")
     for part in PARTS:
+        old = obj.get(part + "_head")
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:
+                pass
         try:
-            obj[part + "_head"] = _spawn_twin(obj, part, target)
+            root, nodes = gmodel.build_twin(
+                wp.server, "%s/%s" % (_mount_name(obj), part), model,
+                SIM_RGB if part == "sim" else REAL_RGB, gmodel.joint_values(model, target),
+                _clicker(obj["id"], part))
+            obj[part + "_head"], obj[part + "_nodes"] = root, nodes
         except Exception as e:
             print("gimbal %s twin failed" % part, e)
-            obj[part + "_head"] = None
+            obj[part + "_head"], obj[part + "_nodes"] = None, []
+        obj.pop("_shown_" + part, None)
+        obj.pop("_vis_" + part, None)
+    obj["_model_used"] = model
+    obj["_model_sig"] = _model_sig(obj)
     _set_visible(obj, "real", False)
 
 
+def _model_sig(obj):
+    cfg = ((obj or {}).get("gimbal") or {}).get("cfg") or {}
+    _, _, mtime = gmodel.load(cfg.get("model"))
+    return (gmodel.path_of(cfg.get("model")), mtime)
+
+
+def rebuild(obj):
+    """Redraw handle and twins (model file chosen or changed)."""
+    spawn_mount_marker(obj)
+    spawn_head(obj)
+
+
 def scale_head(obj):
-    """Twins keep their size (like waypoints); only the mount sphere scales."""
+    """Twins keep the model's size; only the mount sphere scales."""
     return None
 
 
 def _set_twin(obj, part, angles):
-    h = obj.get(part + "_head")
-    if h is None or angles is None:
+    nodes = obj.get(part + "_nodes")
+    model = obj.get("_model_used")
+    if not nodes or model is None or angles is None:
         return
     key = tuple(round(float(v), 3) for v in angles)
     if obj.get("_shown_" + part) == key:
         return
     obj["_shown_" + part] = key
-    try:
-        h.wxyz = tuple(float(v) for v in head_wxyz(angles))
-    except Exception:
-        pass
+    gmodel.pose_twin(model, nodes, gmodel.joint_values(model, angles))
 
 
 def _set_visible(obj, part, on):
@@ -546,13 +507,15 @@ def _rt_for(oid):
 
 
 def resolve_script(cfg):
+    """Driver script: cfg["script"], else the model's driver, else rs4_can.py."""
     path = str((cfg or {}).get("script") or "").strip()
-    if path:
-        moved = app_paths.relocate(path, app_paths.GIMBAL_SCRIPTS_DIR)
-        if os.path.isfile(moved):
-            return moved
-        return path
-    return str(app_paths.GIMBAL_SCRIPTS_DIR / DEFAULT_SCRIPT)
+    if not path:
+        model, _, _ = gmodel.load((cfg or {}).get("model"))
+        path = model.get("driver") or DEFAULT_SCRIPT
+    moved = app_paths.relocate(path, app_paths.GIMBAL_SCRIPTS_DIR)
+    if os.path.isfile(moved):
+        return moved
+    return path if os.path.isabs(path) else str(app_paths.GIMBAL_SCRIPTS_DIR / path)
 
 
 def _load_module(oid, path):
@@ -713,6 +676,9 @@ def _tick_one(obj, clock):
     cfg = g.get("cfg") or dict(DEFAULT_CFG)
     rt = _rt_for(oid)
     t, real_on, sim_on = clock
+    # Model file chosen or edited on disk: redraw.
+    if wp.server is not None and obj.get("handle") is not None and obj.get("_model_sig") != _model_sig(obj):
+        rebuild(obj)
     keys = keys_for(oid)
     # Target follows the track while it plays or when the playhead moves.
     moved = rt["last_play"] is None or abs(t - rt["last_play"]) > 1e-6
@@ -849,6 +815,14 @@ def update(oid, data):
     return True
 
 
+def _model_status(obj):
+    cfg = ((obj or {}).get("gimbal") or {}).get("cfg") or {}
+    model, err, _ = gmodel.load(cfg.get("model"))
+    return {"file": cfg.get("model") or gmodel.DEFAULT_FILE, "name": model["name"], "error": err,
+            "joints": [{"name": j["name"], "sdk": j["sdk"], "range": j["range"]} for j in model["joints"]],
+            "folder": str(gmodel.models_dir())}
+
+
 def status(oid):
     """What the Properties panel shows."""
     obj = _find(oid)
@@ -867,6 +841,8 @@ def status(oid):
         "cfg": cfg,
         "target": g["target"],
         "script_path": resolve_script(cfg),
+        "model": _model_status(obj),
+        "models": gmodel.list_models(),
         "connected": connected,
         "read": rt["read"] if real_ok(oid) else None,
         "read_ok": real_ok(oid),

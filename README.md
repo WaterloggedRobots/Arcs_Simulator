@@ -320,9 +320,9 @@ Components in the properties panel are listed in the order they were added, newe
 
 *Add > Gimbal* (or **+** in the Objects tab) adds a gimbal, named **Gimbal**, then **Gimbal 1**, **Gimbal 2** and so on. Like an Aubo Arm with its Sim and Real cursors, it has a mount and two twins, listed under it:
 
-- **Gimbal** (the mount) — the gimbal's **handle**: a grey bar from the gimbal's centre to the hand end (the knob), and a short grey arrow for the gimbal's front. This is what you move, and it stores the handle's pose: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm). Unrotated, the hand end faces up and the camera end down.
-- **Sim gimbal** — a large blue waypoint-like marker (sphere, long lens arrow, side arrow) on the mount, turned by the **target** angles: what you set, and the track when the playhead moves.
-- **Real gimbal** — the same in orange, turned by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
+- **Gimbal** (the mount) — the gimbal's **handle** (grey). This is what you move, and it stores the handle's pose: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm). Unrotated, the hand end faces up and the camera end down.
+- **Sim gimbal** — the gimbal's arms, motors and camera built from boxes, in blue, with a long lens arrow, posed by the **target** angles: what you set, and the track when the playhead moves.
+- **Real gimbal** — the same in orange, posed by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
 
 The twins can't be moved, renamed or deleted on their own; their angles come from the target and from the gimbal.
 
@@ -330,11 +330,21 @@ Angles are the gimbal's three motors, **J1–J3**, in degrees, numbered from the
 
 **Handle and camera.** The mount stores the handle's pose; J1–J3 store the camera's orientation relative to the handle. With the mount unrotated (hand end up, camera end down) and J1–J3 at 0, the camera looks along the front arrow, level, at right angles to the handle. **J3 = −90** turns the lens down the handle towards the camera end, as the RS4 reads with the camera looking along the handle; positive J3 tilts it up towards the hand end. **J1** turns the camera around the handle axis (the 360 roll when J3 = −90), J2 around the lens. To fit the gimbal to the arm, parent it to the Sim cursor and rotate the mount to how the handle is fixed to the flange: the example project *gimbal pose* has the hand end towards the robot and the camera end forward, so J3 = −90 looks straight ahead.
 
+**Gimbal models.** The shape, the joint axes and the offsets are not built into the sandbox: they come from a **model file** in `user_files/gimbal_models/`, picked in the Gimbal's **Model** list (saved with the project by file name). `dji_rs4.json` is the DJI RS 4. A file holds, in millimetres in the handle's frame with all joints at 0:
+
+- **joints**, from the handle out: each with an **axis** direction (any direction, so a joint that is not at right angles to the one before, like the RS 4's J2, is just a different vector, e.g. `[1, 0, -0.2]`), a **point** on the axis, which reading it is (`sdk`: yaw / roll / pitch) and its range;
+- **aim_joints**: the two joints Look At may turn;
+- **camera**: its centre, lens and right directions, and body size;
+- **parts**: boxes, bars and spheres to draw, each on a **link** (0 = the handle, drawn grey; 1, 2, 3 = moving with that joint);
+- **driver**: the default driver script.
+
+On a balanced gimbal all three axes pass through the camera's centre of gravity, so the camera's direction depends only on the axis directions and its position only on the camera centre's place below the pan motor; the arms only change the look. DJI publishes no CAD or axis dimensions for the RS 4 (only its overall size, about 370 × 191 × 189 mm unfolded), so the numbers in `dji_rs4.json` are estimates: measure your gimbal (camera centre below the pan motor, J2's tilt, arm positions) and edit the file, or copy it for another gimbal or rig. The sandbox re-reads a model file when it changes, so edits show at once; a file it can't read shows its error in red under **Model** and the gimbal is drawn as plain axes.
+
 **Properties**
 
 | Selected | Shows |
 | --- | --- |
-| **Gimbal** | Name, transform, scale, components; **Off / Drive** (send moves to the real gimbal: Move gimbal, the initial pose and Run; angles are read either way); the connection state; **Connection**: driver script (empty = the bundled `rs4_can.py`), python-can interface, channel, bitrate and *Move time* (for Move gimbal and the move to the initial pose). |
+| **Gimbal** | Name, transform, scale, components; **Model** (the model file); **Off / Drive** (send moves to the real gimbal: Move gimbal, the initial pose and Run; angles are read either way); the connection state; **Connection**: driver script (empty = the bundled `rs4_can.py`), python-can interface, channel, bitrate and *Move time* (for Move gimbal and the move to the initial pose). |
 | **Sim gimbal** | **Target** J1 / J2 / J3 (the moves you type; the track sets them when the playhead moves); **Move real to sim** (sends the real gimbal to the Sim gimbal's angles, taking *Move time*; needs the real gimbal reading and Drive on), with a line saying how far the real gimbal is from the sim one; **Copy real pose to sim** (the angles read become the target); a **Look At** component (**+** at the bottom); **Insert frame** (target angles at the playhead, replacing one already there); **Delete frame** (at the playhead); the frame list (click a frame to move the playhead to it, × deletes it); red **Angle read failed: …** text when reading fails. |
 | **Real gimbal** | The angles read, and **Use as target**. |
 
@@ -483,6 +493,7 @@ backend/                  everything needed to run the app
     waypoints.py          waypoints, Bezier handles, bookmarked points, saved paths, selection, undo/redo
     simulatorview.py      other scene objects: primitives, meshes, parenting, measure, cameras
     gimbal.py             Gimbal objects: Sim / Real twins, gimbal track, driver script thread (DJI RS4)
+    gimbal_model.py       gimbal model files: loading, kinematics, Look At aim, box models
     path_bake.py          path sampling, IK and speed checks, baking
     timeline.py           timeline control: keyframe drag/snap, sample times, transitions, copy/paste
     file_manage.py        save / open / export
@@ -492,6 +503,7 @@ user_files/               ships with the app, editable by the user
   settings.json           settings, global saved points and paths
   cam_scripts/            OpenCV / RealSense scripts added from the GUI
   gimbal_scripts/         gimbal driver scripts (rs4_can.py: DJI RS4 over CAN)
+  gimbal_models/          gimbal models: joint axes, offsets, boxes (dji_rs4.json)
   paths/                  saved .arcspath projects
   exports/                export.json, bake_overspeed.csv / .xlsx
   recordings/             camera recordings

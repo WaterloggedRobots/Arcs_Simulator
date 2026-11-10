@@ -750,6 +750,7 @@
     .gim-conn { margin-top: 8px; font-size: 12px; }
     .gim-conn summary { cursor: pointer; color: #c8c8ce; }
     .props .gim-conn .row.name-row { grid-template-columns: 78px 1fr; padding-left: 0; padding-right: 0; }
+    .props .gim-comp .row.gim-model-row { grid-template-columns: 52px 1fr; }
     .props .gim-comp .row { padding-left: 0; padding-right: 0; }
     .gim-conn input { min-width: 0; width: 100%; background: #1c1d21; color: var(--text); border: 1px solid #111; border-radius: 6px; padding: 4px 6px; }
     #gimConnWrap.simple .mode-simple { color: #8a8a92 !important; }
@@ -2097,6 +2098,8 @@
                 </div>
               </div>
               <div class="col-note" id="gimState"></div>
+              <div class="row name-row gim-model-row"><label>Model</label><select id="gimModel" class="gim-select" title="Gimbal model file (user_files/gimbal_models): joint axes, offsets and shape"></select></div>
+              <div id="gimModelErr" class="track-err" hidden></div>
               <details class="gim-conn" open>
                 <summary>Connection</summary>
                 <div class="row name-row"><label>Script</label><input id="gimScript" type="text" placeholder="rs4_can.py (bundled)" title="Driver script; empty = user_files/gimbal_scripts/rs4_can.py"></div>
@@ -4662,6 +4665,29 @@
         const el = document.getElementById(id);
         if (el) el.disabled = !rd;
       });
+      // Model file: list, current one, its error, joint names on the labels.
+      const mi = g.model || {};
+      const msel = document.getElementById("gimModel");
+      if (msel && document.activeElement !== msel) {
+        const files = (g.models || []).slice();
+        if (mi.file && files.indexOf(mi.file) < 0) files.unshift(mi.file);
+        const msig = JSON.stringify(files) + "|" + (mi.file || "") + "|" + (mi.name || "");
+        if (msel.dataset.sig !== msig) {
+          msel.dataset.sig = msig;
+          msel.innerHTML = files.map((f) => "<option value='" + f.replace(/'/g, "&#39;") + "'>" +
+            String(f === mi.file && mi.name ? mi.name + " (" + f + ")" : f).replace(/[<&]/g, (c) => c === "<" ? "&lt;" : "&amp;") + "</option>").join("");
+          msel.value = mi.file || "";
+        }
+      }
+      const merr = document.getElementById("gimModelErr");
+      if (merr) { merr.textContent = mi.error || ""; merr.hidden = !mi.error; }
+      const jn = {};
+      (mi.joints || []).forEach((j) => { jn[j.sdk] = j.name; });
+      [["gimYaw", "yaw"], ["gimRoll", "roll"], ["gimPitch", "pitch"], ["gimReadYaw", "yaw"], ["gimReadRoll", "roll"], ["gimReadPitch", "pitch"]].forEach((r) => {
+        const el = document.getElementById(r[0]);
+        const lab = el && el.previousElementSibling;
+        if (lab && jn[r[1]]) lab.textContent = jn[r[1]];
+      });
       setVal("gimScript", cfg.script || "");
       setVal("gimIface", cfg.interface || "canalystii");
       setVal("gimChannel", cfg.channel != null ? cfg.channel : 0);
@@ -4747,6 +4773,8 @@
         const el = byId(id);
         if (el) el.addEventListener("change", () => postGimbal({ target: gimbalTarget() }));
       });
+      const msel = byId("gimModel");
+      if (msel) msel.addEventListener("change", () => postGimbal({ cfg: { model: msel.value } }));
       const cfgFields = { gimScript: "script", gimIface: "interface", gimChannel: "channel", gimBitrate: "bitrate", gimMoveS: "move_s" };
       Object.keys(cfgFields).forEach((id) => {
         const el = byId(id);

@@ -8,6 +8,7 @@ relative to this file, so the app works from any cwd.
       settings.json
       cam_scripts/         OpenCV / RealSense scripts added from the GUI
       gimbal_scripts/      gimbal driver scripts (rs4_can.py: DJI RS4 over CAN)
+      gimbal_models/       gimbal models: joint axes, offsets, boxes (dji_rs4.json)
       paths/               saved .arcspath projects
       exports/             export.json, bake_overspeed.csv / .xlsx
       recordings/          camera recordings (.mp4)
@@ -32,6 +33,7 @@ USER_DIR = Path(os.environ.get("ARCS_USER_DIR") or ROOT_DIR / "user_files")
 SETTINGS_PATH = USER_DIR / "settings.json"
 CAM_SCRIPTS_DIR = USER_DIR / "cam_scripts"
 GIMBAL_SCRIPTS_DIR = USER_DIR / "gimbal_scripts"
+GIMBAL_MODELS_DIR = USER_DIR / "gimbal_models"
 PATHS_DIR = USER_DIR / "paths"
 EXPORTS_DIR = USER_DIR / "exports"
 RECORDINGS_DIR = USER_DIR / "recordings"
