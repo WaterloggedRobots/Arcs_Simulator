@@ -335,6 +335,95 @@ def world_parts(model, angles, mount_pos, mount_wxyz, margin=0.0, min_link=1):
 
 
 # ---------------------------------------------------------------------------
+# Calibration: J2's axis from one reading in a known pose
+# ---------------------------------------------------------------------------
+CAL_MIN_J2 = 30.0  # J2 must have turned this far, or its axis makes no difference
+
+
+def _cam_pitch_roll(model, angles):
+    """Camera pitch / roll (deg) with the handle unrotated and its hand end up
+    (handle frame z = world up): pitch = lens elevation, roll = image tilt."""
+    q, _ = camera_pose(model, angles)
+    lens, down = qrot(q, [0, 0, 1]), qrot(q, [0, 1, 0])
+    right = np.cross(down, lens)
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, lens[2]))))
+    roll = math.degrees(math.asin(max(-1.0, min(1.0, -right[2]))))
+    return pitch, roll, lens, down
+
+
+def fit_j2_axis(raw, reading, world_pitch, world_roll):
+    """Fit J2's axis in a model file's JSON (raw) to one reading taken with the
+    gimbal held HAND END UP, the camera facing the FRONT (the model's +x at
+    zero) and the gimbal's own world pitch / roll. J2's axis is the lens line
+    at zero tilted towards the hand end ("tilt") and sideways ("side").
+    Returns {axis, tilt, side, pitch, roll, residual} or raises ValueError."""
+    from scipy.optimize import minimize
+    import copy
+    names = [j.get("sdk") for j in raw.get("joints") or []]
+    if "roll" not in names:
+        raise ValueError("the model has no J2 (sdk 'roll') joint")
+    k2 = names.index("roll")
+    j2 = float((list(reading) + [0, 0, 0])[1])
+    if abs(((j2 + 180) % 360) - 180) < CAL_MIN_J2:
+        raise ValueError("J2 reads %.1f deg: near 0 its axis makes no difference, so this pose can't "
+                         "calibrate it (in the reference pose the RS 4 reads J2 near 180)" % j2)
+    lens0 = np.asarray((raw.get("camera") or {}).get("lens") or [1, 0, 0], float)
+    lens0 /= np.linalg.norm(lens0)
+    up0 = np.array([0.0, 0.0, 1.0])
+
+    def axis_of(tilt, side):
+        a = qrot(qaxis(up0, side), lens0)                    # sideways about the handle axis
+        perp = np.cross(a, up0)
+        return qrot(qaxis(perp, tilt), a) if np.linalg.norm(perp) > 1e-9 else a  # towards the hand end
+
+    def model_for(tilt, side):
+        r = copy.deepcopy(raw)
+        r["joints"][k2]["axis"] = [float(v) for v in axis_of(tilt, side)]
+        return parse(r)
+
+    def cost(x):
+        m = model_for(x[0], x[1])
+        p, ro, lens, down = _cam_pitch_roll(m, joint_values(m, reading))
+        c = (p - world_pitch) ** 2 + 0.3 * (ro - world_roll) ** 2
+        # Facing the front (lens along +x) with the image the right way up.
+        c += 400.0 * max(0.0, -float(np.dot(lens, lens0))) + 400.0 * max(0.0, float(down[2]))
+        return c
+
+    grid = [(t, s) for t in range(-85, 86, 5) for s in range(-30, 31, 10)]
+    start = min(grid, key=lambda x: cost(x))
+    r = minimize(cost, np.asarray(start, float), method="Nelder-Mead", options={"xatol": 0.01, "fatol": 1e-6})
+    tilt, side = float(r.x[0]), float(r.x[1])
+    m = model_for(tilt, side)
+    p, ro, lens, down = _cam_pitch_roll(m, joint_values(m, reading))
+    if float(np.dot(lens, lens0)) < 0.5 or down[2] > 0:
+        raise ValueError("no J2 tilt makes this reading look to the front, the right way up: was the gimbal "
+                         "held hand end up with the camera level and facing the front?")
+    return {"axis": [round(float(v), 4) for v in axis_of(tilt, side)], "tilt": round(tilt, 2), "side": round(side, 2),
+            "pitch": round(p, 2), "roll": round(ro, 2), "residual": round(float(r.fun), 3)}
+
+
+def write_axis(name, sdk, axis, note):
+    """Set one joint's axis in a model file (a .bak copy is kept first)."""
+    import shutil
+    path = path_of(name)
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    for j in raw.get("joints") or []:
+        if j.get("sdk") == sdk:
+            j["axis"] = [float(v) for v in axis]
+            j["calibrated"] = note
+            break
+    else:
+        raise ValueError("no %s joint in %s" % (sdk, os.path.basename(path)))
+    shutil.copyfile(path, path + ".bak")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+    os.replace(tmp, path)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Scene (viser)
 # ---------------------------------------------------------------------------
 def _add_part(server, name, part, rgb, opacity, on_click, out=None):

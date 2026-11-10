@@ -1680,6 +1680,9 @@ def api_gimbal():
         ok = wp.gimbal.update(oid, data)
     if act == "move":
         ok = wp.gimbal.request_move(oid)
+    elif act == "calibrate":
+        # J2's axis from the reading in the reference pose (hand end up, camera level facing the front).
+        ok = wp.gimbal.request_calibrate(oid)
     elif act == "use_read":
         st = wp.gimbal.status(oid) or {}
         ok = st.get("read") is not None

@@ -16,7 +16,7 @@ yaw / roll / pitch). get_angles(joint=False) gives the camera's WORLD
 
 The "Sandbox driver" section at the end is what the sandbox calls (from one
 thread only): connect(cfg), get_angles(), move_to(yaw, roll, pitch, duration),
-close(). Running this file directly runs the reference demo.
+close(), and optionally get_world() (camera attitude, for Calibrate). Running this file directly runs the reference demo.
 
 Needs, in the Python that runs the sandbox:  pip install python-can pyusb libusb-package
 """
@@ -232,6 +232,18 @@ def get_angles():
     if _gimbal is None:
         raise RuntimeError("not connected")
     a = _gimbal.get_angles()
+    if a is None:
+        raise RuntimeError("no reply from gimbal (or error reply)")
+    return a
+
+
+def get_world():
+    """(yaw, roll, pitch) of the camera in the WORLD (attitude), in degrees;
+    pitch and roll are against gravity. Optional: the sandbox's Calibrate
+    uses it. Raises if the read fails."""
+    if _gimbal is None:
+        raise RuntimeError("not connected")
+    a = _gimbal.get_angles(joint=False)
     if a is None:
         raise RuntimeError("no reply from gimbal (or error reply)")
     return a

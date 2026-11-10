@@ -2099,6 +2099,10 @@
               <div class="col-note" id="gimState"></div>
               <div class="row name-row gim-model-row"><label>Model</label><select id="gimModel" class="gim-select" title="Gimbal model file (user_files/gimbal_models): joint axes, offsets and shape"></select></div>
               <div id="gimModelErr" class="track-err" hidden></div>
+              <div class="gim-btns gim-one">
+                <button type="button" id="gimCalibrate" title="Hold the gimbal hand end up, camera level and facing the front, then press: J2's axis is fitted to the reading and saved in the model file">Calibrate (hand end up, camera level, facing front)</button>
+              </div>
+              <div class="col-note" id="gimCalib" hidden></div>
               <details class="gim-conn" open>
                 <summary>Connection</summary>
                 <div class="row name-row"><label>Script</label><input id="gimScript" type="text" placeholder="rs4_can.py (bundled)" title="Driver script; empty = user_files/gimbal_scripts/rs4_can.py"></div>
@@ -4678,6 +4682,17 @@
           msel.value = mi.file || "";
         }
       }
+      const cb = document.getElementById("gimCalibrate");
+      if (cb) cb.disabled = !g.read_ok || !!(g.calib && g.calib.ok === null);
+      const cl = document.getElementById("gimCalib");
+      if (cl) {
+        const c = g.calib;
+        cl.hidden = !c;
+        if (c) {
+          cl.textContent = c.text || "";
+          cl.style.color = c.ok === false ? "#e05555" : "";
+        }
+      }
       const merr = document.getElementById("gimModelErr");
       if (merr) { merr.textContent = mi.error || ""; merr.hidden = !mi.error; }
       const jn = {};
@@ -4772,6 +4787,8 @@
         const el = byId(id);
         if (el) el.addEventListener("change", () => postGimbal({ target: gimbalTarget() }));
       });
+      const calBtn = byId("gimCalibrate");
+      if (calBtn) calBtn.addEventListener("click", () => postGimbal({ action: "calibrate" }));
       const msel = byId("gimModel");
       if (msel) msel.addEventListener("change", () => postGimbal({ cfg: { model: msel.value } }));
       const cfgFields = { gimScript: "script", gimIface: "interface", gimChannel: "channel", gimBitrate: "bitrate", gimMoveS: "move_s" };

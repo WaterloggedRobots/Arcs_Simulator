@@ -779,7 +779,10 @@ def _tick_one(obj, clock):
     with _rt_lock:
         reqs, rt["requests"] = rt["requests"], []
     # Reading is always attempted; moves go out only with Drive on.
+    calib = rt.pop("calib_req", False)
     if _ensure_connected(oid, cfg, rt):
+        if calib:
+            _calibrate(obj, cfg, rt)
         if cfg.get("drive", True):
             for kind, angles, dur in reqs:
                 _move(oid, rt, angles, dur)
@@ -790,12 +793,54 @@ def _tick_one(obj, clock):
             elif real_on:
                 _drive_run(oid, rt, keys, t)
         _read(oid, rt)
+    elif calib:
+        rt["calib"] = {"ok": False, "time": time.time(),
+                       "text": "Calibrate failed: the real gimbal is not connected (%s)" % (rt.get("conn_err") or "no reply")}
     rt["running"] = real_on
     _set_twin(obj, "sim", g.get("target"))
     ok = real_ok(oid)
     if ok:
         _set_twin(obj, "real", rt["read"])
     _set_visible(obj, "real", ok)
+
+
+def _calibrate(obj, cfg, rt):
+    """Calibrate: fit J2's axis from a fresh reading in the reference pose and
+    write it into the model file (gimbal_model.fit_j2_axis / write_axis)."""
+    import json
+    mod = rt.get("mod")
+    try:
+        if not callable(getattr(mod, "get_world", None)):
+            raise ValueError("the driver script has no get_world() (camera world angles)")
+        joints = [float(v) for v in list(mod.get_angles())[:3]]
+        world = [float(v) for v in list(mod.get_world())[:3]]  # yaw, roll, pitch
+        path = gmodel.path_of(cfg.get("model"))
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        fit = gmodel.fit_j2_axis(raw, joints, world_pitch=world[2], world_roll=world[1])
+        note = ("%s: hand end up, camera level facing the front; J %.1f / %.1f / %.1f, world pitch %.1f roll %.1f; "
+                "tilt %.1f deg towards the hand end, side %.1f deg" % (
+                    time.strftime("%Y-%m-%d %H:%M"), joints[0], joints[1], joints[2], world[2], world[1],
+                    fit["tilt"], fit["side"]))
+        gmodel.write_axis(cfg.get("model"), "roll", fit["axis"], note)
+        rt["calib"] = {"ok": True, "time": time.time(), "joints": joints, "world": world, **fit,
+                       "file": os.path.basename(path),
+                       "text": "J2 axis %s: tilt %.1f deg, side %.1f deg (camera then at pitch %.1f, roll %.1f). "
+                               "Saved to %s (previous in .bak)." % (fit["axis"], fit["tilt"], fit["side"],
+                                                                     fit["pitch"], fit["roll"], os.path.basename(path))}
+        print("gimbal calibrate:", rt["calib"]["text"])
+    except Exception as e:
+        rt["calib"] = {"ok": False, "time": time.time(), "text": "Calibrate failed: %s" % e}
+        print("gimbal calibrate failed:", e)
+
+
+def request_calibrate(oid):
+    if _find(oid) is None:
+        return False
+    rt = _rt_for(oid)
+    rt["calib_req"] = True
+    rt["calib"] = {"ok": None, "time": time.time(), "text": "Calibrating…"}
+    return True
 
 
 def real_ok(oid):
@@ -920,6 +965,7 @@ def status(oid):
         "target": g["target"],
         "script_path": resolve_script(cfg),
         "model": _model_status(obj),
+        "calib": rt.get("calib"),
         "models": gmodel.list_models(),
         "connected": connected,
         "read": rt["read"] if real_ok(oid) else None,

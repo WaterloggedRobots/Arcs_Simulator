@@ -7,3 +7,5 @@ user_files/exports/
 /build/
 /dist/
 /.venv-deck-build/
+user_files/gimbal_models/*.bak
+user_files/gimbal_models/*.tmp
