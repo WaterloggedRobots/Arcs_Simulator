@@ -9,15 +9,14 @@
   ],
   "aim_joints": ["J1", "J3"],
   "camera": {
-    "about": "camera centre (on all three axes when balanced), lens and right directions at home, body size length x width x height",
+    "about": "camera centre (on all three axes when balanced) and its lens and right directions at home. No camera body is drawn: the Gimbal's Camera object sits here.",
     "origin": [0, 0, -110],
     "lens": [1, 0, 0],
-    "right": [0, -1, 0],
-    "size": [120, 70, 85]
+    "right": [0, -1, 0]
   },
   "parts": [
-    {"link": 0, "name": "handle",       "from": [0, 0, 25],    "to": [0, 0, 185],     "width": 34},
-    {"link": 0, "name": "hand end",     "center": [0, 0, 185], "radius": 24},
+    {"link": 0, "name": "handle",       "from": [0, 0, 25],    "to": [0, 0, 120],     "width": 34},
+    {"link": 0, "name": "hand end",     "center": [0, 0, 120], "radius": 19},
     {"link": 0, "name": "pan motor",    "center": [0, 0, 10],  "size": [52, 52, 30]},
     {"link": 1, "name": "pan arm",      "from": [0, 0, -8],    "to": [-100, 0, -8],   "width": 26},
     {"link": 1, "name": "pan arm drop", "from": [-100, 0, -8], "to": [-100, 0, -110], "width": 26},

@@ -16,9 +16,9 @@ with all joints at 0):
         reading / frames it is ("yaw", "roll" or "pitch" for DJI R SDK
         joints J1-J3).
     aim_joints: [name, name]      joints Look At may turn (others held at 0)
-    camera: {origin, lens, right, size}
-        camera centre, lens and right directions with all joints at 0, and
-        the body's length (along the lens), width and height.
+    camera: {origin, lens, right}
+        camera centre, lens and right directions with all joints at 0. No
+        camera body is drawn: the Gimbal's Camera object is parented here.
     parts: [ ... ]                what to draw, each on a link:
         link 0 = the handle (drawn once, grey), link k = moves with joint k
         {from, to, width}        a bar between two points
@@ -187,7 +187,6 @@ def parse(raw):
         "aim": [names.index(n) for n in aim],
         "cam_origin": _vec(cam.get("origin") or [0, 0, 0], scale=mm, what="camera origin"),
         "cam_q": cam_q,
-        "cam_size": _vec(cam.get("size") or [120, 70, 85], scale=mm, what="camera size"),
         "parts": parts,
     }
 
@@ -196,7 +195,7 @@ def parse(raw):
 # origin, no parts, so the sandbox still shows something and says why.
 _FALLBACK = parse({"joints": [{"sdk": "yaw", "axis": [0, 0, -1]}, {"sdk": "roll", "axis": [1, 0, 0]},
                               {"sdk": "pitch", "axis": [0, -1, 0]}],
-                   "camera": {"lens": [1, 0, 0], "right": [0, -1, 0], "size": [60, 40, 40]}})
+                   "camera": {"lens": [1, 0, 0], "right": [0, -1, 0]}})
 _FALLBACK["name"] = "no model"
 
 
@@ -330,8 +329,8 @@ def build_base(server, name, model, rgb, on_click):
 
 
 def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
-    """One twin: nested joint nodes with their link parts, the camera body and
-    lens / right arrows. Returns (root, [joint nodes])."""
+    """One twin: nested joint nodes with their link parts, and a camera frame
+    with lens / right arrows (no body). Returns (root, [joint nodes])."""
     root = server.scene.add_frame(name, show_axes=False)
     nodes = []
     path = name
@@ -344,8 +343,6 @@ def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
                 _add_part(server, "%s/p%d" % (path, i), part, rgb, 0.55, on_click)
     cam = path + "/camera"
     server.scene.add_frame(cam, show_axes=False, wxyz=tuple(model["cam_q"]), position=tuple(model["cam_origin"]))
-    _add_part(server, cam + "/body", {"kind": "box", "center": np.zeros(3), "size": model["cam_size"][[1, 2, 0]]},
-              rgb, 0.6, on_click)  # camera frame: x right (width), y down (height), z lens (length)
     for sub, axis, length, shaft, head in (("lens", 2, arrow_len, 0.007, 0.018), ("side", 0, arrow_len * 0.4, 0.005, 0.012)):
         pts = np.zeros((1, 2, 3), dtype=np.float32)
         pts[0, 1, axis] = float(length)

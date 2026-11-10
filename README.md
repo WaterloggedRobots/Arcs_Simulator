@@ -321,7 +321,7 @@ Components in the properties panel are listed in the order they were added, newe
 *Add > Gimbal* (or **+** in the Objects tab) adds a gimbal, named **Gimbal**, then **Gimbal 1**, **Gimbal 2** and so on. Like an Aubo Arm with its Sim and Real cursors, it has a mount and two twins, listed under it:
 
 - **Gimbal** (the mount) — the gimbal's **handle** (grey). This is what you move, and it stores the handle's pose: gizmo, Properties transform, parenting (for example to the Sim cursor, so the gimbal rides on the arm). Unrotated, the hand end faces up and the camera end down.
-- **Sim gimbal** — the gimbal's arms, motors and camera built from boxes, in blue, with a long lens arrow, posed by the **target** angles: what you set, and the track when the playhead moves.
+- **Sim gimbal** — the gimbal's arms and motors built from boxes, in blue, with a long lens arrow at the camera, posed by the **target** angles: what you set, and the track when the playhead moves. A new gimbal gets a **Camera** object (*<name> camera*) parented to the Sim gimbal at its camera centre, so it turns with the gimbal: give it the real camera's type (sim, OpenCV, Sony). Other objects can be parented to the Sim gimbal too (drag them onto its row).
 - **Real gimbal** — the same in orange, posed by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
 
 The twins can't be moved, renamed or deleted on their own; their angles come from the target and from the gimbal.
@@ -334,7 +334,7 @@ Angles are the gimbal's three motors, **J1–J3**, in degrees, numbered from the
 
 - **joints**, from the handle out: each with an **axis** direction (any direction, so a joint that is not at right angles to the one before, like the RS 4's J2, is just a different vector, e.g. `[1, 0, -0.2]`), a **point** on the axis, which reading it is (`sdk`: yaw / roll / pitch) and its range;
 - **aim_joints**: the two joints Look At may turn;
-- **camera**: its centre, lens and right directions, and body size;
+- **camera**: its centre and lens and right directions (no camera body is drawn: the Gimbal's Camera object sits there);
 - **parts**: boxes, bars and spheres to draw, each on a **link** (0 = the handle, drawn grey; 1, 2, 3 = moving with that joint);
 - **driver**: the default driver script.
 

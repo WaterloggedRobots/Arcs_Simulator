@@ -431,10 +431,52 @@ def _model_sig(obj):
     return (gmodel.path_of(cfg.get("model")), mtime)
 
 
+def twin_camera_world(obj, part="sim"):
+    """World (pos, wxyz) of a twin's camera frame: z lens, x right, y image
+    down, as a viser camera / the Camera object."""
+    model = obj.get("_model_used") or model_of(obj)[0]
+    g = obj.get("gimbal") or {}
+    angles = g.get("target") if part == "sim" else (_rt.get(str(obj.get("id"))) or {}).get("read")
+    q, p = gmodel.camera_pose(model, gmodel.joint_values(model, angles or g.get("target")))
+    mq = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float)
+    pos = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float) + gmodel.qrot(mq, p)
+    wq = gmodel.qmul(mq, q)
+    return pos, wq / (np.linalg.norm(wq) or 1.0)
+
+
+def add_gimbal_camera(obj):
+    """A Camera object on a new gimbal's Sim gimbal, at its camera frame."""
+    import simulatorview as sv
+    cam = sv.add_scene_object("camera", name="%s camera" % (obj.get("name") or "Gimbal"))
+    if cam is None:
+        return None
+    cam["parent_id"] = part_id(obj["id"], "sim")
+    cam["space"] = "local"
+    cam["local_pos"] = np.zeros(3)
+    cam["local_wxyz"] = np.array([1.0, 0.0, 0.0, 0.0])
+    sv._set_world_from_local(cam)
+    sv._apply_object_xform(cam)
+    sv._refresh_camera_viz(cam)
+    try:
+        sv.select_scene_object(obj["id"])
+    except Exception:
+        pass
+    return cam
+
+
+def _follow_sim(obj):
+    """Children of the Sim gimbal (its Camera) follow the twin."""
+    import simulatorview as sv
+    sid = part_id(obj["id"], "sim")
+    if any(str(o.get("parent_id") or "") == sid for o in list(wp.scene_objects or [])):
+        sv._propagate_children(sid)
+
+
 def rebuild(obj):
     """Redraw handle and twins (model file chosen or changed)."""
     spawn_mount_marker(obj)
     spawn_head(obj)
+    _follow_sim(obj)
 
 
 def scale_head(obj):
@@ -452,6 +494,8 @@ def _set_twin(obj, part, angles):
         return
     obj["_shown_" + part] = key
     gmodel.pose_twin(model, nodes, gmodel.joint_values(model, angles))
+    if part == "sim":
+        _follow_sim(obj)
 
 
 def _set_visible(obj, part, on):

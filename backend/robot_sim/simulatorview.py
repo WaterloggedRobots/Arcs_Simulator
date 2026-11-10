@@ -323,6 +323,14 @@ def _obj_parent(obj):
     pid = (obj or {}).get("parent_id")
     if not pid:
         return None
+    if "#" in str(pid):
+        # A gimbal's Sim twin: its camera frame (where the Camera object sits).
+        base_id, part = _gimbal().split_part(pid)
+        g = _find_object(base_id)
+        if g is None or part != "sim":
+            return None
+        pos, q = _gimbal().twin_camera_world(g, part)
+        return {"id": str(pid), "pos": pos, "wxyz": q, "parent_id": None}
     base, aid = arms.split_id(pid)
     if aid is not None and aid != arms.current():
         # Another arm's base or cursor: read it as that arm.
@@ -390,6 +398,10 @@ def _propagate_children(oid):
             _apply_object_xform(child)
             _refresh_camera_viz(child)
             _propagate_children(child.get("id"))
+    g = _find_object(oid) if "#" not in str(oid) else None
+    if g is not None and g.get("kind") == "gimbal":
+        # Children of its Sim gimbal (the Camera object) move with the mount too.
+        _propagate_children(_gimbal().part_id(oid, "sim"))
 
 
 def reparent_object(oid, parent_id=None):
@@ -401,14 +413,23 @@ def reparent_object(oid, parent_id=None):
         return False
     if pid is not None and arms.is_builtin(pid) is False and "@" in pid:
         return False  # an arm that no longer exists
-    if pid == oid or (pid and "#" in pid):
-        return False  # itself, or a gimbal's Sim / Real twin
-    walk = pid
+    if pid == oid:
+        return False
+    if pid and "#" in pid:
+        base_id, part = _gimbal().split_part(pid)
+        if part != "sim" or base_id == oid or _find_object(base_id) is None:
+            return False  # only a gimbal's Sim twin takes children
+        pid_walk = base_id
+    else:
+        pid_walk = pid
+    walk = pid_walk
     while walk:
         if walk == oid:
             return False
         p = _find_object(walk)
         walk = None if p is None else p.get("parent_id")
+        if walk and "#" in str(walk):
+            walk = _gimbal().split_part(walk)[0]
     obj["parent_id"] = pid
     _set_local_from_world(obj)
     _apply_object_xform(obj)
@@ -1051,9 +1072,10 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
         pass
     print("added object", kind, oid, pos)
     if kind == "gimbal":
-        # Its timeline track comes with it.
+        # Its timeline track comes with it, and a Camera on its Sim gimbal.
         sync_camera_tracks()
         _gimbal().ensure_thread()
+        _gimbal().add_gimbal_camera(obj)
     if add_cam:
         sync_camera_tracks()
         try:
@@ -1176,7 +1198,8 @@ def delete_scene_object(oid):
                 pass
         obj[key] = None
     for child in wp.scene_objects:
-        if child.get("parent_id") == oid:
+        cp = str(child.get("parent_id") or "")
+        if cp == oid or cp.startswith(str(oid) + "#"):
             child["parent_id"] = obj.get("parent_id")
             _set_local_from_world(child)
     wp.scene_objects[:] = [o for o in wp.scene_objects if o.get("id") != oid]
