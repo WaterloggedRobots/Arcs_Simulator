@@ -890,14 +890,24 @@ def _calib_sample(rt):
     rec = rt["calib_rec"]
     if not rt["read_ok"]:
         return
+    # Joints, then world, then joints again: the world reading is paired with
+    # the mean of the two, and dropped if the camera moved much in between.
     try:
         world = [float(v) for v in list(rt["mod"].get_world())[:3]]
+        after = [float(v) for v in list(rt["mod"].get_angles())[:3]]
     except Exception as e:
         rec["err"] = str(e) or type(e).__name__
         return
-    if len(world) < 3 or not all(math.isfinite(v) for v in world):
+    if len(world) < 3 or not all(math.isfinite(v) for v in world + after):
         return
-    read = list(rt["read"])
+    before = list(rt["read"])
+    step = [gmodel._wrap(b - a) for a, b in zip(before, after)]
+    if max(abs(v) for v in step) > 3.0:
+        rec["skipped"] = rec.get("skipped", 0) + 1
+        return
+    read = [a + d / 2 for a, d in zip(before, step)]
+    rec.setdefault("raw", []).append({"t": round(time.time() - rec["start"], 3), "joints": before,
+                                      "world": world, "joints_after": after})
     S = rec["samples"]
     # Keep a sample when the joints moved (a still gimbal adds nothing).
     if S and max(abs(gmodel._wrap(a - b)) for a, b in zip(read, S[-1][0])) < 0.5:
@@ -921,8 +931,23 @@ def _calib_finish(obj, cfg, rt):
         return
     samples = list(rec["samples"])
     model_file = cfg.get("model")
+    # Every recording is kept, for checking the fit by hand.
+    log_path = None
+    try:
+        import json
+        d = gmodel.models_dir() / "calibrations"
+        d.mkdir(parents=True, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(gmodel.path_of(model_file)))[0]
+        log_path = str(d / ("%s_%s.json" % (stem, time.strftime("%Y%m%d-%H%M%S"))))
+        rec_doc = {"model": os.path.basename(gmodel.path_of(model_file)), "samples": samples,
+                   "raw": rec.get("raw", []), "skipped_moving": rec.get("skipped", 0)}
+        with open(log_path, "w", encoding="utf-8") as f:
+            json.dump(rec_doc, f)
+    except Exception as e:
+        print("gimbal calibrate: could not save the recording:", e)
+        log_path = None
     rt["calib"] = {"ok": None, "fitting": True, "n": len(samples), "time": time.time(),
-                   "text": "Fitting the model to %d samples (up to a minute)…" % len(samples)}
+                   "text": "Fitting the model to %d samples (about a minute)…" % len(samples)}
 
     def work():
         import json
@@ -931,28 +956,49 @@ def _calib_finish(obj, cfg, rt):
             with open(path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             was = gmodel.parse(raw)["joints"]
+            # Start from the model as it was before any recalibration, so a bad
+            # result doesn't steer the next one.
+            if os.path.exists(path + ".orig"):
+                with open(path + ".orig", "r", encoding="utf-8") as f:
+                    raw["joints"] = json.load(f).get("joints") or raw["joints"]
             fit = gmodel.fit_calibration(raw, samples)
+            if log_path:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    rec_doc = json.load(f)
+                rec_doc["fit"] = fit
+                with open(log_path, "w", encoding="utf-8") as f:
+                    json.dump(rec_doc, f)
+            where = " Recording: %s." % log_path if log_path else ""
+            conv = "; best rms by attitude sign (pitch, roll): %s" % ", ".join(
+                "%s %.2f" % kv for kv in sorted(fit["conventions"].items()))
+            if fit["rms"] >= 4:
+                rt["calib"] = {"ok": False, "time": time.time(), **fit, "text": (
+                    "Recalibration not saved: the model doesn't fit the %d samples (rms %.2f deg, worst %.2f deg%s). "
+                    "Was the handle held still and vertical, hand end up?%s" % (fit["samples"], fit["rms"], fit["worst"], conv, where))}
+                print("gimbal calibrate:", rt["calib"]["text"])
+                return
             note = ("%s: %d samples, hand end up; rms %.2f deg, worst %.2f deg; handle %.1f / %.1f deg off vertical" % (
                 time.strftime("%Y-%m-%d %H:%M"), fit["samples"], fit["rms"], fit["worst"],
                 fit["handle_tilt"][0], fit["handle_tilt"][1]))
             gmodel.write_joints(model_file, {
                 "roll": {"axis": fit["axis"], "sign": fit["j2_sign"], "offset": fit["j2_offset"]},
                 "pitch": {"sign": fit["j3_sign"], "offset": fit["j3_offset"]}}, note)
-            quality = "good" if fit["rms"] < 1.5 else ("fair" if fit["rms"] < 4 else "poor: hold the handle stiller and try again")
+            quality = "good" if fit["rms"] < 1.5 else "fair"
             text = ("Recalibrated from %d samples: fit %s (rms %.2f deg, worst %.2f deg). J2 axis %s (tilt %.1f deg, side %.1f deg; "
                     "was %s), J2 %s offset %.1f (was %s %.1f), J3 %s offset %.1f (was %s %.1f); handle held %.1f / %.1f deg off "
-                    "vertical. Saved to %s (previous in .bak)." % (
+                    "vertical. Saved to %s (previous in .bak, the original in .orig)%s.%s" % (
                         fit["samples"], quality, fit["rms"], fit["worst"], fit["axis"], fit["tilt"], fit["side"],
                         [round(float(v), 3) for v in was[1]["axis"]],
                         "+" if fit["j2_sign"] > 0 else "reversed", fit["j2_offset"],
                         "+" if was[1]["sign"] > 0 else "reversed", was[1]["offset"],
                         "+" if fit["j3_sign"] > 0 else "reversed", fit["j3_offset"],
                         "+" if was[2]["sign"] > 0 else "reversed", was[2]["offset"],
-                        fit["handle_tilt"][0], fit["handle_tilt"][1], os.path.basename(path)))
+                        fit["handle_tilt"][0], fit["handle_tilt"][1], os.path.basename(path), conv, where))
             rt["calib"] = {"ok": True, "time": time.time(), **fit, "file": os.path.basename(path), "text": text}
             print("gimbal calibrate:", text)
         except Exception as e:
-            rt["calib"] = {"ok": False, "time": time.time(), "text": "Recalibrate failed: %s" % e}
+            rt["calib"] = {"ok": False, "time": time.time(), "text": "Recalibrate failed: %s%s" % (
+                e, " (recording: %s)" % log_path if log_path else "")}
             print("gimbal calibrate failed:", e)
 
     threading.Thread(target=work, name="gimbal-calibrate", daemon=True).start()

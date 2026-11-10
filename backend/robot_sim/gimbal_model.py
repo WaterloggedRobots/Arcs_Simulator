@@ -32,6 +32,7 @@ down) sits at camera.origin on the last joint.
 """
 import json
 import math
+import time
 import os
 
 import numpy as np
@@ -610,14 +611,14 @@ def fit_calibration(raw, samples, log=None):
 
     def scored(combos, tilts, o2s, o3s, side=0.0):
         out = []
-        for s2, s3, sy in combos:
+        for s2, s3, sp, sr, sy in combos:
             for t0 in tilts:
                 for o3 in o3s:
                     for o2 in o2s:
                         x0 = np.array([t0, side, o2, o3, 0.0, 0.0, 0.0])
                         x0[6] = yaw0(x0, s2, s3, sy)
-                        f0 = resid(x0, s2, s3, 1.0, 1.0, sy)
-                        out.append((float(np.mean(np.minimum(np.abs(f0), 30.0))), x0, (s2, s3, 1.0, 1.0, sy)))
+                        f0 = resid(x0, s2, s3, sp, sr, sy)
+                        out.append((float(np.mean(np.minimum(np.abs(f0), 30.0))), x0, (s2, s3, sp, sr, sy)))
         out.sort(key=lambda s: s[0])
         return out
 
@@ -635,28 +636,39 @@ def fit_calibration(raw, samples, log=None):
                 log("calibration try %s from %s: rms %.2f" % (combo, np.round(x0, 1).tolist(), rms))
             fits.append((rms, r.x, combo))
 
-    # The attitude's pitch / roll signs are fixed (dji_ypr): left free, a mirror
-    # image of the gimbal would fit as well. The heading's sign is fitted.
-    combos = [(a, b, c) for a in (1.0, -1.0) for b in (1.0, -1.0) for c in (1.0, -1.0)]
-    run(scored([(cur[0], cur[1], c) for c in (1.0, -1.0)], [cur[2]], [cur[3]], [cur[4]], cur_side)[:1])
-    run(scored(combos, [0.0, 30.0, 56.0], [0.0, 180.0], [0.0, 90.0, -90.0, 180.0])[:4])
+    # The readings can't tell the gimbal from its mirror image (J2, J3 and the
+    # attitude's pitch / roll signs all flipped): the mirror image pans the
+    # same way but tilts up for down. So J3's direction is taken from the model
+    # (its "sign", checked by eye: +J3 tilts the lens towards the hand end),
+    # and the attitude's pitch / roll signs are fitted (together) instead.
+    pm = (1.0, -1.0)
+    s3 = cur[1]
+    combos = [(a, s3, c, c, e) for a in pm for c in pm for e in pm]
+    for c in pm:
+        run(scored([(cur[0], s3, c, c, e) for e in pm], [cur[2]], [cur[3]], [cur[4]], cur_side)[:1])
+    run(scored(combos, [0.0, 30.0, 56.0, -30.0], [0.0, 180.0], [0.0, 90.0, -90.0, 180.0])[:4])
     if not fits:
         raise ValueError("the fit failed")
     # Different joint signs / offsets can give the same camera pose over the
     # samples; of the fits that are as good, keep the one nearest the current model.
     def near(f):
-        _rms, x, (s2, s3, _sp, _sr, _sy) = f
-        return ((s2 != cur[0]) + (s3 != cur[1]) + (np.sign(x[0]) != np.sign(cur[2]) and abs(x[0]) > 2)
+        _rms, x, (s2, s3, sp, sr, _sy) = f
+        return ((s2 != cur[0]) + (s3 != cur[1]) + 0.25 * (sp < 0) + (np.sign(x[0]) != np.sign(cur[2]) and abs(x[0]) > 2)
                 + abs(_wrap(x[2] - cur[3])) / 180 + abs(_wrap(x[3] - cur[4])) / 180)
     floor = min(f[0] for f in fits)
     good = [f for f in fits if f[0] <= floor * 1.15 + 0.1]
     if min(near(f) for f in good) >= 1:
         # The search found only a "far" form: look for the near one.
-        run(scored([(cur[0], cur[1], c) for c in (1.0, -1.0)], [cur[2], -cur[2], 0.0],
+        run(scored([(cur[0], s3, c, c, e) for c in pm for e in pm], [cur[2], -cur[2], 0.0],
                    [0.0, 180.0], [0.0, 90.0, -90.0, 180.0])[:2])
         floor = min(f[0] for f in fits)
         good = [f for f in fits if f[0] <= floor * 1.15 + 0.1]
     best = min(good, key=near)
+    # Best rms per attitude sign convention (pitch, roll): a diagnostic.
+    conv = {}
+    for f in fits:
+        k = "%+d%+d" % (f[2][2], f[2][3])
+        conv[k] = round(min(conv.get(k, 1e9), f[0]), 2)
     rms, x, (s2, s3, sp, sr, sy) = best
     # Refine without the robust loss.
     r = least_squares(resid, x, args=(s2, s3, sp, sr, sy), max_nfev=400, x_scale=[10, 10, 30, 30, 5, 5, 30])
@@ -676,13 +688,14 @@ def fit_calibration(raw, samples, log=None):
         "handle_tilt": [round(float(x[4]), 2), round(float(x[5]), 2)],
         "pitch_sign": sp, "roll_sign": sr, "yaw_sign": sy,
         "rms": round(rms, 2), "worst": round(float(err.max()), 2), "samples": len(S),
-        "span": [round(float(v), 1) for v in span],
+        "span": [round(float(v), 1) for v in span], "conventions": conv,
     }
 
 
 def write_joints(name, updates, note):
     """Set joint fields in a model file: updates = {sdk: {field: value}}
-    (a .bak copy is kept first)."""
+    (copies are kept first: <file>.orig the first time, never overwritten,
+    and <file>.<date-time>.bak each time)."""
     import shutil
     path = path_of(name)
     with open(path, "r", encoding="utf-8") as f:
@@ -691,7 +704,9 @@ def write_joints(name, updates, note):
         if j.get("sdk") in updates:
             j.update(updates[j["sdk"]])
             j["calibrated"] = note
-    shutil.copyfile(path, path + ".bak")
+    if not os.path.exists(path + ".orig"):
+        shutil.copyfile(path, path + ".orig")
+    shutil.copyfile(path, path + time.strftime(".%Y%m%d-%H%M%S.bak"))
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(raw, f, indent=2)
