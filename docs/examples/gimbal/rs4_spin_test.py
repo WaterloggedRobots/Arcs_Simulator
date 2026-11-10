@@ -18,11 +18,15 @@ Run from a terminal on the PC with the CANalyst-II adapter:
     python docs/examples/gimbal/rs4_spin_test.py
     python docs/examples/gimbal/rs4_spin_test.py --reverse      # then the other way
     python docs/examples/gimbal/rs4_spin_test.py --speed 20 --seconds 18
+    python docs/examples/gimbal/rs4_spin_test.py --roll360 2    # ROLL 360 mode for the spin
+    python docs/examples/gimbal/rs4_spin_test.py --roll360 3    # 3D ROLL 360 mode
     python docs/examples/gimbal/rs4_spin_test.py --pitch 0      # level the camera first
 
-With the lens near pitch +/-90 (pointing along the yaw axis) the gimbal's
-attitude stabilisation sees a yaw spin as camera roll and pulls it back
-(gimbal lock): the spin sways instead. --pitch moves the camera there first.
+With the lens along the yaw axis (pitch near +/-90) a yaw spin turns the
+camera around its lens. In normal mode the stabiliser keeps the image level
+and pulls that back after ~50 deg, so the spin sways. ROLL 360 / 3D ROLL 360
+mode (--roll360 2 / 3, as the reference's set_roll360) lets it turn all the
+way. The test sets normal mode again at the end unless --keep-mode.
 
 Needs: pip install python-can pyusb libusb-package
 """
@@ -153,6 +157,18 @@ class DjiGimbal:
         yaw, roll, pitch = struct.unpack_from("<hhh", reply, 4)
         return yaw / 10, roll / 10, pitch / 10
 
+    # --- CmdSet 0x0E, CmdID 0x0C / 0x0B: operating mode (reference set_roll360) ---
+    def set_roll360(self, mode=2):          # 0 = normal, 2 = ROLL 360, 3 = 3D ROLL 360
+        reply = self.send_command(0x0E, 0x0C, bytes([0x22, 0x01, mode << 3]))
+        print("set mode %d reply:" % mode, reply.hex(" ") if reply else None)
+        return reply
+
+    def read_mode(self):
+        """Raw reply to the reference's mode read-back (0x0E 0x0B, 0x22)."""
+        reply = self.send_command(0x0E, 0x0B, bytes([0x22]))
+        print("mode read-back:", reply.hex(" ") if reply else None)
+        return reply
+
     def speed(self, yaw=0, roll=0, pitch=0, take_over=True):
         ctrl = 0x80 if take_over else 0x00   # bit 7 = take over speed control
         payload = struct.pack("<hhhB", int(yaw * 10), int(roll * 10),
@@ -280,6 +296,9 @@ if __name__ == "__main__":
     ap.add_argument("--seconds", type=float, default=12.0, help="spin time in s (default 12 -> 360 deg at 30 deg/s)")
     ap.add_argument("--reverse", action="store_true", help="after the spin, spin back with the opposite speed")
     ap.add_argument("--no-level", action="store_true", help="don't level the pitch at the end")
+    ap.add_argument("--roll360", type=int, choices=(0, 2, 3), default=None,
+                    help="set this mode before spinning: 0 normal, 2 ROLL 360, 3 3D ROLL 360")
+    ap.add_argument("--keep-mode", action="store_true", help="don't set normal mode (0) again at the end")
     ap.add_argument("--pitch", type=float, default=None,
                     help="move to this pitch (and roll 0) before spinning, e.g. 0 for a level camera")
     args = ap.parse_args()
@@ -289,17 +308,30 @@ if __name__ == "__main__":
     with can.Bus(**BUS_KWARGS) as bus:
         g = DjiGimbal(bus)
         start = read_settled(g, "start:")
-        if start is not None and abs(start[2]) > 80 and args.pitch is None:
-            print("NOTE: pitch is %.1f deg: the lens points along the yaw axis. A yaw spin here may "
-                  "sway back (gimbal lock). Try --pitch 0." % start[2])
-        if args.pitch is not None:
-            ok = g.move_abs(roll=0, pitch=args.pitch, duration=3.0)
-            print("moved to pitch %.1f, roll 0: %s" % (args.pitch, "ok" if ok else "no reply / refused"))
-            read_settled(g, "after pitch:")
-        results.append(ask_direction(spin(g, args.speed, args.seconds)))
-        if args.reverse:
-            time.sleep(1.0)
-            results.append(ask_direction(spin(g, -args.speed, args.seconds)))
+        g.read_mode()
+        if start is not None and abs(start[2]) > 80 and args.roll360 in (None, 0):
+            print("NOTE: pitch is %.1f deg: the lens points along the yaw axis, so the spin turns the camera "
+                  "around its lens. In normal mode it sways back; try --roll360 2 or 3." % start[2])
+        try:
+            if args.roll360 is not None:
+                g.set_roll360(args.roll360)
+                time.sleep(0.5)
+                g.read_mode()
+            if args.pitch is not None:
+                ok = g.move_abs(roll=0, pitch=args.pitch, duration=3.0)
+                print("moved to pitch %.1f, roll 0: %s" % (args.pitch, "ok" if ok else "no reply / refused"))
+                read_settled(g, "after pitch:")
+            results.append(ask_direction(spin(g, args.speed, args.seconds)))
+            if args.reverse:
+                time.sleep(1.0)
+                results.append(ask_direction(spin(g, -args.speed, args.seconds)))
+        finally:
+            # Also on Ctrl+C: stop, hand speed control back, normal mode again.
+            g.speed(0, 0, 0)
+            g.speed(take_over=False)
+            if args.roll360 not in (None, 0) and not args.keep_mode:
+                g.set_roll360(0)
+                g.read_mode()
         if not args.no_level:
             print("\nlevelling pitch:", "ok" if g.move_abs(pitch=0, duration=3.0) else "no reply / refused")
         read_settled(g, "end:")
@@ -309,5 +341,5 @@ if __name__ == "__main__":
     for r in results:
         print("speed %+6.1f deg/s: turned %+7.1f deg, wraps %d, late resends %d, failed reads %d, seen: %s" % (
             r["speed"], r["turned"], r["wraps"], r["late"], r["fails"], r.get("seen", "not given")))
-    print("start pitch %s, --pitch %s" % ("%.1f" % start[2] if start else "?", args.pitch))
+    print("start pitch %s, --pitch %s, --roll360 %s" % ("%.1f" % start[2] if start else "?", args.pitch, args.roll360))
     print("=" * 72)
