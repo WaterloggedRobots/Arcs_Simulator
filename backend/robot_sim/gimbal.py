@@ -476,6 +476,63 @@ def set_twin_colour(obj, part, rgb=None):
             pass
 
 
+def world_angles(obj, part="sim"):
+    """World yaw / pitch / roll of a twin's camera (gimbal_model.world_ypr)."""
+    _, q = twin_camera_world(obj, part)
+    return [round(v, 2) for v in gmodel.world_ypr(q)]
+
+
+def _aiming(obj):
+    look = clean_look((obj.get("gimbal") or {}).get("look"))
+    return look["added"] and look["on"]
+
+
+def solve_world(obj, cam_world_wxyz):
+    """Set the Sim gimbal's target so its camera frame turns to cam_world_wxyz
+    (inverse kinematics from the current angles). Returns the error in degrees,
+    or None when Look At drives the target."""
+    if _aiming(obj):
+        return None
+    model = obj.get("_model_used") or model_of(obj)[0]
+    g = obj.setdefault("gimbal", clean_gimbal(None))
+    angles, err = gmodel.ik(model, obj.get("wxyz", [1, 0, 0, 0]), cam_world_wxyz, g.get("target"))
+    g["target"] = clamp_angles(angles)
+    g["_ik_err"] = round(float(err), 2)
+    return err
+
+
+def set_world_target(oid, ypr):
+    """World-mode Target: camera yaw / pitch / roll in the world -> J1-J3."""
+    obj = _find(oid)
+    if obj is None:
+        return None
+    y, p, r = (list(ypr) + [0, 0, 0])[:3]
+    err = solve_world(obj, gmodel.world_q(_f(y), _f(p), _f(r)))
+    _follow_now(obj)
+    return err
+
+
+def drive_from_child(child):
+    """A Camera (or other object) on a Sim gimbal turned in the world: solve
+    J1-J3 so the gimbal turns it there (its local offset stays). True if handled."""
+    pid = str((child or {}).get("parent_id") or "")
+    base_id, part = split_part(pid)
+    obj = _find(base_id) if part == "sim" else None
+    if obj is None or _aiming(obj):
+        return False
+    lq = np.asarray(child.get("local_wxyz", [1, 0, 0, 0]), dtype=float)
+    want = gmodel.qmul(np.asarray(child.get("wxyz", [1, 0, 0, 0]), dtype=float), gmodel.qinv(lq / (np.linalg.norm(lq) or 1.0)))
+    solve_world(obj, want)
+    _follow_now(obj)
+    return True
+
+
+def _follow_now(obj):
+    """Show the new target at once (the gimbal thread would on its next tick)."""
+    _set_twin(obj, "sim", (obj.get("gimbal") or {}).get("target"))
+    _follow_sim(obj)
+
+
 def add_gimbal_camera(obj):
     """A Camera object on a new gimbal's Sim gimbal, at its camera frame."""
     import simulatorview as sv
@@ -966,6 +1023,9 @@ def status(oid):
         "target": g["target"],
         "script_path": resolve_script(cfg),
         "model": _model_status(obj),
+        "world": world_angles(obj, "sim"),
+        "world_real": world_angles(obj, "real") if real_ok(oid) else None,
+        "ik_err": (obj.get("gimbal") or {}).get("_ik_err"),
         "calib": rt.get("calib"),
         "models": gmodel.list_models(),
         "connected": connected,

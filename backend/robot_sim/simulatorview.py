@@ -645,6 +645,13 @@ def _bind_object_gizmo(obj, visible=False):
         dq = _qmul(new_q, _qinv(old_q))
         obj["pos"] = new_pos
         obj["wxyz"] = new_q
+        if _gimbal().drive_from_child(obj):
+            # On a Sim gimbal: the gimbal turns to this orientation (J1-J3 solved)
+            # and the object stays on it, so it snaps to what the gimbal reaches.
+            _refresh_camera_viz(obj)
+            _propagate_children(obj.get("id"))
+            wp._arm_drag_release(giz)
+            return
         _set_local_from_world(obj)
         _apply_object_xform(obj)
         _refresh_camera_viz(obj)
@@ -1152,7 +1159,10 @@ def update_scene_object(oid, name=None, pos=None, wxyz=None, scale=None, space=N
             _set_world_from_local(obj)
         else:
             obj["wxyz"] = q
-            _set_local_from_world(obj)
+            # On a Sim gimbal a world rotation turns the gimbal (J1-J3 solved);
+            # a local one sets the object's offset on it.
+            if not _gimbal().drive_from_child(obj):
+                _set_local_from_world(obj)
     if scale is not None:
         obj["scale"] = np.asarray(scale, dtype=float).reshape(3)
     if remove_camera or camera is False:

@@ -335,6 +335,87 @@ def world_parts(model, angles, mount_pos, mount_wxyz, margin=0.0, min_link=1):
 
 
 # ---------------------------------------------------------------------------
+# World orientation <-> joints
+# ---------------------------------------------------------------------------
+# A camera's world orientation as yaw (heading of the lens about world up),
+# pitch (lens above the horizon, positive up) and roll (picture turned, positive
+# = right side down), in degrees. Camera frame: z = lens, x = right, y = image down.
+def world_ypr(cam_wxyz):
+    q = np.asarray(cam_wxyz, dtype=float)
+    f, r = qrot(q, [0, 0, 1]), qrot(q, [1, 0, 0])
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, f[2]))))
+    yaw = math.degrees(math.atan2(f[1], f[0])) if math.hypot(f[0], f[1]) > 1e-6 else 0.0
+    y = math.radians(yaw)
+    r0 = np.array([math.sin(y), -math.cos(y), 0.0])     # level right of the lens
+    u0 = np.cross(r0, f)                                  # up, square to the lens
+    roll = math.degrees(math.atan2(-float(np.dot(r, u0)), float(np.dot(r, r0))))
+    return [yaw, pitch, roll]
+
+
+def world_q(yaw, pitch, roll):
+    """Camera world wxyz for yaw / pitch / roll (world_ypr's inverse)."""
+    y, p, r = (math.radians(float(v)) for v in (yaw, pitch, roll))
+    f = np.array([math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p)])
+    r0 = np.array([math.sin(y), -math.cos(y), 0.0])
+    u0 = np.cross(r0, f)
+    right = r0 * math.cos(r) - u0 * math.sin(r)
+    down = np.cross(f, right)
+    return qfrom_matrix(np.column_stack([right, down, f]))
+
+
+def _qangle(a, b):
+    d = abs(float(np.dot(a / np.linalg.norm(a), b / np.linalg.norm(b))))
+    return math.degrees(2.0 * math.acos(min(1.0, d)))
+
+
+def ik(model, mount_wxyz, cam_world_wxyz, prev):
+    """Joint angles (stored [yaw, roll, pitch] order) that turn the camera to
+    cam_world_wxyz with the handle at mount_wxyz, nearest the previous angles.
+    Returns (angles, error in degrees: 0 when reachable)."""
+    from scipy.optimize import least_squares
+    mq = np.asarray(mount_wxyz, float)
+    mq = mq / (np.linalg.norm(mq) or 1.0)
+    want = qmul(qinv(mq), np.asarray(cam_world_wxyz, float))  # in the handle frame
+    want = want / (np.linalg.norm(want) or 1.0)
+    base = joint_values(model, prev)
+
+    def resid(x):
+        q, _ = camera_pose(model, list(x))
+        d = qmul(qinv(q), want)
+        if d[0] < 0:
+            d = -d
+        v = d[1:]
+        s = float(np.linalg.norm(v))
+        ang = 2.0 * math.atan2(s, d[0])
+        rv = v / s * ang if s > 1e-12 else v * 2.0
+        # Small pull towards the previous angles, so equal solutions keep the nearest.
+        return np.concatenate([np.degrees(rv), 0.002 * (np.asarray(x) - base)])
+
+    starts = [base]
+    for k in range(len(base)):
+        for dv in (180.0, -180.0, 90.0, -90.0):
+            s = list(base)
+            s[k] += dv
+            starts.append(s)
+    best = None
+    for s in starts:
+        r = least_squares(resid, np.asarray(s, float), method="lm", xtol=1e-10, ftol=1e-10, max_nfev=400)
+        q, _ = camera_pose(model, list(r.x))
+        err = _qangle(q, want)
+        dist = sum(abs(((a - b) + 180) % 360 - 180) for a, b in zip(r.x, base))
+        key = (round(err, 2), dist)
+        if best is None or key < best[0]:
+            best = (key, r.x, err)
+        if err < 0.01 and s is starts[0]:
+            break
+    angles = [((float(a) + 180) % 360) - 180 for a in best[1]]
+    out = [0.0, 0.0, 0.0]
+    for k, j in enumerate(model["joints"]):
+        out[SDK_KEYS.index(j["sdk"])] = angles[k]
+    return out, best[2]
+
+
+# ---------------------------------------------------------------------------
 # Calibration: J2's axis from one reading in a known pose
 # ---------------------------------------------------------------------------
 CAL_MIN_J2 = 30.0  # J2 must have turned this far, or its axis makes no difference

@@ -1681,6 +1681,13 @@ def api_gimbal():
     ok = True
     if any(data.get(k) is not None for k in ("cfg", "target", "look")):
         ok = wp.gimbal.update(oid, data)
+    if data.get("world_target") is not None:
+        # World-mode Target: camera yaw / pitch / roll -> J1-J3 (inverse kinematics).
+        err = wp.gimbal.set_world_target(oid, data.get("world_target"))
+        ok = err is not None
+        if err is None:
+            return jsonify({"ok": False, "error": "Look At is aiming the gimbal",
+                            "gimbal": wp.gimbal.status(oid)})
     if act == "move":
         ok = wp.gimbal.request_move(oid)
     elif act == "calibrate":

@@ -759,6 +759,8 @@
     #gimConnect.advanced { background: #4aa3ff !important; }
     .gim-err { color: #e05555; font-size: 12px; padding: 8px 0 4px; word-break: break-word; }
     .gim-look[hidden] { display: none; }
+    .gim-space-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .gim-space-row label.field { margin: 4px 0 0; }
     .gim-select { width: 100%; background: #1c1d21; color: #e8e8ea; border: 1px solid #111; border-radius: 6px; padding: 6px; }
     #gimLookWrap.simple .mode-simple { color: #8a8a92 !important; }
     #gimLookWrap.advanced .mode-advanced { color: #4aa3ff !important; }
@@ -2118,12 +2120,20 @@
             </div>
             <div id="gimSimBlock">
               <div class="track-head"><span class="gim-twin sim">Sim gimbal</span></div>
-              <label class="field tight">Target (deg)</label>
+              <div class="gim-space-row">
+                <label class="field tight">Target (deg)</label>
+                <div class="fk-units rad" data-gim-space title="Joints (J1-J3) / World (camera yaw, pitch, roll)">
+                  <span class="mode-rad">Joints</span>
+                  <button type="button" class="slide" data-gim-space-btn></button>
+                  <span class="mode-deg">World</span>
+                </div>
+              </div>
               <div class="row triple gim-angles">
                 <label title="J1: handle motor (SDK yaw)">J1</label><input id="gimYaw" type="number" step="0.1" min="-180" max="180" value="0">
                 <label title="J2: middle motor (SDK roll)">J2</label><input id="gimRoll" type="number" step="0.1" min="-180" max="180" value="0">
                 <label title="J3: camera motor (SDK pitch)">J3</label><input id="gimPitch" type="number" step="0.1" min="-180" max="180" value="0">
               </div>
+              <div class="col-note" id="gimIkNote" hidden></div>
               <button type="button" id="gimMove" class="gim-move-real" title="Move the real gimbal to the Sim gimbal's angles (takes Move time)">Move real to sim</button>
               <div class="col-note" id="gimRealVsSim"></div>
               <div class="gim-btns gim-one">
@@ -2156,7 +2166,14 @@
             </div>
             <div id="gimRealBlock">
               <div class="track-head"><span class="gim-twin real">Real gimbal</span></div>
-              <label class="field tight">Read from gimbal (deg)</label>
+              <div class="gim-space-row">
+                <label class="field tight">Read from gimbal (deg)</label>
+                <div class="fk-units rad" data-gim-space title="Joints (J1-J3) / World (camera yaw, pitch, roll)">
+                  <span class="mode-rad">Joints</span>
+                  <button type="button" class="slide" data-gim-space-btn></button>
+                  <span class="mode-deg">World</span>
+                </div>
+              </div>
               <div class="row triple gim-angles">
                 <label>J1</label><input id="gimReadYaw" type="text" readonly value="—">
                 <label>J2</label><input id="gimReadRoll" type="text" readonly value="—">
@@ -4604,11 +4621,17 @@
     // Gimbal object: one scene object (mount empty + head cube). Its panel
     // section and the red "angle read failed" line at the bottom of the panel.
     let _gimFramesSig = "";
-    function gimbalTarget() {
+    // Joints: the fields are J1-J3. World: the camera's yaw, pitch, roll in the world.
+    let gimWorld = false;
+    function gimbalFields() {
       return ["gimYaw", "gimRoll", "gimPitch"].map((id) => {
         const v = parseFloat((document.getElementById(id) || {}).value);
         return isFinite(v) ? v : 0;
       });
+    }
+    function gimbalTarget() {
+      // In World mode the fields are not joint angles: the server keeps the solved ones.
+      return gimWorld ? null : gimbalFields();
     }
     // Rewriting a message every refresh clears a selection in it; only change it when it changed.
     function setText(el, txt) {
@@ -4642,9 +4665,23 @@
         if (el && document.activeElement !== el) el.value = v;
       };
       const tgt = g.target || [0, 0, 0];
-      ["gimYaw", "gimRoll", "gimPitch"].forEach((id, i) => setVal(id, Number(tgt[i] || 0).toFixed(1)));
+      const shownT = gimWorld ? (g.world || [0, 0, 0]) : tgt;
+      ["gimYaw", "gimRoll", "gimPitch"].forEach((id, i) => setVal(id, Number(shownT[i] || 0).toFixed(1)));
       const rd = g.read;
-      ["gimReadYaw", "gimReadRoll", "gimReadPitch"].forEach((id, i) => setVal(id, rd ? Number(rd[i]).toFixed(1) : "—"));
+      const shownR = gimWorld ? g.world_real : rd;
+      ["gimReadYaw", "gimReadRoll", "gimReadPitch"].forEach((id, i) => setVal(id, shownR ? Number(shownR[i]).toFixed(1) : "—"));
+      document.querySelectorAll("[data-gim-space]").forEach((w) => {
+        w.classList.toggle("deg", gimWorld);
+        w.classList.toggle("rad", !gimWorld);
+        const b = w.querySelector("[data-gim-space-btn]");
+        if (b) b.classList.toggle("advanced", gimWorld);
+      });
+      const ikn = document.getElementById("gimIkNote");
+      if (ikn) {
+        const far = gimWorld && g.ik_err != null && g.ik_err > 0.5;
+        ikn.hidden = !far;
+        setText(ikn, far ? "Nearest the gimbal reaches: " + Number(g.ik_err).toFixed(1) + "° off." : "");
+      }
       const drive = cfg.drive !== false;
       const sw = document.getElementById("gimConnect");
       const wrap = document.getElementById("gimConnWrap");
@@ -4708,7 +4745,9 @@
       [["gimYaw", "yaw"], ["gimRoll", "roll"], ["gimPitch", "pitch"], ["gimReadYaw", "yaw"], ["gimReadRoll", "roll"], ["gimReadPitch", "pitch"]].forEach((r) => {
         const el = document.getElementById(r[0]);
         const lab = el && el.previousElementSibling;
-        if (lab && jn[r[1]]) setText(lab, jn[r[1]]);
+        const worldName = { gimYaw: "yaw", gimRoll: "pitch", gimPitch: "roll", gimReadYaw: "yaw", gimReadRoll: "pitch", gimReadPitch: "roll" }[r[0]];
+        if (lab && gimWorld) setText(lab, worldName);
+        else if (lab && jn[r[1]]) setText(lab, jn[r[1]]);
       });
       setVal("gimScript", cfg.script || "");
       setVal("gimIface", cfg.interface || "canalystii");
@@ -4793,8 +4832,14 @@
       });
       ["gimYaw", "gimRoll", "gimPitch"].forEach((id) => {
         const el = byId(id);
-        if (el) el.addEventListener("change", () => postGimbal({ target: gimbalTarget() }));
+        if (el) el.addEventListener("change", () => postGimbal(gimWorld ? { world_target: gimbalFields() } : { target: gimbalFields() }));
       });
+      document.querySelectorAll("[data-gim-space-btn]").forEach((b) => b.addEventListener("click", () => {
+        gimWorld = !gimWorld;
+        try { localStorage.setItem("gimWorld", gimWorld ? "1" : "0"); } catch (err) {}
+        if (window.__lastObject) renderGimbal(window.__lastObject);
+      }));
+      try { gimWorld = localStorage.getItem("gimWorld") === "1"; } catch (err) {}
       const calBtn = byId("gimCalibrate");
       if (calBtn) calBtn.addEventListener("click", () => postGimbal({ action: "calibrate" }));
       const msel = byId("gimModel");
