@@ -530,7 +530,10 @@ def _ensure_status_worker():
 @app.route("/")
 def index():
     port = getattr(viewer_main, "VISER_PORT", None) or 8080
-    return render_template("index.html", viser_url="http://127.0.0.1:%s" % port)
+    base = "http://127.0.0.1:%s/" % port
+    # The tags let the server tell the world view from camera panes (robot_runtime._world_ids).
+    return render_template("index.html", viser_url=base + rr.view_tag_query("world"),
+                           viser_cam_url=base + rr.view_tag_query("camera"))
 
 
 @app.route("/api/status")

@@ -566,7 +566,12 @@ def camera_view_angles():
         clients = []
     if not clients:
         return {"yaw": -32.0, "pitch": 28.0}
-    cam = clients[0].camera
+    try:
+        allc = dict(srv.get_clients())
+        world = [allc[c] for c in _world_ids(allc) if c in allc]
+    except Exception:
+        world = []
+    cam = (world[0] if world else clients[0]).camera
     try:
         p = np.asarray(cam.position, dtype=float).reshape(3)
         look = np.asarray(getattr(cam, "look_at", CAM_LOOK), dtype=float).reshape(3)
@@ -589,12 +594,7 @@ def apply_camera_view(name="front"):
     except Exception:
         clients = {}
     ids = list(clients)
-    world = _world_cids.intersection(ids) if _world_cids else set()
-    if not world and ids:
-        try:
-            world = {min(ids, key=lambda k: int(k))}
-        except Exception:
-            world = {ids[0]}
+    world = _world_ids(ids)
     targets = [clients[i] for i in world if i in clients] or list(clients.values())[:1]
     for client in targets:
         try:
@@ -609,6 +609,47 @@ def apply_camera_view(name="front"):
 
 _preview_cid = None
 _world_cids = set()
+# Which viewer client is which. The page opens the world view and the camera
+# panes with different initialCameraPosition URL tags (viser reads them), and
+# a client is told apart by its first camera report, so connection order
+# (which swapped the world view and a camera pane) no longer matters.
+VIEW_TAG_WORLD = (11.11, 22.22, 33.33)
+VIEW_TAG_CAMERA = (44.44, 55.55, 66.66)
+_client_role = {}  # client id -> "world" | "camera"
+
+
+def view_tag_query(role):
+    t = VIEW_TAG_WORLD if role == "world" else VIEW_TAG_CAMERA
+    # One parameter only: "&" would be escaped in the page's script.
+    return "?initialCameraPosition=%s" % ",".join("%g" % v for v in t)
+
+
+def _role_from_camera(pos):
+    try:
+        p = np.asarray(pos, dtype=float).reshape(3)
+    except Exception:
+        return None
+    for role, tag in (("world", VIEW_TAG_WORLD), ("camera", VIEW_TAG_CAMERA)):
+        if float(np.linalg.norm(p - np.asarray(tag))) < 0.05:
+            return role
+    return None
+
+
+def _world_ids(ids):
+    """World-view client ids among `ids`: tagged ones first, else the old guess."""
+    global _world_cids
+    ids = set(ids)
+    tagged_world = {c for c in ids if _client_role.get(c) == "world"}
+    if tagged_world:
+        _world_cids = tagged_world
+        return tagged_world
+    untagged = [c for c in ids if _client_role.get(c) != "camera"]
+    if not _world_cids.intersection(untagged) and untagged:
+        try:
+            _world_cids = {min(untagged, key=lambda k: int(k))}
+        except Exception:
+            _world_cids = {untagged[0]}
+    return _world_cids.intersection(ids)
 
 
 def apply_scene_camera_preview(pos, wxyz, vfov=60.0, hfov=90.0, client_id=None):
@@ -622,16 +663,11 @@ def apply_scene_camera_preview(pos, wxyz, vfov=60.0, hfov=90.0, client_id=None):
     except Exception:
         return False
     ids = set(clients)
-    if len(ids) <= 1:
-        _world_cids = set(ids)
+    world = _world_ids(ids)
+    preview_ids = [cid for cid in ids if cid not in world]
+    if not world or not preview_ids:
         _preview_cid = None
         return False
-    if not _world_cids.intersection(ids):
-        try:
-            _world_cids = {min(ids, key=lambda k: int(k))}
-        except Exception:
-            _world_cids = {next(iter(ids))}
-    preview_ids = [cid for cid in ids if cid not in _world_cids]
     if not preview_ids:
         return False
     if client_id in preview_ids:
@@ -689,15 +725,11 @@ def apply_scene_camera_previews(targets):
     except Exception:
         return False
     ids = set(clients)
-    if len(ids) <= 1:
+    world = _world_ids(ids)
+    if not world or len(ids) <= len(world):
         return False
-    if not _world_cids.intersection(ids):
-        try:
-            _world_cids = {min(ids, key=lambda k: int(k))}
-        except Exception:
-            _world_cids = {next(iter(ids))}
     preview_ids = sorted(
-        [cid for cid in ids if cid not in _world_cids],
+        [cid for cid in ids if cid not in world],
         key=lambda k: int(k) if str(k).isdigit() else 0,
     )
     ok = False
@@ -730,19 +762,55 @@ def bind_default_camera():
                     cid = None
             if cid is None:
                 cid = id(client)
-            if not _world_cids:
-                _world_cids = {cid}
+
+            def _iso():
                 try:
                     pos, look = _camera_pose("iso")
                     client.camera.position = pos
                     client.camera.look_at = look
                 except Exception:
                     pass
+
+            # The first camera report carries the page's tag: world or camera pane.
+            def _first_report(_cam=None, _cid=cid):
+                if _cid in _client_role:
+                    return
+                role = _role_from_camera(getattr(client.camera, "position", None))
+                if role is None:
+                    return
+                _client_role[_cid] = role
+                if role == "world":
+                    _world_cids.discard(_cid)
+                    _world_cids.add(_cid)
+                    _iso()
+                else:
+                    _world_cids.discard(_cid)
+            try:
+                client.camera.on_update(_first_report)
+            except Exception:
+                pass
+            _first_report()
+            if _cid_role(cid):
+                return
+            # No tag (older viser or another page): the first client is the world view.
+            if not [c for c in _world_cids if c in dict(srv.get_clients())]:
+                _world_cids = {cid}
+                _iso()
                 return
             # Extra Viser clients are camera-pane previews — do not iso them.
             _preview_cid = cid
+
+        @srv.on_client_disconnect
+        def _gone(client):
+            cid = getattr(client, "client_id", None)
+            _client_role.pop(cid, None)
+            _world_cids.discard(cid)
     except Exception as e:
         print("bind camera connect failed", e)
+
+
+def _cid_role(cid):
+    return _client_role.get(cid)
 
 
 

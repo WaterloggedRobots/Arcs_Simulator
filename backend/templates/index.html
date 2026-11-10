@@ -6919,7 +6919,7 @@
           if (simRow.dataset.sig !== sig) {
             simRow.dataset.sig = sig;
             simRow.innerHTML = extraSim.map((o) =>
-              "<iframe class='cam-sim-extra' title='" + (o.name || o.id) + "' src='{{ viser_url }}'></iframe>"
+              "<iframe class='cam-sim-extra' title='" + (o.name || o.id) + "' src='{{ viser_cam_url }}'></iframe>"
             ).join("");
           }
         }
@@ -6950,7 +6950,7 @@
           ifr.removeAttribute("hidden");
           ifr.classList.toggle("cam-off", !showSim);
           ifr.style.visibility = showSim ? "visible" : "hidden";
-          if (showSim && !ifr.getAttribute("src")) ifr.src = "{{ viser_url }}";
+          if (showSim && !ifr.getAttribute("src")) ifr.src = "{{ viser_cam_url }}";
         }
         window.__camLiveIds = liveIds.filter(Boolean);
         window.__camAllMode = !!allMode;

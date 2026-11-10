@@ -24,6 +24,10 @@ Notes for working on this repo. The README is the user manual (features, control
 - All gimbal I/O is on the `gimbal` thread (`tick()` at 10 Hz); web requests are queued (`request_move`). The driver is a user script (`user_files/gimbal_scripts/rs4_can.py`, DJI R SDK over python-can) loaded per object. The run is detected from each arm's `_rp` / `_pb` without swapping arms.
 - No gimbal or CAN adapter in the cloud container: test with a stub script that implements `connect / get_angles / move_to / close`.
 
+## Viewer clients
+
+- The page opens Viser for the world view and for camera panes with different `initialCameraPosition` URL tags (`robot_runtime.view_tag_query`, passed to index.html as `viser_url` / `viser_cam_url`); a client's role comes from its first camera report (`_client_role`, `_world_ids`), not from connection order. Untagged clients (older viser, the Deck page) fall back to "first client is the world view".
+
 ## Steam Deck edition
 
 - `backend/deck_webui.py`: routes under `/api/deck/...`, jog logic, `boot()` (settings, viewer, Steam profile, pad, hold watchdog) and `serve()` (Flask, blocking).
