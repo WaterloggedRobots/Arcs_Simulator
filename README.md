@@ -497,7 +497,7 @@ user_files/               ships with the app, editable by the user
 packaging/deck/           ArcsDeck.exe build: PyInstaller spec, build requirements, build_deck.bat
 docs/                     not needed at runtime
   examples/cam_scripts/   example camera scripts (YOLO / RealSense), models/ holds yolov8n.pt
-  examples/gimbal/        rs4_spin_360.py: RS4 closed-loop camera roll (measured 360°, 3D ROLL 360); rs4_spin_test.py: diagnostics (wrap, direction, resend timing)
+  examples/gimbal/        rs4_axis_probe.py: which RS4 command turns one joint only; rs4_spin_360.py: RS4 closed-loop camera roll (measured 360°, 3D ROLL 360); rs4_spin_test.py: diagnostics (wrap, direction, resend timing)
   CameraRemoteCommand-2.00.02/   Sony PTP SDK reference and examples
   archive/, demo/, export-format/, Function List, slides, SDK manual, bug log
 ```
