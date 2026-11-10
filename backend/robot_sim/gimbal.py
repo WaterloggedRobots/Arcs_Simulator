@@ -836,10 +836,16 @@ def _tick_one(obj, clock):
     with _rt_lock:
         reqs, rt["requests"] = rt["requests"], []
     # Reading is always attempted; moves go out only with Drive on.
-    calib = rt.pop("calib_req", False)
+    calib = rt.pop("calib_req", None)
+    if calib == "cancel":
+        rt.pop("calib_rec", None)
+        rt["calib"] = {"ok": None, "time": time.time(), "text": "Recalibration cancelled."}
+        calib = None
     if _ensure_connected(oid, cfg, rt):
-        if calib:
-            _calibrate(obj, cfg, rt)
+        if calib == "start":
+            _calib_start(rt)
+        elif calib == "finish":
+            _calib_finish(obj, cfg, rt)
         if cfg.get("drive", True):
             for kind, angles, dur in reqs:
                 _move(oid, rt, angles, dur)
@@ -850,7 +856,10 @@ def _tick_one(obj, clock):
             elif real_on:
                 _drive_run(oid, rt, keys, t)
         _read(oid, rt)
-    elif calib:
+        if "calib_rec" in rt:
+            _calib_sample(rt)
+    elif calib or "calib_rec" in rt:
+        rt.pop("calib_rec", None)
         rt["calib"] = {"ok": False, "time": time.time(),
                        "text": "Recalibrate failed: the real gimbal is not connected (%s)" % (rt.get("conn_err") or "no reply")}
     rt["running"] = real_on
@@ -861,43 +870,104 @@ def _tick_one(obj, clock):
     _set_visible(obj, "real", ok)
 
 
-def _calibrate(obj, cfg, rt):
-    """Calibrate: fit J2's axis from a fresh reading in the reference pose and
-    write it into the model file (gimbal_model.fit_j2_axis / write_axis)."""
-    import json
-    mod = rt.get("mod")
+CALIB_MAX = 3000  # samples (5 min at 10 Hz)
+
+
+def _calib_start(rt):
+    """Recalibrate, step 1: record (joints, camera world angles) every tick
+    while the handle is held still, hand end up, and the camera is moved."""
+    if not callable(getattr(rt.get("mod"), "get_world", None)):
+        rt["calib"] = {"ok": False, "time": time.time(),
+                       "text": "Recalibrate failed: the driver script has no get_world() (camera world angles)"}
+        return
+    rt["calib_rec"] = {"samples": [], "start": time.time(), "err": ""}
+    rt["calib"] = {"ok": None, "recording": True, "n": 0, "time": time.time(),
+                   "text": "Recording: hold the handle still, hand end up, and move the camera around "
+                           "with the joystick (pan all the way round, tilt up and down) for 10 s or more, then press Finish."}
+
+
+def _calib_sample(rt):
+    rec = rt["calib_rec"]
+    if not rt["read_ok"]:
+        return
     try:
-        if not callable(getattr(mod, "get_world", None)):
-            raise ValueError("the driver script has no get_world() (camera world angles)")
-        joints = [float(v) for v in list(mod.get_angles())[:3]]
-        world = [float(v) for v in list(mod.get_world())[:3]]  # yaw, roll, pitch
-        path = gmodel.path_of(cfg.get("model"))
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        fit = gmodel.fit_j2_axis(raw, joints, world_pitch=world[2], world_roll=world[1])
-        note = ("%s: hand end up, camera level facing the front; J %.1f / %.1f / %.1f, world pitch %.1f roll %.1f; "
-                "tilt %.1f deg towards the hand end, side %.1f deg" % (
-                    time.strftime("%Y-%m-%d %H:%M"), joints[0], joints[1], joints[2], world[2], world[1],
-                    fit["tilt"], fit["side"]))
-        gmodel.write_axis(cfg.get("model"), "roll", fit["axis"], note)
-        rt["calib"] = {"ok": True, "time": time.time(), "joints": joints, "world": world, **fit,
-                       "file": os.path.basename(path),
-                       "text": "Recalibrated: J2 axis %s, tilt %.1f deg (was %.1f), side %.1f deg (was %.1f); camera "
-                               "then at pitch %.1f, roll %.1f. Saved to %s (previous in .bak). %s." % (
-                                   fit["axis"], fit["tilt"], fit["was_tilt"], fit["side"], fit["was_side"],
-                                   fit["pitch"], fit["roll"], os.path.basename(path), fit["reading"])}
-        print("gimbal calibrate:", rt["calib"]["text"])
+        world = [float(v) for v in list(rt["mod"].get_world())[:3]]
     except Exception as e:
-        rt["calib"] = {"ok": False, "time": time.time(), "text": "Recalibrate failed: %s" % e}
-        print("gimbal calibrate failed:", e)
+        rec["err"] = str(e) or type(e).__name__
+        return
+    if len(world) < 3 or not all(math.isfinite(v) for v in world):
+        return
+    read = list(rt["read"])
+    S = rec["samples"]
+    # Keep a sample when the joints moved (a still gimbal adds nothing).
+    if S and max(abs(gmodel._wrap(a - b)) for a, b in zip(read, S[-1][0])) < 0.5:
+        return
+    if len(S) < CALIB_MAX:
+        S.append((read, world))
+    J = np.array([x[0] for x in S])
+    span = (J.max(axis=0) - J.min(axis=0)) if len(S) else [0, 0, 0]
+    rt["calib"] = {"ok": None, "recording": True, "n": len(S), "time": time.time(),
+                   "text": "Recording: %d samples, J1 span %.0f deg, J3 span %.0f deg%s. Keep the handle still; "
+                           "press Finish when done (aim for J1 > 180 and J3 > 90)." % (
+                               len(S), span[0], span[2], " (world read failed: %s)" % rec["err"] if rec["err"] else "")}
 
 
-def request_calibrate(oid):
-    if _find(oid) is None:
+def _calib_finish(obj, cfg, rt):
+    """Recalibrate, step 2: fit J2's axis and the J2 / J3 directions and zero
+    offsets to the samples (gimbal_model.fit_calibration, on its own thread:
+    it takes up to a minute) and write them into the model file."""
+    rec = rt.pop("calib_rec", None)
+    if rec is None:
+        return
+    samples = list(rec["samples"])
+    model_file = cfg.get("model")
+    rt["calib"] = {"ok": None, "fitting": True, "n": len(samples), "time": time.time(),
+                   "text": "Fitting the model to %d samples (up to a minute)…" % len(samples)}
+
+    def work():
+        import json
+        try:
+            path = gmodel.path_of(model_file)
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            was = gmodel.parse(raw)["joints"]
+            fit = gmodel.fit_calibration(raw, samples)
+            note = ("%s: %d samples, hand end up; rms %.2f deg, worst %.2f deg; handle %.1f / %.1f deg off vertical" % (
+                time.strftime("%Y-%m-%d %H:%M"), fit["samples"], fit["rms"], fit["worst"],
+                fit["handle_tilt"][0], fit["handle_tilt"][1]))
+            gmodel.write_joints(model_file, {
+                "roll": {"axis": fit["axis"], "sign": fit["j2_sign"], "offset": fit["j2_offset"]},
+                "pitch": {"sign": fit["j3_sign"], "offset": fit["j3_offset"]}}, note)
+            quality = "good" if fit["rms"] < 1.5 else ("fair" if fit["rms"] < 4 else "poor: hold the handle stiller and try again")
+            text = ("Recalibrated from %d samples: fit %s (rms %.2f deg, worst %.2f deg). J2 axis %s (tilt %.1f deg, side %.1f deg; "
+                    "was %s), J2 %s offset %.1f (was %s %.1f), J3 %s offset %.1f (was %s %.1f); handle held %.1f / %.1f deg off "
+                    "vertical. Saved to %s (previous in .bak)." % (
+                        fit["samples"], quality, fit["rms"], fit["worst"], fit["axis"], fit["tilt"], fit["side"],
+                        [round(float(v), 3) for v in was[1]["axis"]],
+                        "+" if fit["j2_sign"] > 0 else "reversed", fit["j2_offset"],
+                        "+" if was[1]["sign"] > 0 else "reversed", was[1]["offset"],
+                        "+" if fit["j3_sign"] > 0 else "reversed", fit["j3_offset"],
+                        "+" if was[2]["sign"] > 0 else "reversed", was[2]["offset"],
+                        fit["handle_tilt"][0], fit["handle_tilt"][1], os.path.basename(path)))
+            rt["calib"] = {"ok": True, "time": time.time(), **fit, "file": os.path.basename(path), "text": text}
+            print("gimbal calibrate:", text)
+        except Exception as e:
+            rt["calib"] = {"ok": False, "time": time.time(), "text": "Recalibrate failed: %s" % e}
+            print("gimbal calibrate failed:", e)
+
+    threading.Thread(target=work, name="gimbal-calibrate", daemon=True).start()
+
+
+def request_calibrate(oid, step="start"):
+    """step: start (record samples), finish (fit and save) or cancel."""
+    if _find(oid) is None or step not in ("start", "finish", "cancel"):
         return False
     rt = _rt_for(oid)
-    rt["calib_req"] = True
-    rt["calib"] = {"ok": None, "time": time.time(), "text": "Recalibrating…"}
+    if step == "start" and (rt.get("calib") or {}).get("fitting"):
+        return False
+    rt["calib_req"] = step
+    if step == "start":
+        rt["calib"] = {"ok": None, "recording": True, "n": 0, "time": time.time(), "text": "Starting…"}
     return True
 
 

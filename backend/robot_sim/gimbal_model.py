@@ -149,7 +149,10 @@ def parse(raw):
         joints.append({"name": str(j.get("name") or "J%d" % (i + 1)), "sdk": sdk,
                        "axis": axis / np.linalg.norm(axis),
                        "point": _vec(j.get("point") or [0, 0, 0], scale=mm, what="joint %d point" % (i + 1)),
-                       "range": [float(rng[0]), float(rng[1])]})
+                       "range": [float(rng[0]), float(rng[1])],
+                       # Reading -> model angle: sign * reading + offset (calibration).
+                       "sign": -1.0 if float(j.get("sign", 1) or 1) < 0 else 1.0,
+                       "offset": float(j.get("offset", 0) or 0)})
     if not joints:
         raise ValueError("no joints")
     cam = raw.get("camera") or {}
@@ -225,9 +228,19 @@ def load(name):
 # Kinematics
 # ---------------------------------------------------------------------------
 def joint_values(model, target):
-    """Joint angles in model order from a stored [yaw, roll, pitch] list."""
-    t = (list(target or [0, 0, 0]) + [0, 0, 0])[:3]
-    return [float(t[SDK_KEYS.index(j["sdk"])]) for j in model["joints"]]
+    """Model joint angles (model order) from a stored [yaw, roll, pitch] list
+    of gimbal readings: sign * reading + offset per joint."""
+    t = (list(target if target is not None else [0, 0, 0]) + [0, 0, 0])[:3]
+    return [j["sign"] * float(t[SDK_KEYS.index(j["sdk"])]) + j["offset"] for j in model["joints"]]
+
+
+def stored_values(model, angles):
+    """Inverse of joint_values: model angles -> stored [yaw, roll, pitch] readings."""
+    out = [0.0, 0.0, 0.0]
+    for k, j in enumerate(model["joints"]):
+        v = (float(angles[k]) - j["offset"]) * j["sign"]
+        out[SDK_KEYS.index(j["sdk"])] = ((v + 180.0) % 360.0) - 180.0
+    return out
 
 
 def joint_local(model, k, deg):
@@ -287,10 +300,7 @@ def aim(model, mount_pos, mount_wxyz, world_target, prev):
     a = list(angles0)
     for i, k in enumerate(ai):
         a[k] = ((float(best[1][i]) + 180) % 360) - 180
-    out = [0.0, 0.0, 0.0]
-    for k, j in enumerate(model["joints"]):
-        out[SDK_KEYS.index(j["sdk"])] = a[k]
-    return out
+    return stored_values(model, a)
 
 
 def link_poses(model, angles):
@@ -408,11 +418,7 @@ def ik(model, mount_wxyz, cam_world_wxyz, prev):
             best = (key, r.x, err)
         if err < 0.01 and s is starts[0]:
             break
-    angles = [((float(a) + 180) % 360) - 180 for a in best[1]]
-    out = [0.0, 0.0, 0.0]
-    for k, j in enumerate(model["joints"]):
-        out[SDK_KEYS.index(j["sdk"])] = angles[k]
-    return out, best[2]
+    return stored_values(model, list(best[1])), best[2]
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +510,193 @@ def fit_j2_axis(raw, reading, world_pitch, world_roll):
     return {"axis": [round(float(v), 4) for v in axis_of(tilt, side)], "tilt": round(tilt, 2), "side": round(side, 2),
             "was_tilt": round(cur_tilt, 2), "was_side": round(cur_side, 2),
             "pitch": round(p, 2), "roll": round(ro, 2), "error": round(float(best[0]), 2), "reading": seen}
+
+
+# ---------------------------------------------------------------------------
+# Calibration from many samples (handle held still, hand end up)
+# ---------------------------------------------------------------------------
+# The DJI attitude ("world") angles are yaw, then roll, then pitch, with roll
+# in the middle (seen on the RS 4: yaw and pitch jump 180 when roll passes 90).
+# With forward f, left l, up u of the camera as the columns of R = Rz(yaw)
+# Rx(roll) Ry(pitch): roll = asin(l_z), pitch = atan2(-f_z, u_z) (+ = nose down).
+def dji_ypr(cam_world_wxyz):
+    """(yaw, pitch, roll) as the DJI attitude reads them (yaw's zero is arbitrary)."""
+    q = np.asarray(cam_world_wxyz, float)
+    f, r, d = qrot(q, [0, 0, 1]), qrot(q, [1, 0, 0]), qrot(q, [0, 1, 0])
+    l, u = -r, -d
+    roll = math.degrees(math.asin(max(-1.0, min(1.0, l[2]))))
+    pitch = math.degrees(math.atan2(-f[2], u[2]))
+    yaw = math.degrees(math.atan2(-l[0], l[1]))
+    return yaw, pitch, roll
+
+
+def dji_pitch_roll(cam_world_wxyz):
+    _, pitch, roll = dji_ypr(cam_world_wxyz)
+    return pitch, roll
+
+
+def _wrap(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
+def fit_calibration(raw, samples, log=None):
+    """Fit J2's axis (tilt, side), J2 / J3 offsets and directions, and the
+    handle's small tilt in the hand to samples [(reading [yaw, roll, pitch],
+    world [yaw, roll, pitch])] taken with the handle held still, hand end up,
+    while the camera moved. Returns a dict with the joint updates and the fit
+    quality, or raises ValueError."""
+    from scipy.optimize import least_squares
+    import copy
+    names = [j.get("sdk") for j in raw.get("joints") or []]
+    if names[:3] != ["yaw", "roll", "pitch"]:
+        raise ValueError("calibration expects joints J1 / J2 / J3 = yaw / roll / pitch in the model")
+    S = [(np.asarray(r, float)[:3], np.asarray(w, float)[:3]) for r, w in samples]
+    if len(S) < 15:
+        raise ValueError("only %d samples: move the camera around more (at least 15)" % len(S))
+    J = np.array([s[0] for s in S])
+    span = J.max(axis=0) - J.min(axis=0)
+    if span[0] < 40 and span[2] < 40:
+        raise ValueError("the camera hardly moved (J1 span %.0f, J3 span %.0f deg): pan and tilt it further" % (span[0], span[2]))
+    lens0 = np.asarray((raw.get("camera") or {}).get("lens") or [1, 0, 0], float)
+    lens0 /= np.linalg.norm(lens0)
+    up0 = np.array([0.0, 0.0, 1.0])
+
+    def axis_of(tilt, side):
+        a = qrot(qaxis(up0, side), lens0)
+        perp = np.cross(a, up0)
+        return qrot(qaxis(perp, tilt), a) if np.linalg.norm(perp) > 1e-9 else a
+
+    if len(S) > 60:  # enough for the fit, and quicker
+        S = [S[int(i)] for i in np.linspace(0, len(S) - 1, 60)]
+    base = parse(raw)
+
+    def model_for(x, s2, s3):
+        m = dict(base)
+        js = [dict(j) for j in base["joints"]]
+        js[0].update(sign=1.0, offset=0.0)
+        js[1].update(axis=axis_of(x[0], x[1]), sign=s2, offset=float(x[2]))
+        js[2].update(sign=s3, offset=float(x[3]))
+        m["joints"] = js
+        return m
+
+    # Heading counts less: the gimbal's yaw drifts and its zero is arbitrary (x[6]).
+    YW = 0.5
+
+    def resid(x, s2, s3, sp, sr, sy):
+        m = model_for(x, s2, s3)
+        hq = qmul(qaxis([1, 0, 0], x[4]), qaxis([0, 1, 0], x[5]))  # handle tilt in the hand
+        out = []
+        for reading, world in S:
+            q, _ = camera_pose(m, joint_values(m, reading))
+            y, p, ro = dji_ypr(qmul(hq, q))
+            dy = _wrap(sy * y + x[6] - world[0])
+            # Near roll +-90 yaw and pitch are ill-defined: weigh yaw down there.
+            out += [_wrap(sp * p - world[2]), _wrap(sr * ro - world[1]), YW * dy * max(0.0, math.cos(math.radians(ro)))]
+        return np.asarray(out)
+
+    # Score every start once, then optimise the most promising few.
+    def yaw0(x, s2, s3, sy):
+        # The heading offset that best lines up the first guess.
+        m = model_for(x, s2, s3)
+        d = [math.radians(_wrap(w[0] - sy * dji_ypr(camera_pose(m, joint_values(m, r))[0])[0])) for r, w in S]
+        return math.degrees(math.atan2(np.mean(np.sin(d)), np.mean(np.cos(d))))
+
+    # The current model as a guess: tilt / side of its J2 axis, its signs and offsets.
+    cj = base["joints"]
+    a2 = np.asarray(cj[1]["axis"], float)
+    cur_tilt = math.degrees(math.asin(max(-1.0, min(1.0, float(a2 @ up0)))))
+    cur_side = math.degrees(math.atan2(float(np.cross(lens0, a2) @ up0), float(a2 @ lens0)))
+    cur = (cj[1]["sign"], cj[2]["sign"], cur_tilt, cj[1]["offset"], cj[2]["offset"])
+
+    def scored(combos, tilts, o2s, o3s, side=0.0):
+        out = []
+        for s2, s3, sy in combos:
+            for t0 in tilts:
+                for o3 in o3s:
+                    for o2 in o2s:
+                        x0 = np.array([t0, side, o2, o3, 0.0, 0.0, 0.0])
+                        x0[6] = yaw0(x0, s2, s3, sy)
+                        f0 = resid(x0, s2, s3, 1.0, 1.0, sy)
+                        out.append((float(np.mean(np.minimum(np.abs(f0), 30.0))), x0, (s2, s3, 1.0, 1.0, sy)))
+        out.sort(key=lambda s: s[0])
+        return out
+
+    fits = []
+
+    def run(cands):
+        for _score, x0, combo in cands:
+            try:
+                r = least_squares(resid, x0, args=combo, loss="soft_l1", f_scale=3.0,
+                                  max_nfev=150, x_scale=[10, 10, 30, 30, 5, 5, 30])
+            except Exception:
+                continue
+            rms = float(np.sqrt(np.mean(r.fun ** 2)))
+            if log:
+                log("calibration try %s from %s: rms %.2f" % (combo, np.round(x0, 1).tolist(), rms))
+            fits.append((rms, r.x, combo))
+
+    # The attitude's pitch / roll signs are fixed (dji_ypr): left free, a mirror
+    # image of the gimbal would fit as well. The heading's sign is fitted.
+    combos = [(a, b, c) for a in (1.0, -1.0) for b in (1.0, -1.0) for c in (1.0, -1.0)]
+    run(scored([(cur[0], cur[1], c) for c in (1.0, -1.0)], [cur[2]], [cur[3]], [cur[4]], cur_side)[:1])
+    run(scored(combos, [0.0, 30.0, 56.0], [0.0, 180.0], [0.0, 90.0, -90.0, 180.0])[:4])
+    if not fits:
+        raise ValueError("the fit failed")
+    # Different joint signs / offsets can give the same camera pose over the
+    # samples; of the fits that are as good, keep the one nearest the current model.
+    def near(f):
+        _rms, x, (s2, s3, _sp, _sr, _sy) = f
+        return ((s2 != cur[0]) + (s3 != cur[1]) + (np.sign(x[0]) != np.sign(cur[2]) and abs(x[0]) > 2)
+                + abs(_wrap(x[2] - cur[3])) / 180 + abs(_wrap(x[3] - cur[4])) / 180)
+    floor = min(f[0] for f in fits)
+    good = [f for f in fits if f[0] <= floor * 1.15 + 0.1]
+    if min(near(f) for f in good) >= 1:
+        # The search found only a "far" form: look for the near one.
+        run(scored([(cur[0], cur[1], c) for c in (1.0, -1.0)], [cur[2], -cur[2], 0.0],
+                   [0.0, 180.0], [0.0, 90.0, -90.0, 180.0])[:2])
+        floor = min(f[0] for f in fits)
+        good = [f for f in fits if f[0] <= floor * 1.15 + 0.1]
+    best = min(good, key=near)
+    rms, x, (s2, s3, sp, sr, sy) = best
+    # Refine without the robust loss.
+    r = least_squares(resid, x, args=(s2, s3, sp, sr, sy), max_nfev=400, x_scale=[10, 10, 30, 30, 5, 5, 30])
+    x = np.array(r.x, float)
+    err = np.abs(r.fun)
+    x[0] = _wrap(x[0])
+    if abs(x[0]) > 90:  # the axis the other way round: same joint, J2's direction flipped
+        x[0] = _wrap(x[0] - 180)
+        s2, x[2] = -s2, -x[2]
+    rms = float(np.sqrt(np.mean(r.fun ** 2)))
+    axis = axis_of(x[0], x[1])
+    return {
+        "axis": [round(float(v), 4) for v in axis],
+        "tilt": round(float(x[0]), 2), "side": round(float(x[1]), 2),
+        "j2_sign": s2, "j2_offset": round(float(_wrap(x[2])), 2),
+        "j3_sign": s3, "j3_offset": round(float(_wrap(x[3])), 2),
+        "handle_tilt": [round(float(x[4]), 2), round(float(x[5]), 2)],
+        "pitch_sign": sp, "roll_sign": sr, "yaw_sign": sy,
+        "rms": round(rms, 2), "worst": round(float(err.max()), 2), "samples": len(S),
+        "span": [round(float(v), 1) for v in span],
+    }
+
+
+def write_joints(name, updates, note):
+    """Set joint fields in a model file: updates = {sdk: {field: value}}
+    (a .bak copy is kept first)."""
+    import shutil
+    path = path_of(name)
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    for j in raw.get("joints") or []:
+        if j.get("sdk") in updates:
+            j.update(updates[j["sdk"]])
+            j["calibrated"] = note
+    shutil.copyfile(path, path + ".bak")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+    os.replace(tmp, path)
+    return path
 
 
 def write_axis(name, sdk, axis, note):

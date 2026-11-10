@@ -1691,8 +1691,8 @@ def api_gimbal():
     if act == "move":
         ok = wp.gimbal.request_move(oid)
     elif act == "calibrate":
-        # J2's axis from the reading in the reference pose (hand end up, camera level facing the front).
-        ok = wp.gimbal.request_calibrate(oid)
+        # step start: record samples (handle still, hand end up, camera moved); finish: fit and save; cancel.
+        ok = wp.gimbal.request_calibrate(oid, str(data.get("step") or "start"))
     elif act == "use_read":
         st = wp.gimbal.status(oid) or {}
         ok = st.get("read") is not None
