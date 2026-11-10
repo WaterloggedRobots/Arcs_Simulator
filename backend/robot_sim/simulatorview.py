@@ -953,17 +953,27 @@ def restore_scene_object(rec):
                 wp._obj_seq = max(wp._obj_seq, int(oid[1:]))
         except Exception:
             pass
+    rec = rec or {}
+
+    def _vec(*keys, default):
+        # Undo snapshots hold numpy arrays, so test for None, not truthiness.
+        for k in keys:
+            v = rec.get(k)
+            if v is not None:
+                return np.array(v, dtype=float).reshape(len(default))
+        return np.array(default, dtype=float)
+
     obj = {
         "id": oid,
         "kind": kind,
         "name": str((rec or {}).get("name") or kind),
-        "pos": np.asarray((rec or {}).get("pos") or [1, 0, 0.2], dtype=float).reshape(3),
-        "wxyz": np.asarray((rec or {}).get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4),
-        "local_pos": np.asarray((rec or {}).get("local_pos") or (rec or {}).get("pos") or [1, 0, 0.2], dtype=float).reshape(3),
-        "local_wxyz": np.asarray((rec or {}).get("local_wxyz") or (rec or {}).get("wxyz") or [1, 0, 0, 0], dtype=float).reshape(4),
+        "pos": _vec("pos", default=[1, 0, 0.2]),
+        "wxyz": _vec("wxyz", default=[1, 0, 0, 0]),
+        "local_pos": _vec("local_pos", "pos", default=[1, 0, 0.2]),
+        "local_wxyz": _vec("local_wxyz", "wxyz", default=[1, 0, 0, 0]),
         "parent_id": (rec or {}).get("parent_id"),
         "space": (rec or {}).get("space") or "world",
-        "scale": np.asarray((rec or {}).get("scale") or [1, 1, 1], dtype=float).reshape(3),
+        "scale": _vec("scale", default=[1, 1, 1]),
         "handle": None,
         "gizmo": None,
         "camera": dict((rec or {}).get("camera") or {}) if ((rec or {}).get("camera") or kind == "camera") else None,
