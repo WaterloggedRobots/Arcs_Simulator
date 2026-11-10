@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """RS4 360° yaw spin test (reference code), with diagnostic prints.
 
+Joint angles are printed as J1 / J2 / J3 (J1 closest to the handle; the SDK
+calls them joint yaw / roll / pitch). Speed commands still use the SDK's
+axis names (yaw / roll / pitch).
+
 Spins yaw with speed commands (CmdSet 0x0E, CmdID 0x01), resent every 50 ms,
 for speed x seconds degrees (30 °/s x 12 s = 360° by default), then stops,
 releases speed control and levels the pitch. It prints what the sandbox needs
@@ -202,7 +206,7 @@ class DjiGimbal:
 
 # ---------------- test ----------------------------------------------------------
 def fmt(a):
-    return "None" if a is None else "yaw %7.1f  roll %6.1f  pitch %6.1f" % a
+    return "None" if a is None else "J1 %7.1f  J2 %6.1f  J3 %6.1f" % a
 
 
 def read_settled(g, label, tries=3):
@@ -232,7 +236,7 @@ def spin(g, speed_dps, seconds):
     late = 0
     last_send = None
     next_read = 0.0
-    print("   t(s)    yaw read   step   unwrapped total   roll   pitch   note")
+    print("   t(s)     J1 read   step   unwrapped total     J2      J3   note")
     t0 = time.time()
     while time.time() - t0 < seconds:
         now = time.time()
@@ -293,14 +297,14 @@ def spin(g, speed_dps, seconds):
     print("speed commands sent : %d  (every %.0f ms planned, longest gap %.0f ms)" % (sends, RESEND_S * 1000, max_gap * 1000))
     print("gaps over 0.5 s     : %d  %s" % (late, "OK" if late == 0 else "<-- the spin was interrupted; reads are too slow"))
     print("angle reads         : %d  (%d failed)" % (reads, fails))
-    print("wraps seen          : %d  %s" % (len(wraps), "-> yaw reading WRAPS at +/-180" if wraps else "-> no wrap seen (see the note below)"))
+    print("wraps seen          : %d  %s" % (len(wraps), "-> J1 reading WRAPS at +/-180" if wraps else "-> no wrap seen (see the note below)"))
     for t, a, b in wraps:
         print("                      at %.2f s: %+.1f -> %+.1f" % (t, a, b))
     print("turned (unwrapped)  : %+.1f deg  (reading increased: %s)" % (unwrapped, "yes" if unwrapped > 0 else "no"))
     print("expected            : %+.1f deg  (speed x %.2f s)" % (expected, elapsed))
     print("error               : %+.1f deg" % (unwrapped - expected))
     if not wraps and abs(unwrapped) > 300:
-        print("note                : turned past a full circle without a jump: yaw may NOT wrap (it counts on).")
+        print("note                : turned past a full circle without a jump: J1 may NOT wrap (it counts on).")
     return {"speed": speed_dps, "turned": unwrapped, "wraps": len(wraps), "late": late, "fails": fails}
 
 

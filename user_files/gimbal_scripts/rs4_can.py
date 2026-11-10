@@ -9,6 +9,11 @@ Everything down to "Sandbox driver" is the reference code. Changes:
     (struct.error) or giving up, and returns only the reply to the command
     just sent (late replies are skipped).
 
+Joints: the SDK's joint yaw / roll / pitch are the motors J1 / J2 / J3, J1
+closest to the handle. The sandbox shows them as J1-J3 (data keys stay
+yaw / roll / pitch). get_angles(joint=False) gives the camera's WORLD
+(attitude) yaw / roll / pitch instead.
+
 The "Sandbox driver" section at the end is what the sandbox calls (from one
 thread only): connect(cfg), get_angles(), move_to(yaw, roll, pitch, duration),
 close(). Running this file directly runs the reference demo.
@@ -223,7 +228,7 @@ def connect(cfg=None):
 
 
 def get_angles():
-    """(yaw, roll, pitch) joint angles in degrees; raises if the read fails."""
+    """(J1, J2, J3) joint angles in degrees (SDK joint yaw, roll, pitch); raises if the read fails."""
     if _gimbal is None:
         raise RuntimeError("not connected")
     a = _gimbal.get_angles()

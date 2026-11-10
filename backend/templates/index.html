@@ -732,7 +732,7 @@
     .gim-move-real:hover:not(:disabled) { background: #cf8735; }
     .gim-move-real:disabled { opacity: 0.45; cursor: default; }
     .gim-btns button:disabled { opacity: 0.45; cursor: default; }
-    .props .row.triple.gim-angles { grid-template-columns: 28px minmax(0,1fr) 26px minmax(0,1fr) 34px minmax(0,1fr); }
+    .props .row.triple.gim-angles { grid-template-columns: 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr); }
     .props .row.triple.gim-angles input { min-width: 0; width: 100%; }
     .props .row.triple.gim-angles label { font-size: 11px; }
     .props .gim-comp input[type="text"] {
@@ -742,7 +742,7 @@
     .props .gim-comp input[readonly] { color: #9a9aa2; background: #18191d; }
     .gim-count { color: #9a9aa2; }
     .gim-frames { max-height: 140px; overflow-y: auto; margin-top: 4px; }
-    .gim-frame { display: grid; grid-template-columns: 52px 1fr 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+    .gim-frame { display: grid; grid-template-columns: 46px 1fr 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
     .gim-frame:hover { background: #2c2d36; }
     .gim-frame.on { background: #233a52; }
     .gim-frame .gim-fdel { width: 22px; min-width: 22px; height: 22px; margin: 0; padding: 0; background: #3a3b44; line-height: 1; }
@@ -2110,9 +2110,9 @@
               <div class="track-head"><span class="gim-twin sim">Sim gimbal</span></div>
               <label class="field tight">Target (deg)</label>
               <div class="row triple gim-angles">
-                <label title="yaw">yaw</label><input id="gimYaw" type="number" step="0.1" min="-180" max="180" value="0">
-                <label title="roll">roll</label><input id="gimRoll" type="number" step="0.1" min="-30" max="30" value="0">
-                <label title="pitch">pitch</label><input id="gimPitch" type="number" step="0.1" min="-56" max="146" value="0">
+                <label title="J1: handle motor (SDK yaw)">J1</label><input id="gimYaw" type="number" step="0.1" min="-180" max="180" value="0">
+                <label title="J2: middle motor (SDK roll)">J2</label><input id="gimRoll" type="number" step="0.1" min="-30" max="30" value="0">
+                <label title="J3: camera motor (SDK pitch)">J3</label><input id="gimPitch" type="number" step="0.1" min="-56" max="146" value="0">
               </div>
               <button type="button" id="gimMove" class="gim-move-real" title="Move the real gimbal to the Sim gimbal's angles (takes Move time)">Move real to sim</button>
               <div class="col-note" id="gimRealVsSim"></div>
@@ -2148,9 +2148,9 @@
               <div class="track-head"><span class="gim-twin real">Real gimbal</span></div>
               <label class="field tight">Read from gimbal (deg)</label>
               <div class="row triple gim-angles">
-                <label>yaw</label><input id="gimReadYaw" type="text" readonly value="—">
-                <label>roll</label><input id="gimReadRoll" type="text" readonly value="—">
-                <label>pitch</label><input id="gimReadPitch" type="text" readonly value="—">
+                <label>J1</label><input id="gimReadYaw" type="text" readonly value="—">
+                <label>J2</label><input id="gimReadRoll" type="text" readonly value="—">
+                <label>J3</label><input id="gimReadPitch" type="text" readonly value="—">
               </div>
               <div class="gim-btns">
                 <button type="button" id="gimUseRead2" title="Copy these angles into the Sim gimbal's target">Use as target</button>
@@ -4655,7 +4655,7 @@
         else {
           const dv = [0, 1, 2].map((i) => Number(tgt[i] || 0) - Number(rd[i] || 0));
           rvs.textContent = dv.every((v) => Math.abs(v) < 0.5) ? "Real gimbal is at the sim pose."
-            : "Real is off by yaw " + dv[0].toFixed(1) + " · roll " + dv[1].toFixed(1) + " · pitch " + dv[2].toFixed(1) + "°";
+            : "Real is off by J1 " + dv[0].toFixed(1) + " · J2 " + dv[1].toFixed(1) + " · J3 " + dv[2].toFixed(1) + "°";
         }
       }
       ["gimUseRead", "gimUseRead2"].forEach((id) => {
@@ -4680,7 +4680,7 @@
         list.innerHTML = keys.map((k, i) =>
           "<div class='gim-frame" + (i === atIdx ? " on" : "") + "' data-gi='" + i + "' title='Move the playhead to this frame'>" +
           "<span>" + Number(k.t).toFixed(2) + "s</span>" +
-          "<span>y " + Number(k.yaw).toFixed(1) + " · r " + Number(k.roll).toFixed(1) + " · p " + Number(k.pitch).toFixed(1) + "</span>" +
+          "<span>J1 " + Number(k.yaw).toFixed(1) + " · J2 " + Number(k.roll).toFixed(1) + " · J3 " + Number(k.pitch).toFixed(1) + "</span>" +
           "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button></div>"
         ).join("");
       }

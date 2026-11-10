@@ -38,7 +38,8 @@ import rs4_can  # noqa: E402
 from rs4_can import DjiGimbal, BUS_KWARGS, build_packet  # noqa: E402,F401
 
 can = rs4_can.can
-NAMES = ("yaw", "roll", "pitch")
+NAMES = ("yaw", "roll", "pitch")   # SDK command axes / world (attitude) angles
+JOINTS = ("J1", "J2", "J3")         # motors, J1 closest to the handle (SDK joint yaw / roll / pitch)
 MODES = {0: "normal", 3: "3D ROLL 360"}
 MOVED = 4.0     # deg: a joint changed this much -> it moved
 STILL = 2.0     # deg: the others stayed within this -> "only one joint"
@@ -141,17 +142,17 @@ def run_one(g, name, mode, fn, step, secs):
     time.sleep(0.3)
     j1, a1 = read_both(g)
     dj, da = diff(j0, j1), diff(a0, a1)
-    moved = [n for i, n in enumerate(NAMES) if abs(dj[i]) >= MOVED]
-    only = len(moved) == 1 and all(abs(dj[i]) <= STILL for i, n in enumerate(NAMES) if n != moved[0])
-    verdict = ("ONLY joint %s" % moved[0]) if only else ("joints moved: %s" % (", ".join(moved) or "none"))
-    print("   joint    d yaw %+6.1f  roll %+6.1f  pitch %+6.1f" % dj)
-    print("   attitude d yaw %+6.1f  roll %+6.1f  pitch %+6.1f" % da)
+    moved = [n for i, n in enumerate(JOINTS) if abs(dj[i]) >= MOVED]
+    only = len(moved) == 1 and all(abs(dj[i]) <= STILL for i, n in enumerate(JOINTS) if n != moved[0])
+    verdict = ("ONLY %s" % moved[0]) if only else ("joints moved: %s" % (", ".join(moved) or "none"))
+    print("   joints   d J1 %+6.1f  J2 %+6.1f  J3 %+6.1f" % dj)
+    print("   world    d yaw %+6.1f  roll %+6.1f  pitch %+6.1f" % da)
     print("   -> %s" % verdict)
     back()
     time.sleep(0.3)
     j2, _ = read_both(g)
     left = diff(j0, j2)
-    print("   after undo, joints off start by yaw %+.1f roll %+.1f pitch %+.1f" % left)
+    print("   after undo, joints off start by J1 %+.1f J2 %+.1f J3 %+.1f" % left)
     return {"name": name, "dj": dj, "da": da, "verdict": verdict, "left": left}
 
 
@@ -171,8 +172,8 @@ def main():
         g = DjiGimbal(bus)
         try:
             j, a = read_both(g)
-            print("start joint     yaw %7.1f roll %7.1f pitch %7.1f" % j)
-            print("start attitude  yaw %7.1f roll %7.1f pitch %7.1f" % a)
+            print("start joints    J1 %7.1f  J2 %7.1f  J3 %7.1f" % j)
+            print("start world     yaw %7.1f roll %7.1f pitch %7.1f" % a)
             if args.lock:
                 set_lock(g)
             for name, mode, fn in tests(args.step, args.secs, args.with_abs or bool(args.only and args.only.startswith("abs"))):
@@ -193,7 +194,7 @@ def main():
 
     print("\n" + "=" * 78)
     print("SUMMARY (send this back)%s" % ("  [Lock mode]" if args.lock else ""))
-    print("%-14s %-24s %-24s %s" % ("test", "joint d y / r / p", "attitude d y / r / p", "verdict"))
+    print("%-14s %-24s %-24s %s" % ("test (SDK axis)", "joints d J1 / J2 / J3", "world d yaw / roll / pitch", "verdict"))
     for r in results:
         if "dj" in r:
             print("%-14s %+6.1f %+6.1f %+6.1f     %+6.1f %+6.1f %+6.1f     %s" % (

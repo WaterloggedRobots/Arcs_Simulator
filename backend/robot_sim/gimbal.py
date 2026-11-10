@@ -11,7 +11,9 @@ Aubo Arm's Sim and Real cursors (list rows "<oid>#sim" and "<oid>#real"):
   gimbal. It is shown only while reading the angles works. Reading is tried
   all the time (reconnecting every 2 s).
 
-Angles are the gimbal's joint angles in degrees. The twins' frame matches the
+Angles are the gimbal's joint angles in degrees: J1 (handle motor), J2
+(middle motor), J3 (camera motor); the SDK and the saved data call them
+yaw, roll, pitch. The twins' frame matches the
 mount's: z forward (lens), x right, y down. Yaw turns about y (positive turns
 right), roll about the yawed z (positive drops the right side), pitch about
 the yawed and rolled x (positive tilts up), in the motor order yaw > roll > pitch.
