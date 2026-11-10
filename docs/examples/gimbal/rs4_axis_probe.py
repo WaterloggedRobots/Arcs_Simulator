@@ -12,8 +12,8 @@ one joint moved, then undoes the move and shows what is left over:
 
   speed   yaw / roll            0x0E/0x01 for --secs seconds
   incr    yaw / roll            0x0E/0x00 incremental position (ctrl bit0 = 0)
-  abs     yaw                   0x0E/0x00 absolute position to start joint yaw + step
-                                (tells whether absolute targets are joint angles)
+  abs     yaw                   0x0E/0x00 absolute position (only with --with-abs:
+                                in 3D ROLL 360 it flipped the camera upside down)
 
 each in normal mode and in 3D ROLL 360 mode, optionally with the gimbal set
 to Lock mode first (--lock: 0x0E/0x0E, no follow). Set the gimbal up as in
@@ -109,7 +109,7 @@ def set_lock(g):
     time.sleep(0.5)
 
 
-def tests(step, secs):
+def tests(step, secs, with_abs=False):
     dps = step / secs
     out = []
     for mode in (0, 3):
@@ -119,7 +119,8 @@ def tests(step, secs):
         for axis in ("yaw", "roll"):
             out.append(("incr-%s-%d" % (axis, mode), mode,
                         lambda g, s, a=axis: position(g, a, s * step, secs, absolute=False)))
-        out.append(("abs-yaw-%d" % mode, mode, None))  # needs the start angle: handled below
+        if with_abs:
+            out.append(("abs-yaw-%d" % mode, mode, None))  # needs the start angle: handled below
     return out
 
 
@@ -160,6 +161,8 @@ def main():
     ap.add_argument("--secs", type=float, default=1.0, help="time per test move (default 1 s)")
     ap.add_argument("--lock", action="store_true", help="set Lock mode (no follow) before the tests")
     ap.add_argument("--only", default=None, help="run one test by name, e.g. incr-yaw-3")
+    ap.add_argument("--with-abs", action="store_true",
+                    help="also absolute yaw (in 3D ROLL 360 it flipped the RS4 camera upside down)")
     args = ap.parse_args()
 
     print("RS4 axis probe: step %.0f deg in %.1f s, interface %s" % (args.step, args.secs, BUS_KWARGS["interface"]))
@@ -172,7 +175,7 @@ def main():
             print("start attitude  yaw %7.1f roll %7.1f pitch %7.1f" % a)
             if args.lock:
                 set_lock(g)
-            for name, mode, fn in tests(args.step, args.secs):
+            for name, mode, fn in tests(args.step, args.secs, args.with_abs or bool(args.only and args.only.startswith("abs"))):
                 if args.only and name != args.only:
                     continue
                 try:

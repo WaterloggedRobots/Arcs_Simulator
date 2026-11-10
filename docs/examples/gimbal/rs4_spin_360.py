@@ -5,31 +5,31 @@ The move this is for (sandbox set-up): the arm points the gimbal HANDLE at the
 target, horizontally (handle end towards the robot, camera end towards the
 target), the camera looks along the handle at the target, and the camera then
 rolls a full turn around that same axis while still looking at the target.
-That is DJI's 3D ROLL 360 mode: the motor on the handle axis rolls the camera
-around its lens. So by default this script:
+Only the handle-axis motor (joint yaw) turns.
 
-  * sets 3D ROLL 360 mode (--mode 3) and commands ROLL speed (--axis roll),
-    as the reference demo did with set_roll360() and speed(roll=...);
-  * reads BOTH angle sets the SDK has, every read:
-      joint    - the motor angles, relative to the gimbal body (handle)
-      attitude - the camera's orientation in the world (gravity)
-    and, after a short probe, follows whichever angle really turned (printed),
-    unwrapping it across its +/-180 jump;
-  * sends a speed command every 50 ms (each lasts 0.5 s), slows near the end
-    and stops on the measured angle, not on a timer;
-  * stops with a message if the gimbal pulls the turn back or stops moving;
-  * on exit (also Ctrl+C) stops the axes, hands speed control back and sets
-    normal mode again (unless --keep-mode).
+What rs4_axis_probe.py showed on the RS4 in that pose:
+  * In 3D ROLL 360 mode a YAW command (speed or incremental position) turns
+    ONLY joint yaw, and the camera rolls around its lens by the same amount
+    (+20 command -> about +17 deg on joint yaw and on attitude roll).
+    A roll command in that mode pans the camera with all three joints.
+  * In normal mode a ROLL command does the same, but the camera can only
+    roll about +/-30 deg (it is pulled back), so no full turn.
+  * ABSOLUTE yaw in 3D ROLL 360 flips the camera upside down: not used.
 
---axis yaw --mode 0 is the earlier yaw spin (it pans the camera when the
-handle is horizontal, and sways back when the lens is along the yaw axis).
+So by default this script sets 3D ROLL 360 and turns with the YAW command,
+following JOINT YAW (unwrapped across +/-180), stopping on the measured
+angle. Two ways to drive it:
+  --method speed  (default) speed commands every 50 ms, slowing near the end
+  --method incr   incremental position steps of at most --step deg, each
+                  timed for --speed, corrected from the reading after each
+On exit (also Ctrl+C) it stops, hands speed control back and sets normal mode.
 
-Examples (sandbox closed, from the repo folder):
+Examples (sandbox closed, from the repo folder; camera upright first):
 
-    python docs/examples/gimbal/rs4_spin_360.py                    # roll +360 in 3D ROLL 360
+    python docs/examples/gimbal/rs4_spin_360.py                    # +360
     python docs/examples/gimbal/rs4_spin_360.py --turn -360        # the other way
-    python docs/examples/gimbal/rs4_spin_360.py --mode 2           # ROLL 360 mode instead
-    python docs/examples/gimbal/rs4_spin_360.py --axis yaw --mode 0
+    python docs/examples/gimbal/rs4_spin_360.py --method incr --step 45
+    python docs/examples/gimbal/rs4_spin_360.py --turn 720 --speed 45
 
 Uses the reference protocol code in user_files/gimbal_scripts/rs4_can.py.
 Needs: pip install python-can pyusb libusb-package
@@ -225,6 +225,65 @@ def spin(g, axis, turn, speed, tol, gain, min_speed, feedback):
     print("time            %.1f s, %d failed reads, longest command gap %.0f ms" % (elapsed, t.fails, t.max_gap * 1000))
 
 
+def incr_move(g, axis, deg, secs):
+    """0x0E/0x00 incremental position on one axis (others invalid). True if accepted."""
+    ctrl = 0x00  # bit0 = 0: incremental
+    vals = {"yaw": 0, "roll": 0, "pitch": 0}
+    vals[axis] = int(round(deg * 10))
+    for i, n in enumerate(NAMES):
+        if n != axis:
+            ctrl |= 1 << (i + 1)
+    payload = struct.pack("<hhhBB", vals["yaw"], vals["roll"], vals["pitch"], ctrl,
+                          max(1, min(255, int(round(secs * 10)))))
+    reply = g.send_command(0x0E, 0x00, payload)
+    return reply is not None and len(reply) >= 3 and reply[2] == 0x00
+
+
+def spin_incr(g, axis, turn, speed, step, tol, feedback):
+    """Incremental steps (each <= step deg), corrected from the reading after each."""
+    if feedback == "auto":
+        feedback = "joint-yaw"
+    w, _, n = feedback.partition("-")
+    key = (w, n)
+    t = Tracker(g, axis)
+    t.update(force=True)
+    if not t.last[w]:
+        raise RuntimeError("can't read the gimbal angles (no reply)")
+    print("                    yaw    roll   pitch")
+    print("start joint     %s" % fmt(t.last["joint"]))
+    print("start attitude  %s" % fmt(t.last["attitude"]))
+    print("following %s %s; steps of at most %.0f deg at %.0f deg/s" % (w, n, step, speed))
+    print("   step   asked   turned   to go   | joint  y / r / p        | attitude y / r / p")
+    t0 = time.time()
+    sign = None
+    for i in range(1, 200):
+        err = turn - t.total[key]
+        if abs(err) <= tol:
+            break
+        d = max(-step, min(step, err))
+        cmd = d if sign is None else d * sign
+        secs = max(0.1, abs(d) / max(speed, 1.0))
+        before = t.total[key]
+        if not incr_move(g, axis, cmd, secs):
+            raise RuntimeError("step %d (%+.1f deg) refused or no reply" % (i, cmd))
+        time.sleep(secs + 0.3)
+        t.update(force=True)
+        moved = t.total[key] - before
+        if sign is None:
+            if abs(moved) < 0.3 * abs(d):
+                raise RuntimeError("step 1 asked %+.1f deg, %s %s moved %+.1f: wrong axis or mode?" % (cmd, w, n, moved))
+            sign = 1.0 if (moved > 0) == (cmd > 0) else -1.0
+        elif abs(moved) < 0.3 * abs(d):
+            raise RuntimeError("step %d asked %+.1f deg but it moved %+.1f (pulled back or limit?)" % (i, cmd, moved))
+        print("  %4d  %+6.1f  %+7.1f  %+6.1f   | %s | %s" % (
+            i, cmd, t.total[key], turn - t.total[key], fmt(t.last["joint"]), fmt(t.last["attitude"])))
+    print("end joint       %s" % fmt(t.last["joint"]))
+    print("end attitude    %s" % fmt(t.last["attitude"]))
+    print("-" * 72)
+    print("turned          %+.1f deg on %s %s (asked %+.1f, error %+.1f) in %.1f s" % (
+        t.total[key], w, n, turn, t.total[key] - turn, time.time() - t0))
+
+
 def show_mode(g, label):
     reply = g.send_command(0x0E, 0x0B, bytes([0x22]))
     print("mode %-8s read-back: %s" % (label, reply.hex(" ") if reply else None))
@@ -232,23 +291,27 @@ def show_mode(g, label):
 
 def main():
     ap = argparse.ArgumentParser(description="RS4 closed-loop camera turn (default: roll 360 in 3D ROLL 360 mode)")
-    ap.add_argument("--axis", choices=("roll", "yaw"), default="roll", help="speed axis to command (default roll)")
+    ap.add_argument("--axis", choices=("roll", "yaw"), default="yaw",
+                    help="command axis (default yaw: in 3D ROLL 360 it turns only joint yaw)")
+    ap.add_argument("--method", choices=("speed", "incr"), default="speed",
+                    help="speed commands (default) or incremental position steps")
+    ap.add_argument("--step", type=float, default=90.0, help="--method incr: largest step in degrees (default 90)")
     ap.add_argument("--turn", type=float, default=360.0, help="degrees to turn (default 360; negative = other way)")
     ap.add_argument("--speed", type=float, default=30.0, help="top speed in deg/s (default 30)")
     ap.add_argument("--min-speed", type=float, default=3.0, help="slowest speed near the end (default 3)")
     ap.add_argument("--gain", type=float, default=1.5, help="deg/s per degree still to go near the end (default 1.5)")
     ap.add_argument("--tol", type=float, default=1.0, help="stop within this many degrees (default 1)")
     ap.add_argument("--mode", type=int, choices=(0, 2, 3), default=None,
-                    help="0 normal, 2 ROLL 360, 3 3D ROLL 360 (default: 3 for --axis roll, unchanged for yaw)")
+                    help="0 normal, 2 ROLL 360, 3 3D ROLL 360 (default 3)")
     ap.add_argument("--keep-mode", action="store_true", help="leave the mode set at the end")
-    ap.add_argument("--feedback", default="auto",
+    ap.add_argument("--feedback", default="joint-yaw",
                     choices=("auto", "joint-yaw", "joint-roll", "joint-pitch", "attitude-yaw", "attitude-roll", "attitude-pitch"),
-                    help="angle to stop on (default auto: whichever moved most in the probe)")
+                    help="angle to stop on (default joint-yaw; auto = whichever moved most in the probe)")
     args = ap.parse_args()
-    mode = args.mode if args.mode is not None else (3 if args.axis == "roll" else None)
+    mode = args.mode if args.mode is not None else 3
 
-    print("RS4 turn %+.0f deg on %s, mode %s: interface %s, channel %s, bitrate %s" % (
-        args.turn, args.axis, MODES.get(mode, "unchanged"),
+    print("RS4 turn %+.0f deg, %s command (%s), mode %s: interface %s, channel %s, bitrate %s" % (
+        args.turn, args.axis, args.method, MODES.get(mode, "unchanged"),
         BUS_KWARGS["interface"], BUS_KWARGS["channel"], BUS_KWARGS["bitrate"]))
     with can.Bus(**BUS_KWARGS) as bus:
         g = DjiGimbal(bus)
@@ -260,7 +323,10 @@ def main():
                 changed = mode != 0
                 time.sleep(0.8)
                 show_mode(g, "set")
-            spin(g, args.axis, args.turn, args.speed, args.tol, args.gain, args.min_speed, args.feedback)
+            if args.method == "incr":
+                spin_incr(g, args.axis, args.turn, args.speed, args.step, args.tol, args.feedback)
+            else:
+                spin(g, args.axis, args.turn, args.speed, args.tol, args.gain, args.min_speed, args.feedback)
             print("DONE")
         except KeyboardInterrupt:
             print("\nstopped (Ctrl+C)")
