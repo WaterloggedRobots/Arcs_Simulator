@@ -244,13 +244,42 @@ def sync_tracks(tracks):
     return out
 
 
+MAX_SPIN = 10  # turns
+
+
+def clean_spin(v):
+    try:
+        n = int(round(float(v or 0)))
+    except Exception:
+        n = 0
+    return max(-MAX_SPIN, min(MAX_SPIN, n))
+
+
+def _seg_yaw(a, b):
+    """J1 change from frame a to frame b: straight from a's to b's angle, plus
+    b's spin turns (360 deg each, + = rising J1)."""
+    return (b["yaw"] - a["yaw"]) + 360.0 * clean_spin(b.get("spin"))
+
+
+def spin_segment(keys, t):
+    """(a, b) when t is inside a segment into a frame with spin turns, else None."""
+    for a, b in zip(keys, keys[1:]):
+        if a["t"] - 1e-6 <= t < b["t"] and clean_spin(b.get("spin")):
+            return a, b
+    return None
+
+
 def clean_keys(keys):
     out = []
     for k in list(keys or []):
         if not isinstance(k, dict) or k.get("t") is None:
             continue
         y, r, p = clamp_angles([k.get("yaw"), k.get("roll"), k.get("pitch")])
-        out.append({"t": max(0.0, _f(k.get("t"))), "yaw": y, "roll": r, "pitch": p})
+        row = {"t": max(0.0, _f(k.get("t"))), "yaw": y, "roll": r, "pitch": p}
+        spin = clean_spin(k.get("spin"))
+        if spin:
+            row["spin"] = spin  # extra J1 turns on the way into this frame
+        out.append(row)
     out.sort(key=lambda k: k["t"])
     return out
 
@@ -285,7 +314,11 @@ def angles_at(keys, t):
         if t <= b["t"]:
             span = b["t"] - a["t"]
             u = 1.0 if span <= 1e-9 else (t - a["t"]) / span
-            return [a[x] + (b[x] - a[x]) * u for x in AXES]
+            out = [a[x] + (b[x] - a[x]) * u for x in AXES]
+            if clean_spin(b.get("spin")):
+                # Spinning: J1 goes round (stored values stay in +/-180).
+                out[0] = ((a["yaw"] + _seg_yaw(a, b) * u + 180.0) % 360.0) - 180.0
+            return out
     k = keys[-1]
     return [k["yaw"], k["roll"], k["pitch"]]
 
@@ -307,9 +340,33 @@ def insert_frame(oid, t, angles=None):
     g["target"] = ang
     t = max(0.0, _f(t))
     tr = _track(oid, create=True)
-    keys = [k for k in clean_keys(tr.get("keys")) if abs(k["t"] - t) > FRAME_EPS]
-    keys.append({"t": t, "yaw": ang[0], "roll": ang[1], "pitch": ang[2]})
+    old = clean_keys(tr.get("keys"))
+    same = next((k for k in old if abs(k["t"] - t) <= FRAME_EPS), None)
+    keys = [k for k in old if abs(k["t"] - t) > FRAME_EPS]
+    row = {"t": t, "yaw": ang[0], "roll": ang[1], "pitch": ang[2]}
+    if same is not None and same.get("spin"):
+        row["spin"] = same["spin"]  # a replaced frame keeps its spin
+    keys.append(row)
     tr["keys"] = clean_keys(keys)
+    _note_keys_changed(oid)
+    return True
+
+
+def set_spin(oid, index, spin):
+    """Spin turns on the way into frame `index` (not the first frame)."""
+    tr = _track(oid)
+    if tr is None:
+        return False
+    keys = clean_keys(tr.get("keys"))
+    i = int(_f(index, -1))
+    if not 0 < i < len(keys):
+        return False
+    n = clean_spin(spin)
+    if n:
+        keys[i]["spin"] = n
+    else:
+        keys[i].pop("spin", None)
+    tr["keys"] = keys
     _note_keys_changed(oid)
     return True
 
@@ -904,8 +961,75 @@ def _move(oid, rt, angles, duration):
         return False
 
 
+SPIN_LOOKAHEAD_S = 0.3
+SPIN_MAX_DPS = 180.0
+
+
+def _spin_end(rt):
+    sp = rt.pop("spin", None)
+    if sp is None:
+        return
+    try:
+        rt["mod"].spin_end()
+    except Exception as e:
+        rt["cmd_err"] = "spin end failed: %s" % e
+    rt["cmd_end"] = -1.0  # the next frame's move goes out at once
+
+
+def _drive_spin(oid, rt, a, b, t):
+    """Inside a segment with spin turns: turn J1 with speed commands (resent
+    every tick), closing on where the track says J1 should be."""
+    mod = rt["mod"]
+    if not all(callable(getattr(mod, f, None)) for f in ("spin_begin", "spin_speed", "spin_end")):
+        rt["cmd_err"] = "the driver script can't spin J1 (needs spin_begin / spin_speed / spin_end)"
+        return
+    j1 = rt["read"][0] if rt["read_ok"] and rt["read"] else None
+    sp = rt.get("spin")
+    if sp is None or sp.get("seg") != (a["t"], b["t"]):
+        _spin_end(rt)
+        try:
+            mod.spin_begin()
+        except Exception as e:
+            rt["cmd_err"] = "spin start failed: %s" % e
+            return
+        start = a["yaw"] if j1 is None else j1
+        sp = rt["spin"] = {"seg": (a["t"], b["t"]), "start": start, "last": start, "total": 0.0,
+                           "sign": rt.get("spin_sign", 1.0), "cmd": 0.0,
+                           "flipped": "spin_sign" in rt, "settle": time.time() + 0.3}
+    if j1 is not None:
+        sp["total"] += ((j1 - sp["last"] + 180.0) % 360.0) - 180.0
+        sp["last"] = j1
+        # J1 turning against the command: the command sign is the other way.
+        # Once per spin, and not on readings from before a change (they lag a tick).
+        if (not sp.get("flipped") and time.time() >= sp.get("settle", 0.0) and abs(sp["total"]) > 6
+                and abs(sp["cmd"]) > 5 and (sp["total"] > 0) != (sp["cmd"] > 0)):
+            sp["sign"] = -sp["sign"]
+            sp["flipped"] = True
+            rt["spin_sign"] = sp["sign"]
+            sp["start"], sp["total"] = j1, 0.0
+            sp["settle"] = time.time() + 0.5
+    span = max(1e-3, b["t"] - a["t"])
+    total = _seg_yaw(a, b)
+    u = max(0.0, min(1.0, (t + SPIN_LOOKAHEAD_S - a["t"]) / span))
+    want = a["yaw"] + total * u                    # unwrapped J1 the track wants soon
+    have = sp["start"] + sp["total"]
+    rate = max(-SPIN_MAX_DPS, min(SPIN_MAX_DPS, (want - have) / SPIN_LOOKAHEAD_S))
+    try:
+        mod.spin_speed(rate * sp["sign"])
+        sp["cmd"] = rate
+        rt["cmd_err"] = ""
+    except Exception as e:
+        rt["cmd_err"] = "spin speed failed: %s" % e
+
+
 def _drive_run(oid, rt, keys, t):
-    """During a real run: command the next frame, timed to arrive on it."""
+    """During a real run: command the next frame, timed to arrive on it
+    (spin segments turn J1 with speed commands instead)."""
+    seg = spin_segment(keys, t) if keys else None
+    if seg is not None:
+        _drive_spin(oid, rt, seg[0], seg[1], t)
+        return
+    _spin_end(rt)
     if not keys or t < rt["cmd_end"] - 1e-3:
         return
     nxt = next((k for k in keys if k["t"] > t + 0.05), None)
@@ -1018,6 +1142,8 @@ def _tick_one(obj, clock):
         rt.pop("calib_rec", None)
         rt["calib"] = {"ok": False, "time": time.time(),
                        "text": "Recalibrate failed: the real gimbal is not connected (%s)" % (rt.get("conn_err") or "no reply")}
+    if not real_on and "spin" in rt and rt.get("mod") is not None:
+        _spin_end(rt)  # run stopped or paused mid-spin
     rt["running"] = real_on
     _set_twin(obj, "sim", g.get("target"))
     ok = real_ok(oid)

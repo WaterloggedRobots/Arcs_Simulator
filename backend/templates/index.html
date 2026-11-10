@@ -743,9 +743,10 @@
     .props .gim-comp input[readonly] { color: #9a9aa2; background: #18191d; }
     .gim-count { color: #9a9aa2; }
     .gim-frames { max-height: 140px; overflow-y: auto; margin-top: 4px; }
-    .gim-frame { display: grid; grid-template-columns: 46px 1fr 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+    .gim-frame { display: grid; grid-template-columns: 46px 1fr auto 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
     .gim-frame:hover { background: #2c2d36; }
     .gim-frame.on { background: #233a52; }
+    .gim-frame .gim-spin { font-size: 11px; padding: 1px 2px; height: 22px; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; }
     .gim-frame .gim-fdel { width: 22px; min-width: 22px; height: 22px; margin: 0; padding: 0; background: #3a3b44; line-height: 1; }
     .gim-frame .gim-fdel:hover { background: #6a3a3a; }
     .gim-conn { margin-top: 8px; font-size: 12px; }
@@ -1155,13 +1156,16 @@
     .tl-label-main { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; }
     .tl-plus-col {
       display: flex; align-items: center; justify-content: flex-start; gap: 3px;
-      width: 46px; flex-shrink: 0; align-self: stretch; padding-left: 5px; border-left: 1px solid #111;
+      width: 56px; flex-shrink: 0; align-self: stretch; padding-left: 6px; border-left: 1px solid #111;
     }
     .tl-plus-col .hier-add { width: 19px; min-width: 19px; height: 18px; font-size: 13px; border-radius: 3px; }
     .gim-frames-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
     .props #gimInsert.hier-add { background: var(--azure); color: var(--on-bright); border: 0; }
     .tl-plus-col .hier-add.real { background: var(--orange); color: var(--on-bright); }
     .tl-plus-col .hier-add.sim { background: var(--azure); color: var(--on-bright); }
+    /* Camera rows: start / stop recording keys (the track's green / red diamonds). */
+    .tl-plus-col .hier-add.rec-on { background: #4d9e61; color: #fff; font-size: 9px; }
+    .tl-plus-col .hier-add.rec-off { background: #9e4040; color: #fff; font-size: 9px; }
     .tl-label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
     .tl-del-track {
       width: 16px; height: 16px; padding: 0; margin-left: auto;
@@ -3022,11 +3026,11 @@
         const col = document.createElement("div");
         col.className = "tl-plus-col";
         const tr = vis[i];
-        const plus = (src, title) => {
+        const plus = (src, title, icon) => {
           const b = document.createElement("button");
           b.type = "button";
           b.className = "hier-add tl-plus " + src;
-          b.textContent = "+";
+          b.textContent = icon || "+";
           b.title = title;
           b.dataset.src = src;
           b.dataset.track = tr.id;
@@ -3039,6 +3043,9 @@
         } else if (isGimbalTrack(tr)) {
           plus("real", "Insert a frame with the real gimbal's angles at the playhead");
           plus("sim", "Insert a frame with the Sim gimbal's angles at the playhead");
+        } else if (String(tr.id).indexOf("cam_") === 0) {
+          plus("rec-on", "Start recording at the playhead (green key)", "▶");
+          plus("rec-off", "Stop recording at the playhead (red key)", "❚❚");
         }
         d.appendChild(col);
         labelsEl.appendChild(d);
@@ -3127,6 +3134,10 @@
         }
         await add(src === "real" ? "/api/add_waypoint_real" : "/api/add_waypoint_sim");
         if (armId) refresh();
+        return;
+      }
+      if (String(trackId).indexOf("cam_") === 0) {
+        camRecKeyOn(trackId, src === "rec-on");
         return;
       }
       if (isGimbalTrack({ id: trackId })) {
@@ -3481,10 +3492,30 @@
         ctx.strokeStyle = "#2f8f8b";
         ctx.lineWidth = 3;
         for (let i = 0; i < ks.length - 1; i++) {
+          const x0 = timeToX(Number(ks[i].t)) + 10, x1 = timeToX(Number(ks[i + 1].t)) - 10;
+          const spin = Number(ks[i + 1].spin || 0);
+          ctx.strokeStyle = spin ? "#5fb0e0" : "#2f8f8b";
+          ctx.setLineDash(spin ? [6, 4] : []);
           ctx.beginPath();
-          ctx.moveTo(timeToX(Number(ks[i].t)) + 10, cy);
-          ctx.lineTo(timeToX(Number(ks[i + 1].t)) - 10, cy);
+          ctx.moveTo(x0, cy);
+          ctx.lineTo(x1, cy);
           ctx.stroke();
+          ctx.setLineDash([]);
+          if (spin && x1 - x0 > 40) {
+            // Spin segment: J1 goes round; label the turns.
+            const label = "↻ " + (spin > 0 ? "+" : "") + spin * 360 + "°";
+            ctx.font = "10px sans-serif";
+            const w = ctx.measureText(label).width + 8;
+            const xm = (x0 + x1) / 2;
+            ctx.fillStyle = "#1c2530";
+            ctx.fillRect(xm - w / 2, cy - 7, w, 14);
+            ctx.fillStyle = "#cfe8f8";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(label, xm, cy);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+          }
         }
         ctx.lineWidth = 1;
         ks.forEach((k) => {
@@ -4886,6 +4917,10 @@
           "<div class='gim-frame" + (i === atIdx ? " on" : "") + "' data-gi='" + i + "' title='Move the playhead to this frame'>" +
           "<span>" + Number(k.t).toFixed(2) + "s</span>" +
           "<span>J1 " + Number(k.yaw).toFixed(1) + " · J2 " + Number(k.roll).toFixed(1) + " · J3 " + Number(k.pitch).toFixed(1) + "</span>" +
+          (i > 0 ? "<select class='gim-spin' data-gspin='" + i + "' title='Spin: extra full turns of J1 on the way into this frame (+ = J1 rising)'>" +
+            [-3, -2, -1, 0, 1, 2, 3].concat(Math.abs(Number(k.spin || 0)) > 3 ? [Number(k.spin)] : []).map((n) =>
+              "<option value='" + n + "'" + (n === Number(k.spin || 0) ? " selected" : "") + ">" +
+              (n === 0 ? "no spin" : "↻ " + (n > 0 ? "+" : "") + n * 360 + "°") + "</option>").join("") + "</select>" : "<span></span>") +
           "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button></div>"
         ).join("");
       }
@@ -4995,7 +5030,12 @@
       const del = byId("gimDelete");
       if (del) del.addEventListener("click", () => postGimbal({ action: "delete_frame", t: playhead }));
       const list = byId("gimFrames");
+      if (list) list.addEventListener("change", (e) => {
+        const sel = e.target.closest("[data-gspin]");
+        if (sel) postGimbal({ action: "set_spin", index: Number(sel.getAttribute("data-gspin")), spin: Number(sel.value) });
+      });
       if (list) list.addEventListener("click", (e) => {
+        if (e.target.closest("[data-gspin]")) { e.stopPropagation(); return; }
         const g = window.__gimbal;
         if (!g) return;
         const delBtn = e.target.closest("[data-gdel]");
@@ -8202,6 +8242,19 @@
       if (!recBtn) return;
       recBtn.classList.toggle("on", !!on);
       recBtn.textContent = on ? "❚❚" : "▶";
+    }
+    // A start / stop recording key at the playhead on one camera track (the
+    // timeline row's ▶ / ❚❚); the track keeps its name.
+    function camRecKeyOn(tid, want) {
+      const tr = extraTracks.find((t) => t.id === tid);
+      if (!tr) return;
+      const t = playhead;
+      tr.keys = (tr.keys || []).filter((k) => Math.abs(Number(k.t) - t) > 1e-4);
+      tr.keys.push({ t: t, rec: !!want });
+      tr.keys.sort((a, b) => Number(a.t) - Number(b.t));
+      window.extraTracks = extraTracks;
+      try { renderTimeline(); } catch (err) {}
+      syncTracks();
     }
     function dropCamRecKey(oid, want) {
       const tid = "cam_" + oid;

@@ -16,7 +16,8 @@ yaw / roll / pitch). get_angles(joint=False) gives the camera's WORLD
 
 The "Sandbox driver" section at the end is what the sandbox calls (from one
 thread only): connect(cfg), get_angles(), move_to(yaw, roll, pitch, duration),
-close(), and optionally get_world() (camera attitude, for Calibrate). Running this file directly runs the reference demo.
+close(), and optionally get_world() (camera attitude, for Calibrate) and
+spin_begin() / spin_speed(dps) / spin_end() (J1 spin segments on the track). Running this file directly runs the reference demo.
 
 Needs, in the Python that runs the sandbox:  pip install python-can pyusb libusb-package
 """
@@ -254,6 +255,36 @@ def move_to(yaw=None, roll=None, pitch=None, duration=2.0):
     if _gimbal is None:
         raise RuntimeError("not connected")
     return _gimbal.move_abs(yaw=yaw, roll=roll, pitch=pitch, duration=duration, wait=False)
+
+
+# Spin (optional): a gimbal-track segment with spin turns turns J1 round with
+# speed commands. In 3D ROLL 360 mode the SDK's yaw speed turns only J1 (RS4
+# tests, docs/examples/gimbal/rs4_spin_360.py); the sandbox resends the speed
+# every tick (it must come more often than every 0.5 s) and works out the sign.
+SPIN_MODE = 3  # 3D ROLL 360
+
+
+def spin_begin():
+    """Before a spin: 3D ROLL 360 mode."""
+    if _gimbal is None:
+        raise RuntimeError("not connected")
+    _gimbal.set_roll360(SPIN_MODE)
+
+
+def spin_speed(dps):
+    """J1 speed in deg/s (taken over from the joystick); no reply is awaited."""
+    if _gimbal is None:
+        raise RuntimeError("not connected")
+    _gimbal.speed(yaw=float(dps))
+
+
+def spin_end():
+    """After a spin: stop, hand speed control back, normal mode."""
+    if _gimbal is None:
+        return
+    _gimbal.speed(0, 0, 0)
+    _gimbal.speed(take_over=False)
+    _gimbal.set_roll360(0)
 
 
 def close():

@@ -1755,6 +1755,10 @@ def api_gimbal():
                 return jsonify({"ok": False, "error": "the real gimbal is not reading",
                                 "gimbal": wp.gimbal.status(oid)})
         ok = wp.gimbal.insert_frame(oid, t, angles)
+    elif act == "set_spin":
+        if _edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        ok = wp.gimbal.set_spin(oid, data.get("index"), data.get("spin"))
     elif act == "delete_frame":
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
