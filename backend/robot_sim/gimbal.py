@@ -1610,13 +1610,23 @@ def _tick_one(obj, clock):
     # Reading is always attempted; moves go out only with Drive on.
     calib = rt.pop("calib_req", None)
     if _ensure_connected(oid, cfg, rt):
-        if not (real_on and not aiming) and "track" in rt and "jmove" not in rt:
+        # After the move to the initial pose, while the uploaded run waits for
+        # its start (the arm moving to the path start turns the handle, and the
+        # RS 4 stabilises against it): J1 / J3 held on the first frame as joints.
+        if rt.get("start_hold") and (real_on or (not _run_waiting() and time.time() > rt["start_hold"] + 2.0)):
+            rt.pop("start_hold", None)
+        hold = bool(rt.get("start_hold") and keys and cfg.get("drive", True) and "jmove" not in rt
+                    and not aiming and _joint_mode(obj, rt) and rt["read_ok"])
+        if not (real_on and not aiming) and "track" in rt and "jmove" not in rt and not hold:
             _track_end(rt)  # run stopped or paused: normal mode before any other move
         if cfg.get("drive", True):
             for kind, angles, dur, direction in reqs:
                 if real_on:
                     continue
                 turning = any(d in ("cw", "ccw") for d in direction)
+                jm = rt.get("jmove")
+                if jm is not None and jm.get("goal") == _goal_sig(angles, direction):
+                    continue  # the same move again (Run pressed again): don't start it over
                 # Handle tilted: every move as joints (the timed move below), none absolute.
                 if (turning or _joint_mode(obj, rt)) and rt["read_ok"]:
                     _jmove_start(rt, angles, dur, direction, obj)
@@ -1629,6 +1639,8 @@ def _tick_one(obj, clock):
                         rt["cmd_err"] = "CW / CCW needs a reading from the gimbal: moved the short way"
             if "jmove" in rt and not real_on:
                 _jmove_tick(oid, rt)
+            elif hold:
+                _drive_run(oid, rt, keys[:1], 0.0)
             if real_on and not rt["running"]:
                 rt["cmd_end"] = -1.0
             if real_on and aiming:
@@ -1816,6 +1828,21 @@ def rising_is_ccw(obj, i=0):
     return float(np.dot(np.asarray(j["axis"], float), -view)) * float(j.get("sign", 1.0)) > 0
 
 
+def _goal_sig(angles, direction):
+    return (tuple(round(_f(a), 1) for a in list(angles)[:3]), tuple(move_dirs(direction)))
+
+
+def _run_waiting():
+    """An arm's run is uploaded and not started yet (or the gimbal-only one)."""
+    try:
+        if any(rp.get("uploaded") and not rp.get("active") for rp, _pb in _run_states()):
+            return True
+    except Exception:
+        pass
+    with _solo_lock:
+        return bool(_solo["uploaded"] and not _solo["active"])
+
+
 def _jmove_start(rt, angles, dur, direction, obj=None):
     """A timed move from the reading to the target, each joint its way
     (move_dirs: short / cw / ccw, seen as the model's view for that joint),
@@ -1831,8 +1858,10 @@ def _jmove_start(rt, angles, dur, direction, obj=None):
         end.append(e)
     delta = max(abs(e - a) for e, a in zip(end, r))
     dur = max(_f(dur, 2.0), delta / JMOVE_DPS)
-    _track_end(rt)
-    rt["jmove"] = {"t0": time.time(), "dur": dur, "keys": [
+    tk = rt.get("track")
+    if tk is not None:
+        tk["t"] = 0.0  # already in 3D ROLL 360: carry on (a mode change can swing J1)
+    rt["jmove"] = {"t0": time.time(), "dur": dur, "goal": _goal_sig(angles, direction), "keys": [
         {"t": 0.0, "yaw": r[0], "roll": r[1], "pitch": r[2]},
         {"t": dur, "yaw": end[0], "roll": end[1], "pitch": end[2]}]}
     rt["cmd_end"] = -1.0
@@ -1843,7 +1872,8 @@ def _jmove_tick(oid, rt):
     t = time.time() - jm["t0"]
     if t > jm["dur"] + 1.0:
         rt.pop("jmove", None)
-        _track_end(rt)
+        if not rt.get("start_hold"):
+            _track_end(rt)  # (held on the first frame next: stays in 3D ROLL 360, no mode change)
         return
     _drive_run(oid, rt, jm["keys"], min(t, jm["dur"]))
 
@@ -1891,6 +1921,8 @@ def go_to_initial_pose():
         # The first frame's directions: from the reading to the starting pose.
         d = [x or "short" for x in first_dirs(obj.get("id"))]
         if request_move(obj.get("id"), ang, direction=d):
+            # Then held there until the run starts (_tick_one: joint drive only).
+            _rt_for(obj.get("id"))["start_hold"] = time.time()
             n += 1
     return n
 
