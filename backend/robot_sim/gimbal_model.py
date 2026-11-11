@@ -153,7 +153,9 @@ def parse(raw):
                        "range": [float(rng[0]), float(rng[1])],
                        # Reading -> model angle: sign * reading + offset (calibration).
                        "sign": -1.0 if float(j.get("sign", 1) or 1) < 0 else 1.0,
-                       "offset": float(j.get("offset", 0) or 0)})
+                       "offset": float(j.get("offset", 0) or 0),
+                       # Fastest the joint may turn (deg/s): the bake's speed check.
+                       "max_dps": float(j.get("max_dps", 360) or 360)})
     if not joints:
         raise ValueError("no joints")
     cam = raw.get("camera") or {}

@@ -209,6 +209,15 @@ def start_viewer():
                 return
             result = fn(_spacing)
             print("bake:", result)
+            # Gimbal tracks: the speed check (joint speeds between frames).
+            try:
+                import gimbal
+                for tid, rep in gimbal.speed_check().items():
+                    if rep["over"]:
+                        print("bake: %s" % gimbal.speed_summary())
+                        break
+            except Exception as e:
+                print("gimbal speed check failed:", e)
         except Exception as e:
             print("bake failed:", e)
 

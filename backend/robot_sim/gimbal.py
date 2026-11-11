@@ -340,6 +340,65 @@ def insert_frame(oid, t, angles=None, reading=False):
     return True
 
 
+# ---------------------------------------------------------------------------
+# Speed check (run with each bake): every segment between frames, each joint's
+# speed against the model's max_dps (J1 also against the run drive's own cap).
+# ---------------------------------------------------------------------------
+MIN_SEGMENT_S = 0.1  # the SDK's absolute move takes at least 0.1 s
+_speed = {}          # track id -> {"segments": [...], "over": n, "time": t}
+
+
+def speed_check():
+    """Check every gimbal track; returns {track id: report} (kept for the page)."""
+    out = {}
+    for obj in gimbal_objects():
+        oid = obj.get("id")
+        keys = keys_for(oid)
+        model, _ = model_of(obj)
+        limits = {j["sdk"]: j.get("max_dps", 360.0) for j in model["joints"]}
+        names = {j["sdk"]: j["name"] for j in model["joints"]}
+        limits["yaw"] = min(limits.get("yaw", 360.0), TRACK_MAX_DPS)
+        segs = []
+        for a, b in zip(keys, keys[1:]):
+            dt = b["t"] - a["t"]
+            rows = []
+            for k in AXES:
+                d = abs(b[k] - a[k])  # J1 unwrapped: turns count
+                dps = d / dt if dt > 1e-9 else (0.0 if d < 1e-6 else float("inf"))
+                rows.append({"joint": names.get(k, k), "dps": round(dps, 1), "max": limits.get(k, 360.0),
+                             "over": dps > limits.get(k, 360.0) + 1e-6})
+            short = 0 < dt < MIN_SEGMENT_S and any(r["dps"] > 0 for r in rows)
+            worst = max(rows, key=lambda r: r["dps"] / max(1e-9, r["max"]))
+            segs.append({"t0": a["t"], "t1": b["t"], "joints": rows, "over": any(r["over"] for r in rows) or short,
+                         "short": short, "worst": worst})
+        rep = {"segments": segs, "over": sum(1 for s in segs if s["over"]), "time": time.time(),
+               "name": obj.get("name") or oid}
+        _speed[track_id(oid)] = rep
+        out[track_id(oid)] = rep
+    for tid in list(_speed):
+        if tid not in out:
+            _speed.pop(tid, None)
+    return out
+
+
+def speed_status():
+    """{track id: report} of the last check, for tracks unchanged since."""
+    return dict(_speed)
+
+
+def speed_summary():
+    """One line for the bake hint, or ''."""
+    bad = [(r["name"], s) for r in _speed.values() for s in r["segments"] if s["over"]]
+    if not bad:
+        return ""
+    name, s = bad[0]
+    w = s["worst"]
+    why = ("shorter than %.1f s" % MIN_SEGMENT_S) if s["short"] and not w["over"] else (
+        "%s %.0f°/s > %.0f°/s" % (w["joint"], w["dps"], w["max"]))
+    return "gimbal too fast: %d segment%s (%s %.2f–%.2fs: %s)" % (
+        len(bad), "" if len(bad) == 1 else "s", name, s["t0"], s["t1"], why)
+
+
 def restore_track_keys(tracks):
     """Undo / redo: every gimbal's frames as in the snapshot {track id: keys}."""
     for obj in gimbal_objects():
@@ -368,6 +427,7 @@ def delete_frame(oid, t=None, index=None):
 
 
 def _note_keys_changed(oid):
+    _speed.pop(track_id(oid), None)  # the bake's speed check no longer holds
     with _rt_lock:
         rt = _rt.get(str(oid))
         if rt is not None:

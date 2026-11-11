@@ -2523,7 +2523,9 @@
       else if (realState.uploaded && !realState.active) bits.push("buffer on controller");
       else if (realState.uploaded && !realState.armed) bits.push("uploaded — starting");
       else if (phase) bits.push("run: " + phase);
+      if (window.__gimSpeedNote) bits.push(window.__gimSpeedNote);
       el.textContent = bits.join("  ·  ");
+      el.title = el.textContent;
     }
     function syncPlayButtons() {
       const simBtn = document.getElementById("simulate");
@@ -3503,12 +3505,33 @@
         const ks = tr.keys.slice().sort((a, b) => Number(a.t) - Number(b.t));
         ctx.strokeStyle = "#2f8f8b";
         ctx.lineWidth = 3;
+        // The bake's speed check: segments too fast for the gimbal are red, labelled.
+        const spd = ((window.__gimSpeed || {})[tr.id] || {}).segments || [];
         for (let i = 0; i < ks.length - 1; i++) {
+          const seg = spd.find((s) => Math.abs(Number(s.t0) - Number(ks[i].t)) < 1e-4 && Math.abs(Number(s.t1) - Number(ks[i + 1].t)) < 1e-4);
+          const x0 = timeToX(Number(ks[i].t)) + 10, x1 = timeToX(Number(ks[i + 1].t)) - 10;
+          ctx.strokeStyle = seg && seg.over ? "#d24a4a" : "#2f8f8b";
           ctx.beginPath();
-          ctx.moveTo(timeToX(Number(ks[i].t)) + 10, cy);
-          ctx.lineTo(timeToX(Number(ks[i + 1].t)) - 10, cy);
+          ctx.moveTo(x0, cy);
+          ctx.lineTo(x1, cy);
           ctx.stroke();
+          if (seg && seg.over && x1 - x0 > 50) {
+            const w = seg.worst || {};
+            const label = seg.short && !w.over ? "< 0.1 s" : (w.joint + " " + Math.round(w.dps) + "°/s > " + Math.round(w.max));
+            ctx.font = "10px sans-serif";
+            const tw = ctx.measureText(label).width + 8;
+            const xm = (x0 + x1) / 2;
+            ctx.fillStyle = "#2a1818";
+            ctx.fillRect(xm - tw / 2, cy - 7, tw, 14);
+            ctx.fillStyle = "#ffb4b4";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(label, xm, cy);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+          }
         }
+        ctx.strokeStyle = "#2f8f8b";
         ctx.lineWidth = 1;
         ks.forEach((k) => {
           const x = timeToX(Number(k.t));
@@ -6994,6 +7017,8 @@
       syncPlayButtons();
       const b = d.bake || {};
       window.__lastBake = b;
+      window.__gimSpeed = d.gimbal_speed || {};
+      window.__gimSpeedNote = d.gimbal_speed_note || "";
       const ikPts = (b.ik_pts != null) ? b.ik_pts : (b.samples || 0);
       const ikTot = (b.ik_total != null) ? b.ik_total : (b.samples || 0);
       const spdOk = b.speed_ok || 0;

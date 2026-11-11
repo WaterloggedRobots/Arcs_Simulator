@@ -584,6 +584,8 @@ def api_status():
             wp.gimbal.real_ok(o.get("id")) for o in wp.gimbal.gimbal_objects())),
         "sim": _sim_status_all(),
         "real": _real_status_all(),
+        "gimbal_speed": wp.gimbal.speed_status(),
+        "gimbal_speed_note": wp.gimbal.speed_summary(),
         "arms": heavy.get("arms") or [],
         "active_arm": arms.active(),
         "arm_rows": heavy.get("arm_rows") or [],
