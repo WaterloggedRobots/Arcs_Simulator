@@ -1364,6 +1364,7 @@ def _move(oid, rt, angles, duration, yaw=True, roll=True):
 
 
 TRACK_LOOKAHEAD_S = 0.3
+RUNAWAY_DEG = 45.0   # J1 this much further off than its best: stopped
 TRACK_MAX_DPS = 180.0
 TRACK_FUNCS = ("track_begin", "track_speed", "track_end")
 
@@ -1378,26 +1379,42 @@ def _can_j3(rt):
     return callable(getattr(rt.get("mod"), "track_j3", None))
 
 
-def _sim_tilt(obj):
-    """Tilt of the Sim gimbal's mount (where the project puts the handle)."""
-    q = (obj or {}).get("wxyz", [1, 0, 0, 0])
-    z = gmodel.qrot(np.asarray(q, float), [0.0, 0.0, 1.0])
-    return math.degrees(math.acos(max(-1.0, min(1.0, float(z[2])))))
-
-
 def _joint_mode(obj, rt):
     """Drive J1 and J3 as joints (J1 by speed, J3 by track_j3 steps, J2 held),
-    with no absolute moves: the handle is tilted (the real one now, or the
-    Sim one: where the arm will take it), so absolute moves (camera angles
-    against gravity) would turn the wrong joints. Deciding on the real handle
-    alone sent the move to the initial pose absolute while the arm was still
-    on its way with the handle upright: with J2 near 180 the RS 4 then took
-    the other solution for the same camera angles, J1 180 deg off."""
-    tilted = handle_tilt(obj) > ATTITUDE_TILT_MAX or _sim_tilt(obj) > ATTITUDE_TILT_MAX
-    return tilted and _can_track(rt) and _can_j3(rt)
+    with no absolute moves: the real handle is tilted, so absolute moves
+    (camera angles against gravity) would turn the wrong joints. The move to
+    the initial pose waits for the arm to stop first (_mount_still), so this is
+    decided with the handle where the run has it (deciding while the arm was
+    still on its way sent it absolute with the handle upright, and with J2
+    near 180 the RS 4 took the other solution: J1 180 deg off)."""
+    return handle_tilt(obj) > ATTITUDE_TILT_MAX and _can_track(rt) and _can_j3(rt)
 
 
 START_TOL_DEG = 3.0
+MOUNT_STILL_S = 0.6     # the handle unmoved this long: the arm has stopped
+MOUNT_POS_TOL = 0.002   # m
+MOUNT_ROT_TOL = 0.5     # deg
+INITIAL_WAIT_S = 180.0  # a move to the initial pose waits at most this long for the arm
+
+
+def _track_mount(obj, rt):
+    """Note when the real handle (its mount on the real arm) last moved."""
+    root = obj.get("_real_root")
+    pos, q = (root if root else (obj.get("pos", [0, 0, 0]), obj.get("wxyz", [1, 0, 0, 0])))
+    pos, q = np.asarray(pos, float).reshape(3), np.asarray(q, float).reshape(4)
+    last = rt.get("mount_last")
+    now = time.time()
+    if last is None:
+        rt["mount_last"], rt["mount_moved_at"] = (pos, q), now
+        return
+    dq = abs(float(np.dot(q / (np.linalg.norm(q) or 1.0), last[1] / (np.linalg.norm(last[1]) or 1.0))))
+    turned = math.degrees(2.0 * math.acos(min(1.0, dq)))
+    if np.linalg.norm(pos - last[0]) > MOUNT_POS_TOL or turned > MOUNT_ROT_TOL:
+        rt["mount_last"], rt["mount_moved_at"] = (pos, q), now
+
+
+def _mount_still(rt):
+    return time.time() - rt.get("mount_moved_at", 0.0) >= MOUNT_STILL_S
 
 
 def at_initial_pose():
@@ -1484,6 +1501,7 @@ def _track_j1(rt, keys, t):
     if t < tk["t"] - 0.5:
         # The timeline started again (Repeat): J1 counts from the nearest turn.
         tk["have"] = unwrap_yaw(tk["have"], want_now)
+        tk.pop("err_min", None)
     tk["t"] = t
     if j1 is not None and tk["last"] is not None:
         d = ((j1 - tk["last"] + 180.0) % 360.0) - 180.0
@@ -1500,6 +1518,24 @@ def _track_j1(rt, keys, t):
     if j1 is not None:
         tk["last"] = j1
     want = angles_at(keys, t + TRACK_LOOKAHEAD_S)[0]
+    # Runaway guard: J1 getting further and further from where it should be
+    # (the command's direction learnt the wrong way round, e.g. while the RS 4
+    # stabilised against the arm turning the handle): stop, forget the
+    # direction, say so. The drive starts afresh on the next move.
+    err = abs(angles_at(keys, t)[0] - tk["have"])
+    tk["err_min"] = min(tk.get("err_min", err), err)
+    if err > tk["err_min"] + RUNAWAY_DEG:
+        try:
+            mod.track_speed(0.0)
+        except Exception:
+            pass
+        _track_end(rt)
+        rt.pop("j1_sign", None)
+        rt.pop("jmove", None)
+        rt.pop("start_hold", None)
+        rt["cmd_err"] = ("J1 went %.0f° away from its target instead of towards it: stopped "
+                         "(the direction of its speed command is learnt again on the next move)" % err)
+        return
     rate = max(-TRACK_MAX_DPS, min(TRACK_MAX_DPS, (want - tk["have"]) / TRACK_LOOKAHEAD_S))
     if abs(rate) < 0.2:
         rate = 0.0
@@ -1648,6 +1684,15 @@ def _tick_one(obj, clock):
             aiming = True
     with _rt_lock:
         reqs, rt["requests"] = rt["requests"], []
+    _track_mount(obj, rt)
+    ir = rt.get("initial_req")
+    if ir is not None:
+        if real_on or time.time() - ir["at"] > INITIAL_WAIT_S:
+            rt.pop("initial_req", None)
+        elif _mount_still(rt) and rt["read_ok"]:
+            rt.pop("initial_req", None)
+            reqs = reqs + [("move", ir["ang"], ir["dur"], ir["dir"])]
+            rt["start_hold"] = time.time()
     # Reading is always attempted; moves go out only with Drive on.
     calib = rt.pop("calib_req", None)
     if _ensure_connected(oid, cfg, rt):
@@ -1658,7 +1703,15 @@ def _tick_one(obj, clock):
             rt.pop("start_hold", None)
         hold = bool(rt.get("start_hold") and keys and cfg.get("drive", True) and "jmove" not in rt
                     and not aiming and _joint_mode(obj, rt) and rt["read_ok"])
-        if not (real_on and not aiming) and "track" in rt and "jmove" not in rt and not hold:
+        if hold and not _mount_still(rt):
+            hold = False  # the arm turns the handle: pause (the RS 4 stabilises meanwhile)
+            if "track" in rt:
+                try:
+                    rt["mod"].track_speed(0.0)
+                except Exception:
+                    pass
+        if (not (real_on and not aiming) and "track" in rt and "jmove" not in rt and not hold
+                and not rt.get("start_hold")):
             _track_end(rt)  # run stopped or paused: normal mode before any other move
         if cfg.get("drive", True):
             for kind, angles, dur, direction in reqs:
@@ -1902,6 +1955,7 @@ def _jmove_start(rt, angles, dur, direction, obj=None):
     tk = rt.get("track")
     if tk is not None:
         tk["t"] = 0.0  # already in 3D ROLL 360: carry on (a mode change can swing J1)
+        tk.pop("err_min", None)  # a new target: the runaway guard starts again
     rt["jmove"] = {"t0": time.time(), "dur": dur, "goal": _goal_sig(angles, direction), "keys": [
         {"t": 0.0, "yaw": r[0], "roll": r[1], "pitch": r[2]},
         {"t": dur, "yaw": end[0], "roll": end[1], "pitch": end[2]}]}
@@ -1961,10 +2015,15 @@ def go_to_initial_pose():
             continue
         # The first frame's directions: from the reading to the starting pose.
         d = [x or "short" for x in first_dirs(obj.get("id"))]
-        if request_move(obj.get("id"), ang, direction=d):
-            # Then held there until the run starts (_tick_one: joint drive only).
-            _rt_for(obj.get("id"))["start_hold"] = time.time()
-            n += 1
+        g = obj.setdefault("gimbal", clean_gimbal(None))
+        g["target"] = clamp_angles(ang)
+        dur = _f((g.get("cfg") or {}).get("move_s"), 2.0)
+        # Sent once the arm (the handle) has stopped (_tick_one), then held there
+        # until the run starts: moving while the arm turns the handle fought
+        # the RS 4's stabilising.
+        with _rt_lock:
+            _rt_for(obj.get("id"))["initial_req"] = {"ang": list(g["target"]), "dir": d, "dur": dur, "at": time.time()}
+        n += 1
     return n
 
 
