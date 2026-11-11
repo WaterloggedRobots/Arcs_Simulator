@@ -3508,6 +3508,7 @@ def _sync_selection_globals():
 
 def _apply_selection_viz():
     simulatorview._hide_all_object_gizmos()
+    gimbal.hide_twin_gizmos()
     _hide_all_wp_gizmos()
     try:
         import robot_runtime as rr
@@ -3521,7 +3522,11 @@ def _apply_selection_viz():
             if obj is None:
                 continue
             if gimbal.part_of(key):
-                continue  # a gimbal twin: its angles come from the track / the gimbal, no gizmo
+                # A gimbal twin: no move gizmo; the Sim Gimbal Cursor gets a rotate
+                # gizmo at its camera frame that turns the gimbal.
+                if gimbal.part_of(key) == "sim":
+                    gimbal.show_twin_gizmo(obj)
+                continue
             giz = obj.get("gizmo")
             if giz is None:
                 giz = simulatorview._bind_object_gizmo(obj, visible=True)

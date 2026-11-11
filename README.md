@@ -94,7 +94,7 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
   - An object with a Sim / Real pair (a gimbal) puts its real cursor there: the **Real Gimbal Cursor** is listed (and drawn) on the mirrored gimbal, posed by the angles read; objects on the Sim Gimbal Cursor (its Camera) mirror onto the Real Gimbal Cursor's camera. Not on an arm, a gimbal keeps its Real Gimbal Cursor under itself as before.
   - Every other object gets a **ghost**: the same shape, half as opaque, listed in grey italics. Ghosts hold a transform only (no components). Select one to see its world or local transform (the Local / Global switch) in Properties, read only: it follows its sim object, never the other way round.
   - *Preferences > Robot Settings > Ghosts on the real side* turns the ghosts off; the Real Gimbal Cursors stay (directly under the Real Arm Cursor or Robot Not Connected).
-  - **Snap sim to real** also snaps every gimbal whose angles read: its Sim target becomes the angles read.
+  - Snapping the sim arm to the real pose (the Snap prompt, the *Real* Sim Go pose, a run's end, start-up) also snaps every gimbal whose angles read: its Sim target becomes the angles read.
 - **Parent hierarchy.** Objects can be parented to one another so a child moves with its parent. This is how you bind objects to the end effector — an EE-parented camera, for example, follows every move the arm makes.
 
 ### Waypoints
@@ -349,7 +349,7 @@ On a balanced gimbal all three axes pass through the camera's centre of gravity,
 
 **Joints / World.** The switch beside the Sim gimbal's **Target** (and the Real gimbal's readout) shows the angles as the motors' **J1–J3** or as the camera's **world** yaw (heading), pitch (lens above the horizon) and roll (picture turned, positive = right side down). Typing world angles solves J1–J3 for them (inverse kinematics, from the current angles so the gimbal doesn't flip); frames and the track are still joint angles. If the gimbal can't reach that orientation it goes to the nearest one and says how far off it is.
 
-**Turning the camera turns the gimbal.** Rotating the Sim gimbal's Camera with its gizmo, or in Properties with **Global** on, solves J1–J3 so the gimbal points the camera that way, and the model moves with it (the camera stays on the gimbal, at the nearest orientation it reaches). Rotating it with **Local** on sets the camera's offset on the gimbal instead. Moving it (gizmo arrows, or the position fields) moves it on the gimbal, like any child. Not while Look At aims the gimbal.
+**Turning the gimbal by hand.** Select the **Sim Gimbal Cursor**: a rotate-only gizmo appears at its camera frame (the frame its Camera and other children hang on, which holds the gimbal's pose). Turning it solves J1–J3 so the gimbal points that way, the model and its children move with it, and each drag is one undo step. The Camera is an ordinary child: moving or turning it (gizmo or Properties, Local or Global) only changes its offset on the gimbal, never the gimbal. Not while Look At aims the gimbal.
 
 Joints to world needs the handle's pose (the mount: on the arm, the flange) and the model's axes; world to joints also needs them to be right.
 

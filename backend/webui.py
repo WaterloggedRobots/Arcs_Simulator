@@ -1145,9 +1145,6 @@ def api_snap_sim_to_real():
     ok = False
     if hasattr(rr, "reset_sim_to_real"):
         ok = bool(rr.reset_sim_to_real())
-    if ok:
-        # The gimbals snap too: their Sim target becomes the angles read.
-        wp.gimbal.snap_to_real()
     return jsonify({"ok": bool(ok)})
 
 

@@ -641,25 +641,91 @@ def set_world_target(oid, ypr):
     return err
 
 
-def drive_from_child(child):
-    """A Camera (or other object) on a Sim gimbal turned in the world: solve
-    J1-J3 so the gimbal turns it there (its local offset stays). True if handled."""
-    pid = str((child or {}).get("parent_id") or "")
-    base_id, part = split_part(pid)
-    obj = _find(base_id) if part == "sim" else None
-    if obj is None or _aiming(obj):
-        return False
-    lq = np.asarray(child.get("local_wxyz", [1, 0, 0, 0]), dtype=float)
-    want = gmodel.qmul(np.asarray(child.get("wxyz", [1, 0, 0, 0]), dtype=float), gmodel.qinv(lq / (np.linalg.norm(lq) or 1.0)))
-    solve_world(obj, want)
-    _follow_now(obj)
-    return True
+# The Sim Gimbal Cursor's gizmo: at its camera frame (the frame its children,
+# the Camera, hang on), rotate only. Turning it turns the gimbal (J1-J3 solved);
+# its children never drive the gimbal.
+_twin_giz = {}  # oid -> gizmo handle
+
+
+def _twin_gizmo_pose(obj):
+    pos, q = twin_camera_world(obj, "sim")
+    return tuple(float(v) for v in pos), tuple(float(v) for v in q)
+
+
+def show_twin_gizmo(obj):
+    if wp.server is None:
+        return
+    oid = str(obj.get("id"))
+    pos, q = _twin_gizmo_pose(obj)
+    giz = _twin_giz.get(oid)
+    if giz is None:
+        try:
+            giz = wp.server.scene.add_transform_controls(
+                "/gimbal_giz_%s" % oid, scale=0.18, disable_axes=True, disable_sliders=True,
+                position=pos, wxyz=q, visible=True)
+        except Exception as e:
+            print("gimbal gizmo failed", e)
+            return
+        _twin_giz[oid] = giz
+
+        @giz.on_update
+        def _(_e=None, _oid=oid, _giz=giz):
+            o = _find(_oid)
+            if o is None or wp._suspend_gizmo_cb:
+                return
+            if _aiming(o):
+                show_twin_gizmo(o)  # Look At aims it: snap back
+                return
+            if not wp._drag_checkpointed and not wp._suspend_history:
+                wp._push_history()  # one undo step per drag
+                wp._drag_checkpointed = True
+            solve_world(o, np.asarray(_giz.wxyz, dtype=float))
+            _follow_now(o)
+            wp._arm_drag_release(_giz)
+    try:
+        giz.position = pos
+        giz.wxyz = q
+        giz.visible = True
+    except Exception:
+        pass
+
+
+def place_twin_gizmo(obj):
+    """Keep a shown gizmo on the camera frame (the target moved)."""
+    giz = _twin_giz.get(str(obj.get("id")))
+    if giz is None or not getattr(giz, "visible", False):
+        return
+    pos, q = _twin_gizmo_pose(obj)
+    try:
+        giz.position = pos
+        if not wp._recent_gizmo_drag():
+            giz.wxyz = q
+    except Exception:
+        pass
+
+
+def drop_twin_gizmo(oid):
+    giz = _twin_giz.pop(str(oid), None)
+    if giz is not None:
+        try:
+            giz.remove()
+        except Exception:
+            pass
+
+
+def hide_twin_gizmos():
+    for giz in _twin_giz.values():
+        try:
+            giz.visible = False
+        except Exception:
+            pass
 
 
 def _follow_now(obj):
     """Show the new target at once (the gimbal thread would on its next tick)."""
     _set_twin(obj, "sim", (obj.get("gimbal") or {}).get("target"))
     _follow_sim(obj)
+    place_twin_gizmo(obj)
 
 
 def add_gimbal_camera(obj):
@@ -718,6 +784,7 @@ def _set_twin(obj, part, angles):
     gmodel.pose_twin(model, nodes, gmodel.joint_values(model, angles))
     if part == "sim":
         _follow_sim(obj)
+        place_twin_gizmo(obj)
 
 
 def _user_shows(obj, part):

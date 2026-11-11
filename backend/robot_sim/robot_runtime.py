@@ -867,6 +867,15 @@ def reset_sim_to_real():
     _hold_sim = 12
     _snap_sim_cursor_to_ee()
     print("reset sim = real", q)
+    try:
+        # Every way of snapping sim to real snaps the gimbals too (their Sim
+        # target = the angles read from the real gimbal).
+        import gimbal
+        n = gimbal.snap_to_real()
+        if n:
+            print("reset sim = real: %d gimbal(s)" % n)
+    except Exception as e:
+        print("gimbal snap failed:", e)
     return True
 
 

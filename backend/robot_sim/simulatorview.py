@@ -645,16 +645,6 @@ def _bind_object_gizmo(obj, visible=False):
         dq = _qmul(new_q, _qinv(old_q))
         obj["pos"] = new_pos
         obj["wxyz"] = new_q
-        # On a Sim gimbal: turning the object turns the gimbal (J1-J3 solved);
-        # moving it moves it on the gimbal (its offset), like any child.
-        turned = abs(float(np.dot(new_q, old_q))) < 0.999999  # more than ~0.2 deg
-        if turned and _gimbal().drive_from_child(obj):
-            # On a Sim gimbal: the gimbal turns to this orientation (J1-J3 solved)
-            # and the object stays on it, so it snaps to what the gimbal reaches.
-            _refresh_camera_viz(obj)
-            _propagate_children(obj.get("id"))
-            wp._arm_drag_release(giz)
-            return
         _set_local_from_world(obj)
         _apply_object_xform(obj)
         _refresh_camera_viz(obj)
@@ -1174,10 +1164,7 @@ def update_scene_object(oid, name=None, pos=None, wxyz=None, scale=None, space=N
             _set_world_from_local(obj)
         else:
             obj["wxyz"] = q
-            # On a Sim gimbal a world rotation turns the gimbal (J1-J3 solved);
-            # a local one sets the object's offset on it.
-            if not _gimbal().drive_from_child(obj):
-                _set_local_from_world(obj)
+            _set_local_from_world(obj)
     if scale is not None:
         obj["scale"] = np.asarray(scale, dtype=float).reshape(3)
     if remove_camera or camera is False:
@@ -1214,6 +1201,7 @@ def delete_scene_object(oid):
         _colliders().forget_owner(oid)
         if obj.get("kind") == "gimbal":
             _colliders().forget_owner(_gimbal().part_id(oid, "sim"))
+            _gimbal().drop_twin_gizmo(oid)
     except Exception as e:
         print("delete: collider cleanup failed", e)
     for key in ("gizmo", "sim_head", "real_head", "base_root", "handle", "frustum"):
