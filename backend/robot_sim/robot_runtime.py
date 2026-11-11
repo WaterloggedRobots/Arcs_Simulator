@@ -3862,6 +3862,19 @@ def get_selected_props():
     return out
 
 
+def _move_cursor_children():
+    """Children of the Sim Arm Cursor (tools, a gimbal and its Camera) move
+    with it now; left behind, a later edit would take their stale pose as a
+    new offset."""
+    try:
+        if hasattr(wp, "_propagate_children"):
+            wp._propagate_children(arms.cid("sim_cursor"))
+        if hasattr(wp, "refresh_sim_camera_viz"):
+            wp.refresh_sim_camera_viz()
+    except Exception as e:
+        print("cursor children failed:", e)
+
+
 def apply_selected_ik(ik):
     import path_bake as bake
     if getattr(bake, "selected_sample", None) is not None:
@@ -3894,6 +3907,7 @@ def apply_selected_ik(ik):
             pass
     _ik_sim_cursor()
     _draw_sim_dir(pos)
+    _move_cursor_children()
     return True
 
 
@@ -3918,6 +3932,7 @@ def apply_selected_q(q):
         except Exception:
             pass
     _draw_sim_dir(pos)
+    _move_cursor_children()
     return True
 
 
