@@ -2620,7 +2620,6 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
         place_segment_ctrls(idx - 1, idx)
 
     item = waypoints[-1]
-    old_ids = {id(w): i for i, w in enumerate(waypoints)}
     reordered = sort_waypoints_by_time()
     new_idx = _index_of(item)
     if new_idx is None:
@@ -2639,14 +2638,12 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
             select_waypoint(new_idx)
         except Exception:
             pass
-    dirty = max(0, new_idx - 1)
-    if reordered:
-        dirty = _dirty_start_from_moves(old_ids, {id(item)})
-        dirty = max(0, dirty - 1) if dirty > 0 else 0
     if len(waypoints) < 2:
         _bake_call("clear_sample_dots")
     else:
-        _bake_call("invalidate_from", dirty)
+        # A new waypoint unbakes the whole path (bake again); the sample frames
+        # are kept (spans matched by their end times, a split span resampled).
+        _bake_call("invalidate_from", 0)
     print(f"Added waypoint #{new_idx}  mode={mode}  t={t:.2f}")
     return {"ok": True, "index": new_idx, "t": t}
 

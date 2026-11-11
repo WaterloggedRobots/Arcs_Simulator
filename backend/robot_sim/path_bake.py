@@ -903,7 +903,9 @@ def invalidate_from(idx, drop_all=False, keep_times=None):
     baked_hops = []
     baked_points = []
     _speed_valid = False
-    old_segs = {j: dict(segments[j]) for j in range(start, len(segments))} if keep_times else {}
+    # Every old span, matched to the new ones by their end times: an insert
+    # shifts the indices, so matching by index dropped untouched spans' frames.
+    old_list = [dict(segments[j]) for j in range(len(segments))] if keep_times else []
     for j in range(start, len(segments)):
         segments[j]["status"] = "pending"
         segments[j]["samples"] = []
@@ -914,8 +916,8 @@ def invalidate_from(idx, drop_all=False, keep_times=None):
     _sync_segment_count()
     for j in range(start, len(segments)):
         segments[j] = _build_segment(j)
-        if j in old_segs:
-            _carry_sample_times(old_segs[j], segments[j], j)
+        if old_list:
+            _carry_from(old_list, segments[j], j)
     _draw_sample_dots()
     if hasattr(wp, "draw_path"):
         wp.draw_path()
@@ -953,10 +955,60 @@ def rebuild_preview():
             segments[i] = _build_segment(i)
             if old_tr:
                 segments[i]["transition"] = old_tr
-            _carry_sample_times(old, segments[i], i)
+            if _carry_sample_times(old, segments[i], i):
+                segments[i]["kept_times"] = _shown(old)
     _draw_sample_dots()
     if hasattr(wp, "draw_path"):
         wp.draw_path()
+
+
+def _span_times(seg):
+    sms = (seg or {}).get("samples") or []
+    if len(sms) < 2 or sms[0].get("t") is None or sms[-1].get("t") is None:
+        return None
+    return float(sms[0]["t"]), float(sms[-1]["t"])
+
+
+def _carry_from(olds, new, i):
+    """Keep the sample frames of the old span with the same end times; for a
+    span split by a new waypoint, the old span's frames inside it (their timing
+    resampled). new["kept_times"] marks frames kept from a baked (or kept) span:
+    the timeline shows them while unbaked."""
+    if i + 1 >= len(wp.waypoints):
+        return False
+    t0 = float(wp.waypoints[i].get("t") or 0.0)
+    t1 = float(wp.waypoints[i + 1].get("t") or t0)
+    eps = 1e-6
+    for old in olds:
+        se = _span_times(old)
+        if se and abs(se[0] - t0) <= eps and abs(se[1] - t1) <= eps:
+            if _carry_sample_times(old, new, i):
+                new["kept_times"] = _shown(old)
+                return True
+            return False
+    news = new.get("samples") or []
+    if len(news) < 3 or t1 <= t0 + eps:
+        return False
+    for old in olds:
+        se = _span_times(old)
+        if not se or se[0] > t0 + eps or se[1] < t1 - eps:
+            continue
+        inner = sorted(float(sm["t"]) for sm in (old.get("samples") or [])
+                       if sm.get("t") is not None and t0 + eps < float(sm["t"]) < t1 - eps)
+        if not inner:
+            return False
+        ts = [t0] + inner + [t1]
+        tn = np.interp(np.linspace(0.0, 1.0, len(news)), np.linspace(0.0, 1.0, len(ts)), ts)
+        for k in range(1, len(news) - 1):
+            news[k]["t"] = float(tn[k])
+        new["kept_times"] = _shown(old)
+        return True
+    return False
+
+
+def _shown(seg):
+    """The span's sample frames were on the timeline (baked, or kept from a bake)."""
+    return bool(seg.get("status") == "ok" or seg.get("kept_times"))
 
 
 def _carry_sample_times(old, new, i):
@@ -971,26 +1023,26 @@ def _carry_sample_times(old, new, i):
     olds = (old or {}).get("samples") or []
     news = new.get("samples") or []
     if len(olds) < 3 or len(news) < 3 or i + 1 >= len(wp.waypoints):
-        return
+        return False
     t0 = float(wp.waypoints[i].get("t") or 0.0)
     t1 = float(wp.waypoints[i + 1].get("t") or t0)
     # Same span only: after an insert or delete, index i is a different span.
     ta, tb = olds[0].get("t"), olds[-1].get("t")
     if ta is None or tb is None or abs(float(ta) - t0) > 1e-6 or abs(float(tb) - t1) > 1e-6:
-        return
+        return False
     if len(olds) != len(news):
         ts = [sm.get("t") for sm in olds]
         if any(t is None for t in ts):
-            return
+            return False
         ts = [float(t) for t in ts]
         if any(b <= a for a, b in zip(ts, ts[1:])):
-            return
+            return False
         fo = np.linspace(0.0, 1.0, len(ts))
         fn = np.linspace(0.0, 1.0, len(news))
         tn = np.interp(fn, fo, ts)
         for k in range(1, len(news) - 1):
             news[k]["t"] = float(tn[k])
-        return
+        return True
     last = t0
     for k in range(1, len(news) - 1):
         t = olds[k].get("t")
@@ -1000,6 +1052,7 @@ def _carry_sample_times(old, new, i):
         if olds[k].get("t_lock") is not None:
             news[k]["t_lock"] = olds[k]["t_lock"]
         last = float(t)
+    return True
 
 
 def _fill_missing_times(samples):

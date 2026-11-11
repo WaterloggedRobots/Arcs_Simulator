@@ -2593,6 +2593,14 @@
     let dragKf = null;
     let dragSm = null;
     let dragGroup = null;
+    // Gimbal frames on the timeline: selected frames of one gimbal track
+    // ({tid, ts}) and the drag in progress.
+    let gimSel = null;
+    let gimDrag = null;
+    const nearT = (a, b) => Math.abs(Number(a) - Number(b)) < 1e-4;
+    function gimSelHas(tid, t) {
+      return !!(gimSel && gimSel.tid === tid && gimSel.ts.some((x) => nearT(x, t)));
+    }
     let clipInfo = { has: false, can_paste: false };
     let pendingAdd = null;
     let pathWinOn = false;
@@ -3556,7 +3564,12 @@
           ctx.lineTo(x - 11, cy);
           ctx.closePath();
           ctx.fill();
-          if (Math.abs(Number(k.t) - playhead) < 1e-4) {
+          if (gimSelHas(tr.id, k.t)) {
+            ctx.strokeStyle = "#ffd84a";
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          } else if (Math.abs(Number(k.t) - playhead) < 1e-4) {
             ctx.strokeStyle = "#fff";
             ctx.lineWidth = 2;
             ctx.stroke();
@@ -3731,6 +3744,62 @@
         if (d < bestD) { bestD = d; best = (kf.index != null ? kf.index : i); }
       });
       return best;
+    }
+    function hitGimFrame(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const vis = visibleTracks();
+      const row = Math.floor((y - RULER_H) / TRACK_H);
+      const tr = vis[row];
+      if (!isGimbalTrack(tr) || !tr.keys || !tr.keys.length) return null;
+      const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+      if (Math.abs(y - cy) > 14) return null;
+      let best = null, bestD = 12;
+      tr.keys.forEach((k) => {
+        if (k.t == null) return;
+        const d = Math.abs(timeToX(Number(k.t)) - x);
+        if (d < bestD) { bestD = d; best = k; }
+      });
+      return best ? { tid: tr.id, t: Number(best.t), tr: tr } : null;
+    }
+    // Retime the dragged gimbal frames by dt, kept 0.02 s off the frames that stay.
+    function gimDragApply(dt) {
+      const g = gimDrag;
+      let lo = -1e9, hi = 1e9;
+      g.rows.forEach((r) => {
+        if (!r.moving) return;
+        lo = Math.max(lo, -r.t0);
+        g.rows.forEach((o) => {
+          if (o.moving) return;
+          if (o.t0 <= r.t0) lo = Math.max(lo, o.t0 + 0.02 - r.t0);
+          else hi = Math.min(hi, o.t0 - 0.02 - r.t0);
+        });
+      });
+      dt = hi < lo ? 0 : Math.min(Math.max(dt, lo), hi);
+      // dt comes snapped from the pointer; not snapped again after the clamp
+      // (that put a frame dropped against its neighbour onto it).
+      g.rows.forEach((r) => { if (r.moving) r.k.t = Math.max(0, Math.round((r.t0 + dt) * 1e4) / 1e4); });
+      g.dt = dt;
+    }
+    function gimDragEnd() {
+      const g = gimDrag;
+      gimDrag = null;
+      if (!g || !g.moved) return;
+      const moves = g.rows.filter((r) => r.moving && !nearT(r.k.t, r.t0)).map((r) => ({ t0: r.t0, t: Number(r.k.t) }));
+      if (gimSel && gimSel.tid === g.tid) gimSel.ts = g.rows.filter((r) => r.moving).map((r) => Number(r.k.t));
+      if (!moves.length) { renderTimeline(); return; }
+      tracksSyncing += 1;
+      fetch("/api/gimbal", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: String(g.tid).slice("gimbal_".length), action: "move_frames", moves: moves }) })
+        .then((r) => r.json()).then((d) => {
+          if (d && !d.ok && statusEl) statusEl.textContent = d.error || "Move frames failed";
+          if (d && Array.isArray(d.tracks)) applyExtraTracks(d.tracks);
+        }).catch(() => {}).finally(() => {
+          tracksSyncing = Math.max(0, tracksSyncing - 1);
+          renderTimeline();
+          setTimeout(refresh, 80);
+        });
     }
     function hitSample(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
@@ -3949,6 +4018,7 @@
     }
 
     function deselectGui() {
+      gimSel = null;
       selectedKf = null;
       selectedKfs = new Set();
       selectedSms = new Set();
@@ -4351,6 +4421,38 @@
         }).then(refresh, refresh);
         return;
       }
+      const gHit = hitGimFrame(e.clientX, e.clientY);
+      if (gHit) {
+        // A gimbal frame: select it (Ctrl toggles, Shift adds the frames between), drag retimes.
+        e.preventDefault();
+        if (lockEdits) return;
+        if (!gimSel || gimSel.tid !== gHit.tid) gimSel = { tid: gHit.tid, ts: [], anchor: null };
+        if (e.ctrlKey || e.metaKey) {
+          if (gimSelHas(gHit.tid, gHit.t)) gimSel.ts = gimSel.ts.filter((x) => !nearT(x, gHit.t));
+          else gimSel.ts.push(gHit.t);
+        } else if (e.shiftKey && gimSel.anchor != null) {
+          const a = Math.min(gimSel.anchor, gHit.t), b = Math.max(gimSel.anchor, gHit.t);
+          gimSel.ts = gHit.tr.keys.map((k) => Number(k.t)).filter((t) => t >= a - 1e-4 && t <= b + 1e-4);
+        } else if (!gimSelHas(gHit.tid, gHit.t)) {
+          gimSel.ts = [gHit.t];
+        }
+        gimSel.anchor = gHit.t;
+        if (selectedKfs.size || selectedSms.size || selectedKf != null) {
+          selectedKf = null;
+          selectedKfs = new Set();
+          selectedSms = new Set();
+          fetch("/api/select_waypoint", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ index: null }) });
+        }
+        if (gimSelHas(gHit.tid, gHit.t)) {
+          gimDrag = { tid: gHit.tid, t0: gHit.t, x0: e.clientX, tStart: Date.now(), moved: false, dt: 0,
+            rows: gHit.tr.keys.map((k) => ({ k: k, t0: Number(k.t), moving: gimSelHas(gHit.tid, k.t) })) };
+          scrollEl.setPointerCapture(e.pointerId);
+        }
+        renderTimeline();
+        return;
+      }
+      if (gimSel) { gimSel = null; renderTimeline(); }
       const kfFirst = hitKeyframe(e.clientX, e.clientY);
       const smHit = kfFirst >= 0 ? null : hitSample(e.clientX, e.clientY);
       if (smHit && !lockEdits) {
@@ -4496,6 +4598,19 @@
       tip.style.top = (clientY + 14) + "px";
     }
     function onTlPointerMove(e) {
+      if (gimDrag) {
+        if (!gimDrag.moved) {
+          const dtMs = Date.now() - gimDrag.tStart;
+          const dx = Math.abs(e.clientX - gimDrag.x0);
+          if (dtMs < 140 && dx < 6) return;
+          if (dx < 4 && dtMs < 280) return;
+          gimDrag.moved = true;
+        }
+        const rect = canvas.getBoundingClientRect();
+        gimDragApply(snapToTick(Math.max(0, xToTime(e.clientX - rect.left))) - gimDrag.t0);
+        renderTimeline();
+        return;
+      }
       if (!dragSm && !dragKf) {
         const lbar = hitLookBar(e.clientX, e.clientY);
         const hop = lbar ? null : hitHop(e.clientX, e.clientY);
@@ -4592,9 +4707,10 @@
       }
     });
     window.addEventListener("pointermove", (e) => {
-      if (dragKf || dragSm) onTlPointerMove(e);
+      if (dragKf || dragSm || gimDrag) onTlPointerMove(e);
     });
     function onTlPointerUp(e) {
+      if (gimDrag) { gimDragEnd(); return; }
       if (dragSm) {
         if (!dragSm._armed) {
           dragSm = null;
@@ -4629,7 +4745,7 @@
     }
     scrollEl.addEventListener("pointerup", onTlPointerUp);
     window.addEventListener("pointerup", (e) => {
-      if (dragKf || dragSm) onTlPointerUp(e);
+      if (dragKf || dragSm || gimDrag) onTlPointerUp(e);
     });
     function hitClipAt(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
@@ -4743,6 +4859,21 @@
         return;
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (gimSel && gimSel.ts.length) {
+        // Selected gimbal frames on the timeline.
+        e.preventDefault();
+        if (lockEdits) return;
+        const sel = gimSel;
+        gimSel = null;
+        fetch("/api/gimbal", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: String(sel.tid).slice("gimbal_".length), action: "delete_frame", ts: sel.ts }) })
+          .then((r) => r.json()).then((d) => {
+            if (d && !d.ok && statusEl) statusEl.textContent = d.error || "Delete frames failed";
+            if (d && Array.isArray(d.tracks)) applyExtraTracks(d.tracks);
+            renderTimeline();
+          }).catch(() => {}).finally(() => setTimeout(refresh, 80));
+        return;
+      }
       fetch("/api/delete_selected", { method: "POST" });
       setTimeout(refresh, 150);
     });
@@ -7023,7 +7154,7 @@
         const el = document.getElementById("docTitle");
         if (el && !el.classList.contains("editing")) setDocTitle(d.doc_title);
       }
-      if (Array.isArray(d.tracks) && tracksSyncing === 0) {
+      if (Array.isArray(d.tracks) && tracksSyncing === 0 && !gimDrag) {
         const same = d.tracks.length === extraTracks.length &&
           d.tracks.every((tr, i) => extraTracks[i] &&
             (tr && tr.id) === extraTracks[i].id &&
@@ -7490,6 +7621,8 @@
     document.querySelector(".sidebar").addEventListener("click", (e) => {
       const tag = (e.target.tagName || "").toLowerCase();
       if (tag === "button" || tag === "input" || tag === "label" || e.target.closest("button")) return;
+      // A click on a gimbal frame (or the end of its drag) keeps the frame selected.
+      if (e.target.closest("#tlScroll") && hitGimFrame(e.clientX, e.clientY)) return;
       deselectGui();
     });
     document.querySelector(".timeline").addEventListener("pointerdown", (e) => {

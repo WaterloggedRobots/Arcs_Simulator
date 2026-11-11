@@ -709,7 +709,8 @@ def _node_color_map():
         for k, sm in enumerate(sms):
             if k == 0 or k == len(sms) - 1:
                 continue
-            if sm.get("q") is None and seg.get("status") != "ok":
+            # Unbaked spans show only the frames kept from an earlier bake.
+            if sm.get("q") is None and seg.get("status") != "ok" and not seg.get("kept_times"):
                 continue
             sample_st[(i, k)] = "fail" if seg.get("status") == "fail" else (
                 "uncalc" if (sm.get("q") is not None or seg.get("status") == "ok") else "unbaked"
@@ -922,7 +923,8 @@ def _timeline_payload_body():
         micros = seg.get("micro") or []
         seg_ui = _seg_ui_state(seg)
         for k, sm in enumerate(sms):
-            if sm.get("q") is None and seg.get("status") != "ok":
+            # Unbaked spans show only the frames kept from an earlier bake.
+            if sm.get("q") is None and seg.get("status") != "ok" and not seg.get("kept_times"):
                 continue
             t = float(sm.get("t") or 0.0)
             is_end = (k == 0 or k == len(sms) - 1)

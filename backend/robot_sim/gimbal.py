@@ -426,7 +426,8 @@ def restore_track_keys(tracks):
             _note_keys_changed(oid)  # the target follows the restored frames
 
 
-def delete_frame(oid, t=None, index=None):
+def delete_frame(oid, t=None, index=None, ts=None):
+    """Drop the frame at index, at t, or at each time in ts (the timeline's Delete)."""
     tr = _track(oid)
     if tr is None:
         return False
@@ -435,11 +436,40 @@ def delete_frame(oid, t=None, index=None):
     if index is not None:
         i = int(_f(index, -1))
         keys = [k for j, k in enumerate(keys) if j != i]
+    elif ts is not None:
+        gone = [_f(x) for x in list(ts or [])]
+        keys = [k for k in keys if all(abs(k["t"] - g) > FRAME_EPS for g in gone)]
     elif t is not None:
         keys = [k for k in keys if abs(k["t"] - _f(t)) > FRAME_EPS]
     tr["keys"] = keys
     _note_keys_changed(oid)
     return len(keys) != n
+
+
+def move_frames(oid, moves):
+    """Retime frames (the timeline's drag): moves = [{t0, t}]. A frame left
+    where a moved one lands is replaced by it. Returns the new times."""
+    tr = _track(oid)
+    if tr is None:
+        return None
+    keys = clean_keys(tr.get("keys"))
+    moved, out = [], []
+    for mv in list(moves or []):
+        t0, t1 = _f((mv or {}).get("t0"), -1.0), max(0.0, _f((mv or {}).get("t")))
+        k = next((k for k in keys if abs(k["t"] - t0) <= FRAME_EPS and k not in moved), None)
+        if k is None:
+            continue
+        moved.append(k)
+        out.append(t1)
+    if not moved:
+        return []
+    stay = [k for k in keys if k not in moved
+            and all(abs(k["t"] - t1) > FRAME_EPS for t1 in out)]
+    for k, t1 in zip(moved, out):
+        stay.append(dict(k, t=t1))
+    tr["keys"] = clean_keys(stay)
+    _note_keys_changed(oid)
+    return out
 
 
 def _note_keys_changed(oid):
@@ -1106,13 +1136,29 @@ def _clock():
         for rp, pb in _run_states():
             if rp.get("active") and rp.get("armed") and not rp.get("paused"):
                 real_on = True
-                real_t = _f(rp.get("t"))
+                # The run's clock starts at the camera preroll; the arm's path
+                # (and so the timeline) starts after it.
+                real_t = _f(rp.get("t")) - _f(rp.get("preroll"))
             if pb.get("active") and not pb.get("paused"):
                 sim_on = True
     except Exception:
         pass
     t = real_t if real_on else _f(sv._playhead_t())
     return t, real_on, sim_on
+
+
+def _sim_playing():
+    """A Simulate is on (paused included): an arm's playback or the gimbal-only one."""
+    with _solo_lock:
+        if _solo["active"] and _solo["kind"] == "sim":
+            return True
+    try:
+        return any(pb.get("active") for _rp, pb in _run_states())
+    except Exception:
+        return False
+
+
+RESTORE_HOLD_S = 0.5
 
 
 def _move(oid, rt, angles, duration, yaw=True, roll=True):
@@ -1283,12 +1329,30 @@ def _tick_one(obj, clock):
     if wp.server is not None and obj.get("handle") is not None and obj.get("_model_sig") != _model_sig(obj):
         rebuild(obj)
     keys = keys_for(oid)
+    # Simulate: the Sim gimbal's pose before it is put back when it ends, as the
+    # arm's is (the playhead's jump back used to set it from the track there).
+    playing = _sim_playing()
+    if playing and not rt.get("sim_play"):
+        rt["sim_play"] = True
+        rt["pre_play"] = list(g.get("target") or [])
+        rt.pop("restore_until", None)
+    elif not playing and rt.get("sim_play"):
+        rt["sim_play"] = False
+        if rt.get("pre_play"):
+            # Held a moment: the playhead is set back just after the playback ends.
+            rt["restore_until"] = time.time() + RESTORE_HOLD_S
     # Target follows the track while it plays or when the playhead moves.
     moved = rt["last_play"] is None or abs(t - rt["last_play"]) > 1e-6
     if keys and (real_on or sim_on or moved or rt["follow"]):
         g["target"] = clamp_angles(angles_at(keys, t))
     rt["follow"] = False
     rt["last_play"] = t
+    if rt.get("restore_until"):
+        if time.time() < rt["restore_until"] and rt.get("pre_play"):
+            g["target"] = clamp_angles(rt["pre_play"])
+        else:
+            rt.pop("restore_until", None)
+            rt.pop("pre_play", None)
     # Look At overrides the track: the target aims at the Look At target, live.
     look = clean_look(g.get("look"))
     aiming = False

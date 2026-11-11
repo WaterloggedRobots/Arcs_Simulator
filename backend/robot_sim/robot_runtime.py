@@ -2786,6 +2786,16 @@ def _apply_q_at_t(t):
     robot_sim.angle_vector(np.asarray(q, dtype=float).reshape(-1)[:6])
 
 
+def _gimbal_end():
+    """Last frame of the gimbal tracks (those with 2 frames or more), or 0."""
+    try:
+        import gimbal
+        return float(gimbal.solo_t_end() or 0.0)
+    except Exception as e:
+        print("gimbal end failed:", e)
+        return 0.0
+
+
 def enter_simulation_mode(loops=0, delay=0.0):
     import path_bake as bake
     global sim_mode, _sim_ik_pending, _hold_sim, _halt
@@ -2805,7 +2815,8 @@ def enter_simulation_mode(loops=0, delay=0.0):
     _pb["saved_pos"] = np.array(pos, dtype=float)
     _pb["saved_wxyz"] = np.array(wxyz, dtype=float)
     _pb["samples"] = samples
-    _pb["t_end"] = float(samples[-1]["t"])
+    # Gimbal frames past the arm's path: play on to the last one (the arm holds its end).
+    _pb["t_end"] = max(float(samples[-1]["t"]), _gimbal_end())
     try:
         clear_speed_log()
     except Exception:
@@ -3242,7 +3253,7 @@ def upload_real_path(loops=0, delay=0.0):
     _rp["path_end"] = path_end
     _rp["preroll"] = preroll
     _rp["motion_started"] = False
-    _rp["t_end"] = max(path_end + preroll, hold)
+    _rp["t_end"] = max(path_end + preroll, hold, _gimbal_end() + preroll)
     _rp["t"] = 0.0
     _rp["active"] = False
     _rp["paused"] = False
@@ -3350,7 +3361,7 @@ def fire_real_path():
             _rp["preroll"] = preroll
         hold = float(_wp.last_camera_rec_t() or 0.0) if hasattr(_wp, "last_camera_rec_t") else 0.0
         pe = float(_rp.get("path_end") or 0.0)
-        _rp["t_end"] = max(pe + preroll, hold)
+        _rp["t_end"] = max(pe + preroll, hold, _gimbal_end() + preroll)
     except Exception:
         pass
     _rp["active"] = True
@@ -3513,7 +3524,9 @@ def tick_real_path():
     left = int(_rp.get("loops_left") or 0)
     looping = left < 0 or left > 0
     if path_t >= pe - 1e-6 and _rp["finish_at"] is None:
-        if looping:
+        if looping and path_t < _gimbal_end() - 1e-6:
+            pass  # gimbal frames past the arm's path: the next play waits for them
+        elif looping:
             if left > 0:
                 _rp["loops_left"] = left - 1
             delay = float(_rp.get("loop_delay") or 0.0)
@@ -3531,13 +3544,18 @@ def tick_real_path():
                 _start_path_buffer()
         else:
             hold = pe + preroll
-            rec_hold = 0.0
+            # Gimbal frames past the arm's path: the run goes on to the last one.
+            gim_end = _gimbal_end()
+            rec_hold = (gim_end + preroll) if gim_end > pe + 1e-6 else 0.0
+            if rec_hold > 1e-6:
+                hold = max(hold, rec_hold)
             try:
                 import waypoints as _wp
                 if hasattr(_wp, "last_camera_rec_t"):
-                    rec_hold = float(_wp.last_camera_rec_t() or 0.0)
-                    if rec_hold > 1e-6:
-                        hold = max(hold, rec_hold)
+                    cam_hold = float(_wp.last_camera_rec_t() or 0.0)
+                    if cam_hold > 1e-6:
+                        hold = max(hold, cam_hold)
+                        rec_hold = max(rec_hold, cam_hold)
             except Exception:
                 pass
             _rp["t_end"] = hold

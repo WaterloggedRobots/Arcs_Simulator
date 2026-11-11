@@ -1730,7 +1730,7 @@ def api_cam_script():
 def api_gimbal():
     """Gimbal object: {id, action, ...}.
     update {cfg?, target?, look?} | move {target?} | insert_frame {t?, target?} |
-    delete_frame {t | index} | use_read (target = angles read from the gimbal)."""
+    delete_frame {t | index | ts} | move_frames {moves: [{t0, t}]} | use_read (target = angles read from the gimbal)."""
     data = request.get_json(silent=True) or {}
     oid = str(data.get("id") or getattr(wp, "selected_obj_id", None) or "")
     act = str(data.get("action") or "update")
@@ -1740,7 +1740,7 @@ def api_gimbal():
     # One undo step per edit of the gimbal's settings, target or frames (without
     # one, Undo went back past them to before the gimbal was added).
     if (any(data.get(k) is not None for k in ("cfg", "target", "look", "world_target"))
-            or act in ("use_read", "insert_frame", "delete_frame")) and not _edits_locked():
+            or act in ("use_read", "insert_frame", "delete_frame", "move_frames")) and not _edits_locked():
         wp._push_history()
     if any(data.get(k) is not None for k in ("cfg", "target", "look")):
         ok = wp.gimbal.update(oid, data)
@@ -1780,7 +1780,12 @@ def api_gimbal():
     elif act == "delete_frame":
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
-        ok = wp.gimbal.delete_frame(oid, t=data.get("t"), index=data.get("index"))
+        ok = wp.gimbal.delete_frame(oid, t=data.get("t"), index=data.get("index"), ts=data.get("ts"))
+    elif act == "move_frames":
+        # The timeline's drag: {moves: [{t0, t}]}.
+        if _edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        ok = wp.gimbal.move_frames(oid, data.get("moves")) is not None
     _status_dirty.set()
     return jsonify({"ok": bool(ok), "gimbal": wp.gimbal.status(oid),
                     "tracks": list(getattr(wp, "extra_tracks", None) or [])})
