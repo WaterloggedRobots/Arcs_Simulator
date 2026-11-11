@@ -319,7 +319,9 @@ def start_viewer_thread():
 def _solo_playable():
     """Gimbal frames to play while no arm has a path (gimbal-only timeline)."""
     try:
-        return (not any(r for _aid, r in _each_arm(_arm_has_path))) and wp.gimbal.solo_playable()
+        # Like an arm's path: only once baked (the bake runs the gimbal speed check).
+        return ((not any(r for _aid, r in _each_arm(_arm_has_path))) and wp.gimbal.solo_playable()
+                and wp.gimbal.tracks_baked())
     except Exception:
         return False
 
@@ -412,7 +414,7 @@ def _build_status_heavy():
         ],
         "samples": tl.get("samples") or [],
         "spans": tl.get("spans") or [],
-        "runnable": bool(tl.get("runnable") or st.get("runnable") or _solo_playable()),
+        "runnable": bool((tl.get("runnable") or st.get("runnable") or _solo_playable()) and wp.gimbal.tracks_ok()),
         "sim_runnable": bool(tl.get("sim_runnable") or st.get("sim_runnable") or st.get("runnable") or _solo_playable()),
     })
     try:
@@ -581,10 +583,10 @@ def api_status():
         "keyframes": [] if not getattr(wp, "waypoints", None) else (heavy.get("keyframes") or []),
         "samples": [] if not getattr(wp, "waypoints", None) else (heavy.get("samples") or []),
         "spans": [] if not getattr(wp, "waypoints", None) else (heavy.get("spans") or []),
-        "runnable": bool(heavy.get("runnable") or _solo_playable()),
+        "runnable": bool((heavy.get("runnable") or _solo_playable()) and wp.gimbal.tracks_ok()),
         "sim_runnable": bool(heavy.get("sim_runnable") or heavy.get("runnable") or _solo_playable()),
         # Gimbal-only timeline with a real gimbal reading: Upload / Run work without the arm.
-        "gimbal_only_real": bool(_solo_playable() and any(
+        "gimbal_only_real": bool(_solo_playable() and wp.gimbal.tracks_ok() and any(
             wp.gimbal.real_ok(o.get("id")) for o in wp.gimbal.gimbal_objects())),
         "sim": _sim_status_all(),
         "real": _real_status_all(),
@@ -1035,6 +1037,10 @@ def api_sim_pause():
 @app.route("/api/real/upload", methods=["POST"])
 def api_real_upload():
     data = request.get_json(silent=True) or {}
+    if not wp.gimbal.tracks_ok():
+        # Gimbal frames changed since the bake, or a segment is too fast for the gimbal.
+        why = wp.gimbal.speed_summary() if wp.gimbal.tracks_baked() else "bake first (the gimbal frames changed)"
+        return jsonify({"ok": False, "real": _real_status_all(), "error": why})
     def _up():
         if rr.robot is None or not _arm_has_path():
             return False

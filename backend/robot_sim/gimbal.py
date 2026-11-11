@@ -381,6 +381,20 @@ def speed_check():
     return out
 
 
+def tracks_baked():
+    """Every gimbal track with frames to play has been checked by a bake since
+    it last changed (edits drop the report: _note_keys_changed)."""
+    for obj in gimbal_objects():
+        if len(keys_for(obj.get("id"))) >= 2 and track_id(obj.get("id")) not in _speed:
+            return False
+    return True
+
+
+def tracks_ok():
+    """Baked and no segment too fast: what Upload / Run need."""
+    return tracks_baked() and not any(r.get("over") for r in _speed.values())
+
+
 def speed_status():
     """{track id: report} of the last check, for tracks unchanged since."""
     return dict(_speed)
@@ -388,6 +402,8 @@ def speed_status():
 
 def speed_summary():
     """One line for the bake hint, or ''."""
+    if not tracks_baked():
+        return "gimbal frames not baked: bake"
     bad = [(r["name"], s) for r in _speed.values() for s in r["segments"] if s["over"]]
     if not bad:
         return ""
@@ -1282,11 +1298,15 @@ def _tick_one(obj, clock):
                 if real_on:
                     continue
                 if direction in ("cw", "ccw") and _can_track(rt) and rt["read_ok"]:
-                    _jmove_start(rt, angles, dur, direction)
+                    _jmove_start(rt, angles, dur, direction, obj)
                 else:
                     rt.pop("jmove", None)
                     _track_end(rt)
                     _move(oid, rt, angles, dur)
+                    if direction in ("cw", "ccw"):
+                        # Said, not hidden: the move went the short way instead.
+                        rt["cmd_err"] = ("%s needs the driver's track_begin / track_speed / track_end and a "
+                                         "reading: moved the short way" % direction.upper())
             if "jmove" in rt and not real_on:
                 _jmove_tick(oid, rt)
             if real_on and not rt["running"]:
@@ -1443,12 +1463,22 @@ def request_move(oid, angles=None, duration=None, direction="short"):
     return True
 
 
-def _jmove_start(rt, angles, dur, direction):
-    """CW / CCW: J1 from its reading to the target's angle, turning that way
-    (CCW = J1 rising, as the RS4 spin tests watched it); J2 / J3 to the target."""
+def rising_is_ccw(obj):
+    """Does a rising J1 reading turn the camera anticlockwise, seen from the
+    hand end (looking down the handle)? From the model: J1's axis against the
+    handle's +z, and its sign. (RS 4: axis -z, sign +1 -> clockwise.)"""
+    model = obj.get("_model_used") or model_of(obj)[0]
+    j = model["joints"][0]
+    return float(np.asarray(j["axis"], float)[2]) * float(j.get("sign", 1.0)) > 0
+
+
+def _jmove_start(rt, angles, dur, direction, obj=None):
+    """CW / CCW (seen from the hand end): J1 from its reading to the target's
+    angle, turning that way; J2 / J3 to the target."""
     r = list(rt["read"])
     want = _f(angles[0]) % 360.0
-    if direction == "ccw":
+    rise = (direction == "ccw") == (rising_is_ccw(obj) if obj is not None else True)
+    if rise:
         delta = (want - r[0]) % 360.0
     else:
         delta = -((r[0] - want) % 360.0)
