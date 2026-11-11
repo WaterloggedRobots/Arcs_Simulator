@@ -637,6 +637,11 @@ def _bind_object_gizmo(obj, visible=False):
         wp.selected_idx = None
         if wp._suspend_gizmo_cb:
             return
+        if not wp._drag_checkpointed and not wp._suspend_history:
+            # One undo step per drag (without it Undo went back past the drag
+            # to the step before, e.g. the gimbal's pose).
+            wp._push_history()
+            wp._drag_checkpointed = True
         old_pos = np.asarray(obj.get("pos"), dtype=float).reshape(3)
         old_q = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
         new_pos = np.array(giz.position, dtype=float).reshape(3)
