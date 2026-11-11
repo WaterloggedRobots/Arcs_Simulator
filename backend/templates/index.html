@@ -1955,7 +1955,7 @@
           <div class="hier-head-btns">
             <button type="button" class="hier-eye" data-list-eye="wp" title="Toggle waypoints">👁</button>
             <button type="button" id="addReal" class="hier-add" title="Add waypoint on real robot (E)">+</button>
-            <button type="button" id="addSim" class="hier-add" title="Add waypoint from sim cursor (R)">+</button>
+            <button type="button" id="addSim" class="hier-add" title="Add waypoint from the Sim Arm Cursor (R)">+</button>
           </div>
         </div>
         <div class="hier-list" id="hierWps"></div>
@@ -1966,8 +1966,8 @@
           <span>Saved Points <span class="hier-count" id="poseCount"></span></span>
           <div class="hier-head-btns">
             <button type="button" class="hier-eye" data-list-eye="pose" title="Toggle saved points">👁</button>
-            <button type="button" id="poseAddReal" class="hier-add" title="Add saved point at real cursor">+</button>
-            <button type="button" id="poseAddSim" class="hier-add" title="Add saved point at sim cursor">+</button>
+            <button type="button" id="poseAddReal" class="hier-add" title="Add saved point at the Real Arm Cursor">+</button>
+            <button type="button" id="poseAddSim" class="hier-add" title="Add saved point at the Sim Arm Cursor">+</button>
           </div>
         </div>
         <div class="hier-list" id="hierPoses"></div>
@@ -2141,7 +2141,7 @@
               </details>
             </div>
             <div id="gimSimBlock">
-              <div class="track-head"><span class="gim-twin sim">Sim gimbal</span></div>
+              <div class="track-head"><span class="gim-twin sim">Sim Gimbal Cursor</span></div>
               <div class="gim-space-row">
                 <label class="field tight">Target (deg)</label>
                 <div class="fk-units rad" data-gim-space title="Joints (J1-J3) / World (camera yaw, pitch, roll)">
@@ -2196,7 +2196,7 @@
               <div id="gimbalReadErr" class="gim-err" hidden></div>
             </div>
             <div id="gimRealBlock">
-              <div class="track-head"><span class="gim-twin real">Real gimbal</span></div>
+              <div class="track-head"><span class="gim-twin real">Real Gimbal Cursor</span></div>
               <div class="gim-space-row">
                 <label class="field tight">Read from gimbal (deg)</label>
                 <div class="fk-units rad" data-gim-space title="Joints (J1-J3) / World (camera yaw, pitch, roll)">
@@ -3045,7 +3045,7 @@
         };
         if (tr.id === "arm" || tr.armRow) {
           plus("real", "Add waypoint on real robot" + (tr.armRow ? " (" + tr.name + ")" : " (E)"));
-          plus("sim", "Add waypoint from sim cursor" + (tr.armRow ? " (" + tr.name + ")" : " (R)"));
+          plus("sim", "Add waypoint from the Sim Arm Cursor" + (tr.armRow ? " (" + tr.name + ")" : " (R)"));
         } else if (isGimbalTrack(tr)) {
           plus("real", "Insert a frame with the real gimbal's angles at the playhead");
           plus("sim", "Insert a frame with the Sim gimbal's angles at the playhead");
@@ -5289,7 +5289,7 @@
         const oe = document.getElementById("trackOffErr");
         if (oe) {
           oe.hidden = !!tools.length;
-          oe.textContent = "Parent objects to the Sim cursor to use them as tools.";
+          oe.textContent = "Parent objects to the Sim Arm Cursor to use them as tools.";
         }
       }
       renderOffsetComp(obj);
@@ -6165,16 +6165,16 @@
       armList.forEach((a) => {
         builtInIds[a.sim_id] = builtInIds[a.bot_id] = builtInIds[a.real_id] = 1;
         armRows = armRows.concat(SIM_BOT_ENABLED
-          ? [{ id: a.bot_id, name: a.name, arm: 1 }, { id: a.sim_id, name: "Sim cursor", parent_id: a.bot_id }]
-              .concat(a.real_connected ? [{ id: a.real_id, name: "Real cursor", parent_id: a.bot_id }] : [])
-          : [{ id: a.sim_id, name: "Sim cursor", arm: 1 }]);
+          ? [{ id: a.bot_id, name: a.name, arm: 1 }, { id: a.sim_id, name: "Sim Arm Cursor", parent_id: a.bot_id, dot: "sim" }]
+              .concat(a.real_connected ? [{ id: a.real_id, name: "Real Arm Cursor", parent_id: a.bot_id, dot: "real" }] : [])
+          : [{ id: a.sim_id, name: "Sim Arm Cursor", arm: 1, dot: "sim" }]);
       });
       // A gimbal lists its Sim twin and, while its angles read, its Real twin (like an arm's cursors).
       const twinRows = [];
       (d.scene_objects || []).forEach((o) => {
         if (!o || o.kind !== "gimbal") return;
-        twinRows.push({ id: o.id + "#sim", name: "Sim gimbal", parent_id: o.id, twin: "sim" });
-        if (o.gimbal_real) twinRows.push({ id: o.id + "#real", name: "Real gimbal", parent_id: o.id, twin: "real" });
+        twinRows.push({ id: o.id + "#sim", name: "Sim Gimbal Cursor", parent_id: o.id, twin: "sim", dot: "sim" });
+        if (o.gimbal_real) twinRows.push({ id: o.id + "#real", name: "Real Gimbal Cursor", parent_id: o.id, twin: "real", dot: "real" });
       });
       twinRows.forEach((r) => { builtInIds[r.id] = 1; });
       const objRows = armRows.concat(d.scene_objects || [], twinRows);
@@ -6213,7 +6213,8 @@
         return (byParent[pid] || []).map((o) => {
           const pad = 8 + depth * 14;
           const mark = (o.parent_id ? "↳ " : "");
-          const twinDot = o.twin ? "<span class='gim-twin " + o.twin + "'></span>" : "";
+          // Sim / Real cursors (arm and gimbal): a dot in the cursor's colour.
+          const twinDot = o.dot ? "<span class='gim-twin " + o.dot + "'></span>" : "";
           return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + twinDot + (o.name || o.kind) + "</span>" + (o.twin ? "" : eyeHtml("obj", o.id)) + "</div>" + walk(o.id, depth + 1);
         }).join("");
       }
@@ -6641,15 +6642,15 @@
         ptCtx.innerHTML =
           "<div class='sub'><button type='button'>Add waypoint ▸</button>" +
           "<div class='sub-menu'>" +
-          "<button data-act='wp-real'>Real cursor</button>" +
-          "<button data-act='wp-sim'>Sim cursor</button>" +
+          "<button data-act='wp-real'>Real Arm Cursor</button>" +
+          "<button data-act='wp-sim'>Sim Arm Cursor</button>" +
           "</div></div>";
       } else {
         ptCtx.innerHTML =
           "<div class='sub'><button type='button'>Add saved point ▸</button>" +
           "<div class='sub-menu'>" +
-          "<button data-act='pose-real'>Real cursor</button>" +
-          "<button data-act='pose-sim'>Sim cursor</button>" +
+          "<button data-act='pose-real'>Real Arm Cursor</button>" +
+          "<button data-act='pose-sim'>Sim Arm Cursor</button>" +
           "</div></div>";
       }
       placePtCtx(e);
@@ -6666,7 +6667,7 @@
     function showPlusAddMenu(source, e) {
       e.preventDefault();
       e.stopPropagation();
-      const label = source === "real" ? "real cursor" : "sim cursor";
+      const label = source === "real" ? "Real Arm Cursor" : "Sim Arm Cursor";
       ptCtx.innerHTML =
         "<button data-act='plus-wp'>Add waypoint (" + label + ")</button>" +
         "<button data-act='plus-pose'>Add saved point (" + label + ")</button>";
@@ -6995,7 +6996,7 @@
         allCams.unshift({
           id: "sim",
           kind: "sim",
-          name: "Sim cursor",
+          name: "Sim Arm Cursor",
           camera: simCam,
           cam_type: simCam.type || "sim",
         });

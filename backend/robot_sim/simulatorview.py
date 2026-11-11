@@ -70,7 +70,7 @@ def _qrot(q, v):
 # Aubo Arm (id sim_bot): the robot base, parent of the Sim and Real cursors.
 # Its gizmo sits at the base; moving it moves both arms (robot_runtime.set_arm_base).
 SIM_BOT_ENABLED = True
-SIM_CURSOR_NAME = "Sim cursor"
+SIM_CURSOR_NAME = "Sim Arm Cursor"
 SIM_BOT_ID = "sim_bot"
 SIM_BOT_NAME = "Aubo Arm"
 REAL_CURSOR_ID = "real_cursor"

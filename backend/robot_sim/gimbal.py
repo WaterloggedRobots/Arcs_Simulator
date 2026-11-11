@@ -141,7 +141,8 @@ def clean_look(rec):
 # ---------------------------------------------------------------------------
 # Look At: the Sim gimbal aims its lens at a target
 # ---------------------------------------------------------------------------
-SIM_CURSOR_TARGET = "Sim cursor"
+SIM_CURSOR_TARGET = "Sim Arm Cursor"
+SIM_CURSOR_OLD_NAMES = ("sim cursor",)  # Look At targets saved before the rename
 PRIMARY_TARGET = "Primary target"
 
 
@@ -164,7 +165,7 @@ def look_target_pos(oid, name):
             return None if p is None else np.asarray(p, dtype=float).reshape(3)
         except Exception:
             return None
-    if key == SIM_CURSOR_TARGET.lower():
+    if key == SIM_CURSOR_TARGET.lower() or key in SIM_CURSOR_OLD_NAMES:
         try:
             import robot_runtime as rr
             with arms.LOCK:

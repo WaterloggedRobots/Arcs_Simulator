@@ -3798,7 +3798,7 @@ def get_selected_props():
         out.update({
             "kind": "sim",
             "id": "sim",
-            "name": getattr(wp, "SIM_CURSOR_NAME", "Sim cursor"),
+            "name": getattr(wp, "SIM_CURSOR_NAME", "Sim Arm Cursor"),
             "editable": True,
             "ik": [float(v) for v in ik],
             "q": [float(v) for v in q],
@@ -3842,7 +3842,7 @@ def get_selected_props():
             ik = [0.0] * 6
         out.update({
             "kind": "real",
-            "name": "Real cursor" if real_pick else "Actual robot",
+            "name": "Real Arm Cursor" if real_pick else "Actual robot",
             "editable": False,
             "ik": [float(v) for v in ik],
             "q": [float(v) for v in q],
