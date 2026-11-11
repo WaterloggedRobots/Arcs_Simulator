@@ -9344,16 +9344,12 @@
         body: JSON.stringify({ sim: spdSim, real: spdReal }),
       }).then((r) => r.json()).then((d) => {
         if (!d.ok) {
-          statusEl.textContent = "Export failed";
+          statusEl.textContent = "Export failed: " + (d.error || "no reply");
           return;
         }
-        const a = document.createElement("a");
-        a.href = "/api/speed_export?download=1";
-        a.download = "speed_export.json";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        statusEl.textContent = "Exported speed_export.json";
+        // The speed samples, the overspeed report and the gimbals' frames / poses.
+        downloadJson("speed_export.json", d.doc);
+        statusEl.textContent = "Exported speed_export.json (" + (d.sim || 0) + " sim / " + (d.real || 0) + " real samples)";
       }).catch((err) => { statusEl.textContent = "Export failed"; console.error(err); });
     };
     let spdPps = 80;

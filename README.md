@@ -56,7 +56,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
 | **List of Elements** | Every waypoint, bookmarked pose and 3D object in the scene, in tabs, with per-item and global visibility toggles. |
 | **Control Panel** | Bake, simulate, run, and hand the real arm over to the simulator's pose. |
 | **Timeline** | The move over time: an arm track and a camera track, with waypoint frames and generated sample points. |
-| **Speed Graph** | How fast the arm travels along the path. The vertical axis fits the fastest sample on the graph, so the whole line always shows (it squeezes down instead of running off the top). |
+| **Speed Graph** | How fast the arm travels along the path. The vertical axis fits the fastest sample on the graph, so the whole line always shows (it squeezes down instead of running off the top). Its **Export** downloads `speed_export.json`: the Sim and Real EE speed samples, the bake's overspeed report (also written as `exports/bake_overspeed.csv`) and each gimbal's frames and pose every 0.1 s. |
 | **Object Properties** | Transform, joint poses and components for whatever is selected in the world view. Every number field can be typed in or **scrubbed**: drag its label left or right (Shift ×10, Alt ×0.1); the change is applied when you let go. |
 
 ---
@@ -530,7 +530,7 @@ user_files/               ships with the app, editable by the user
   gimbal_scripts/         gimbal driver scripts (rs4_can.py: DJI RS4 over CAN)
   gimbal_models/          gimbal models: joint axes, offsets, boxes (dji_rs4.json)
   paths/                  saved .arcspath projects
-  exports/                export.json (arm points, scene objects, and per gimbal its frames and its J1-J3 pose every 0.1 s; each point also has the gimbals' angles at its time), bake_overspeed.csv / .xlsx
+  exports/                speed_export.json (Speed Graph Export), export.json (arm points, scene objects, and per gimbal its frames and its J1-J3 pose every 0.1 s; each point also has the gimbals' angles at its time), bake_overspeed.csv / .xlsx
   recordings/             camera recordings
   imported_meshes/        meshes added with Import mesh
 packaging/deck/           ArcsDeck.exe build: PyInstaller spec, build requirements, build_deck.bat

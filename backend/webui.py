@@ -1854,18 +1854,47 @@ def api_optomise():
     return jsonify({"ok": True})
 
 
-@app.route("/api/speed_export")
+@app.route("/api/speed_export", methods=["GET", "POST"])
 def api_speed_export():
-    # write_overspeed_report writes to the same EXPORTS_DIR file.
-    path = app_paths.EXPORTS_DIR / "bake_overspeed.csv"
-    if request.args.get("download"):
+    """The Speed Graph's Export. POST {sim, real} (the graph's samples, [{t, v}]):
+    writes exports/speed_export.json with those, the bake's overspeed report
+    (also rewritten as bake_overspeed.csv) and the gimbals' frames and poses.
+    GET ?download=1 sends that file; plain GET just rewrites the overspeed report.
+    (The page POSTed to a GET-only route: every export failed with a 405.)"""
+    path = app_paths.ensure_dir(app_paths.EXPORTS_DIR) / "speed_export.json"
+    if request.method == "GET" and request.args.get("download"):
         if path.is_file():
-            return send_file(str(path), as_attachment=True)
-        return jsonify({"ok": False, "error": "no overspeed report yet; bake first"}), 404
-    res = {"ok": True}
+            return send_file(str(path), as_attachment=True, download_name="speed_export.json")
+        return jsonify({"ok": False, "error": "nothing exported yet"}), 404
+    over = None
     if hasattr(bake, "export_overspeed"):
-        res = bake.export_overspeed() or res
-    return jsonify(res)
+        try:
+            over = bake.export_overspeed()
+        except Exception as e:
+            over = {"ok": False, "error": str(e)}
+    if request.method == "GET":
+        return jsonify(over or {"ok": True})
+    data = request.get_json(silent=True) or {}
+
+    def series(rows):
+        out = []
+        for r in list(rows or []):
+            try:
+                out.append({"t": round(float(r.get("t")), 4), "v": round(float(r.get("v")), 5)})
+            except Exception:
+                pass
+        return out
+    try:
+        gimbals = wp.gimbal.export_tracks()
+    except Exception as e:
+        print("speed export gimbals failed", e)
+        gimbals = []
+    doc = {"format": "speed_export", "title": fman.SESSION.get("title"), "units": {"speed": "m/s", "t": "s"},
+           "sim_ee": series(data.get("sim")), "real_ee": series(data.get("real")),
+           "overspeed": over, "gimbals": gimbals}
+    path.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")
+    return jsonify({"ok": True, "path": str(path), "sim": len(doc["sim_ee"]), "real": len(doc["real_ee"]),
+                    "gimbals": len(gimbals), "doc": json.loads(json.dumps(doc, default=str))})
 
 
 def _open_ui():
