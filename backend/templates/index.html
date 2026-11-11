@@ -252,6 +252,9 @@
     }
     .hier-row .hier-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .hier-row.drag-over { outline: 1px dashed #e39a3c; }
+    /* Real side: ghosts (mirrored objects) and the "Robot Not Connected" stand-in. */
+    .hier-row.ghost .hier-label { opacity: 0.55; font-style: italic; }
+    .hier-row.stand-in .hier-label { color: #9a9aa3; font-style: italic; }
     .hier-eye {
       flex: 0 0 auto;
       display: inline-flex;
@@ -456,6 +459,8 @@
     .props .reset-btn svg { width: 14px; height: 14px; color: #d8d8dc; }
     .props .reset-btn:hover { background: #4a4b55; }
     .props .row.snap-row { grid-template-columns: 1fr; }
+    .props.readonly .reset-btn,
+    .props.readonly #primSnapRow,
     .props.is-bot .reset-btn,
     .props.is-bot #primScaleBlock,
     .props.is-bot #objSpaceWrap,
@@ -635,7 +640,7 @@
       pointer-events: none;
       opacity: 0.65;
     }
-    .props.readonly label.drag { cursor: default; }
+    .props.readonly label.drag, .props.readonly label { cursor: default !important; }
     .props .row {
       display: grid;
       grid-template-columns: 28px 1fr auto;
@@ -1882,6 +1887,14 @@
               <hr style="border:0;border-top:1px solid #2a2b32;margin:12px 0;">
               <label class="field">Move robot to pose linear speed (m/s)</label>
               <input id="holdLinMps" type="number" min="0.001" step="0.001" value="0.05" />
+              <hr style="border:0;border-top:1px solid #2a2b32;margin:12px 0;">
+              <label class="field">Ghosts on the real side</label>
+              <div class="tl-mode advanced" id="realGhostsWrap" title="Show see-through copies of what rides on the Sim Arm Cursor on the Real Arm Cursor (Real Gimbal Cursors always show)">
+                <span class="mode-simple">Off</span>
+                <button type="button" class="slide advanced" id="realGhosts"></button>
+                <span class="mode-advanced">On</span>
+              </div>
+              <p style="font-size:11px;color:#8a8a92;margin:6px 0 0;">Objects on the Sim Arm Cursor are mirrored onto the Real Arm Cursor (or onto "Robot Not Connected" while the robot is offline). Ghosts are the mirrored objects that have no real cursor of their own.</p>
             </div>
             <div class="ctrl-pane" id="pane-dev" hidden>
               <label class="field">Password</label>
@@ -5053,6 +5066,27 @@
         if (k) setPlayhead(Number(k.t));
       });
     })();
+    // A real-side row (ghost or stand-in) as a read-only object for Properties:
+    // world or local transform (the Local / Global switch), nothing editable.
+    window.__realSpace = window.__realSpace || "world";
+    function realSelObject(d) {
+      const id = window.__realSel;
+      if (!id) return null;
+      // Something else got selected (in the 3D view; "real" is the server's nothing-selected view).
+      if (d && d.object && d.object.kind && d.object.kind !== "real") { window.__realSel = null; return null; }
+      let row = null;
+      ((d && d.real_side && d.real_side.arms) || []).forEach((a) => {
+        if (a.anchor_id === id && !a.connected) row = { name: a.anchor_name, pos: a.anchor_pos, wxyz: a.anchor_wxyz, local_pos: a.anchor_pos, local_wxyz: a.anchor_wxyz };
+        (a.rows || []).forEach((r) => { if (r.id === id) row = r; });
+      });
+      if (!row) { window.__realSel = null; return null; }
+      const local = window.__realSpace === "local";
+      return {
+        kind: "ghost", id: id, name: row.name + " (real side)", editable: false, real_side: true,
+        pos: local ? row.local_pos : row.pos, wxyz: local ? row.local_wxyz : row.wxyz,
+        scale: [1, 1, 1], space: local ? "local" : "world",
+      };
+    }
     function fillProps(obj, move) {
       renderGimbal(obj);
       const body = document.getElementById("propBody");
@@ -5061,7 +5095,7 @@
       const panel = document.getElementById("propsPanel");
       const isBot = !!(obj && obj.kind === "bot");
       panel.classList.toggle("is-bot", isBot);
-      const isPrim = isBot || !!(obj && (obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import" || obj.kind === "gimbal"));
+      const isPrim = isBot || !!(obj && (obj.kind === "ghost" || obj.kind === "empty" || obj.kind === "sphere" || obj.kind === "cube" || obj.kind === "camera" || obj.kind === "mesh" || obj.kind === "import" || obj.kind === "gimbal"));
       const moveBtn = document.getElementById("moveRobotPose");
       const extraAdd = document.getElementById("simExtraAdd");
       const isSim = !!(obj && obj.kind === "sim");
@@ -5090,7 +5124,7 @@
         body.hidden = true;
         if (primBody) primBody.hidden = false;
         // The Aubo Arm only takes a Collider (the robot-shaped one): no + once it has it.
-        if (extraAdd) extraAdd.classList.toggle("show", !isBot || !(obj.collider && obj.collider.added));
+        if (extraAdd) extraAdd.classList.toggle("show", !obj.real_side && (!isBot || !(obj.collider && obj.collider.added)));
         const tcP = document.getElementById("trackComp");
         const tsP = document.getElementById("trackSep");
         if (tcP) tcP.hidden = true;
@@ -5738,6 +5772,12 @@
     if (objSpaceBtn) objSpaceBtn.onclick = () => {
       objSpaceBtn.classList.toggle("advanced");
       const space = objSpaceBtn.classList.contains("advanced") ? "world" : "local";
+      if (window.__realSel) {
+        // Real side: only what is shown changes.
+        window.__realSpace = space;
+        refresh();
+        return;
+      }
       const wrap = document.getElementById("objSpaceWrap");
       if (wrap) {
         wrap.classList.toggle("world", space !== "local");
@@ -6234,7 +6274,7 @@
       const poses = document.getElementById("hierPoses");
       if (!objs || !wps) return;
       const gimPart = d.object && d.object.kind === "gimbal" && d.object.gimbal_part;
-      const selIds = gimPart ? [d.object.id + "#" + gimPart] : d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import" || d.object.kind === "gimbal")) ? [d.object.id] : []);
+      const selIds = window.__realSel ? [window.__realSel] : gimPart ? [d.object.id + "#" + gimPart] : d.selected_obj_ids || ((d.object && (d.object.kind === "empty" || d.object.kind === "sphere" || d.object.kind === "cube" || d.object.kind === "camera" || d.object.kind === "mesh" || d.object.kind === "import" || d.object.kind === "gimbal")) ? [d.object.id] : []);
       // Built-ins. With SIM_BOT_ENABLED: Aubo Arm (robot base) with the Sim cursor and,
       // while the robot is connected, the Real cursor under it.
       // Every Aubo Arm gets its own group; a Real cursor shows only while that arm's robot is connected.
@@ -6242,19 +6282,37 @@
         : [{ id: "arm0", name: "Aubo Arm", active: true, sim_id: "sim_cursor", bot_id: "sim_bot", real_id: "real_cursor", real_connected: !!(d.real && d.real.connected) }];
       const builtInIds = {};
       let armRows = [];
+      // The real side (real_mirror.py): what rides on the Sim Arm Cursor, mirrored onto the
+      // Real Arm Cursor, or onto "Robot Not Connected" (on the Sim Arm Cursor) while offline.
+      const realSide = (d.real_side && d.real_side.arms) || [];
+      const mirrored = {};
+      window.__realSide = realSide;
       armList.forEach((a) => {
         builtInIds[a.sim_id] = builtInIds[a.bot_id] = builtInIds[a.real_id] = 1;
+        const rs = realSide.find((r) => r.id === a.id);
+        const realRow = (rs && !rs.connected)
+          ? { id: rs.anchor_id, name: rs.anchor_name, parent_id: a.bot_id, noEye: true, standIn: true }
+          : (a.real_connected ? { id: a.real_id, name: "Real Arm Cursor", parent_id: a.bot_id, dot: "real" } : null);
         armRows = armRows.concat(SIM_BOT_ENABLED
           ? [{ id: a.bot_id, name: a.name, arm: 1 }, { id: a.sim_id, name: "Sim Arm Cursor", parent_id: a.bot_id, dot: "sim" }]
-              .concat(a.real_connected ? [{ id: a.real_id, name: "Real Arm Cursor", parent_id: a.bot_id, dot: "real" }] : [])
+              .concat(realRow ? [realRow] : [])
           : [{ id: a.sim_id, name: "Sim Arm Cursor", arm: 1, dot: "sim" }]);
+        if (rs) rs.rows.forEach((r) => {
+          builtInIds[r.id] = 1;
+          if (r.twin) mirrored[r.src] = 1;
+          armRows.push(r.twin
+            ? { id: r.id, name: "Real Gimbal Cursor" + (r.reading ? "" : " (not reading)"), parent_id: r.parent_id, twin: "real", dot: "real" }
+            : { id: r.id, name: r.name, parent_id: r.parent_id, ghost: true, noEye: true });
+        });
+        if (rs) builtInIds[rs.anchor_id] = 1;
       });
       // A gimbal lists its Sim twin and, while its angles read, its Real twin (like an arm's cursors).
       const twinRows = [];
       (d.scene_objects || []).forEach((o) => {
         if (!o || o.kind !== "gimbal") return;
         twinRows.push({ id: o.id + "#sim", name: "Sim Gimbal Cursor", parent_id: o.id, twin: "sim", dot: "sim" });
-        if (o.gimbal_real) twinRows.push({ id: o.id + "#real", name: "Real Gimbal Cursor", parent_id: o.id, twin: "real", dot: "real" });
+        // On a Sim Arm Cursor, its Real Gimbal Cursor is listed on the real side instead.
+        if (o.gimbal_real && !mirrored[o.id]) twinRows.push({ id: o.id + "#real", name: "Real Gimbal Cursor", parent_id: o.id, twin: "real", dot: "real" });
       });
       twinRows.forEach((r) => { builtInIds[r.id] = 1; });
       const objRows = armRows.concat(d.scene_objects || [], twinRows);
@@ -6295,7 +6353,9 @@
           const mark = (o.parent_id ? "↳ " : "");
           // Sim / Real cursors (arm and gimbal): a dot in the cursor's colour.
           const twinDot = o.dot ? "<span class='gim-twin " + o.dot + "'></span>" : "";
-          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + twinDot + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
+          const ghostCls = o.ghost ? " ghost" : (o.standIn ? " stand-in" : "");
+          const realAttr = (o.ghost || o.standIn) ? " data-real='1'" : "";
+          return "<div class='hier-row" + ghostCls + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "'" + realAttr + " style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + twinDot + (o.name || o.kind) + "</span>" + (o.noEye ? "" : eyeHtml("obj", o.id)) + "</div>" + walk(o.id, depth + 1);
         }).join("");
       }
       let tree = walk("", 0);
@@ -6433,7 +6493,14 @@
         return;
       }
       const row = e.target.closest("[data-oid]");
+      window.__realSel = null;
       if (!row) { deselectGui().then(refresh, refresh); return; }
+      if (row.getAttribute("data-real")) {
+        // A ghost or "Robot Not Connected": shown read-only, nothing selected on the server.
+        window.__realSel = row.getAttribute("data-oid");
+        deselectGui().then(refresh, refresh);
+        return;
+      }
       fetch("/api/select_object", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7040,7 +7107,7 @@
         if (sb) sb.classList.toggle("on", snapToGrid);
       }
       bakingBusy = !!(d.bake && d.bake.baking);
-      fillProps(d.object, d.move);
+      fillProps(realSelObject(d) || d.object, d.move);
       applyRobotLinkUi(d);
       if (bakingBusy) {
         const mp = document.getElementById("moveRobotPose");
@@ -7758,7 +7825,21 @@
       document.body.classList.toggle("no-real", !realOn);
       document.body.classList.toggle("no-ik", !ikOk);
     }
+    function setRealGhostsUi(on) {
+      const b = document.getElementById("realGhosts");
+      const w = document.getElementById("realGhostsWrap");
+      if (b) b.classList.toggle("advanced", !!on);
+      if (w) { w.classList.toggle("advanced", !!on); w.classList.toggle("simple", !on); }
+    }
+    (function setupRealGhosts() {
+      const b = document.getElementById("realGhosts");
+      if (b) b.addEventListener("click", () => {
+        setRealGhostsUi(!b.classList.contains("advanced"));
+        saveCtrlSettings();
+      });
+    })();
     function fillLimitInputs(s) {
+      setRealGhostsUi(!s || s.real_ghosts !== false);
       const vel = (s && s.joint_vel_deg) || [];
       const acc = (s && s.joint_acc_deg) || [];
       for (let i = 0; i < 6; i++) {
@@ -7869,6 +7950,7 @@
         grid_spacing: Math.max(0.001, Number(document.getElementById("tlGrid") && document.getElementById("tlGrid").value || gridSpacing || 0.01)),
         snap_to_grid: !!snapToGrid,
         dev_mode: !!devMode,
+        real_ghosts: !!(document.getElementById("realGhosts") && document.getElementById("realGhosts").classList.contains("advanced")),
         robot_model: (document.getElementById("robotModel") && (document.getElementById("robotModel").dataset.cur || document.getElementById("robotModel").value)) || "aubo_i5",
         robot_ip: ((document.getElementById("robotIp") || {}).value || "").trim(),
         robot_port: ((document.getElementById("robotPort") || {}).value || "").trim(),

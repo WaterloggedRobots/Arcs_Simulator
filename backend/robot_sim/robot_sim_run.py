@@ -456,6 +456,12 @@ def start_viewer():
                     except Exception as e:
                         _report_tick_error("update_cursors", e)
         try:
+            # The real side: Real Gimbal Cursors and ghosts on each Real Arm Cursor.
+            import real_mirror
+            real_mirror.tick()
+        except Exception as e:
+            _report_tick_error("real_mirror", e)
+        try:
             viewer.redraw()
         except Exception:
             pass

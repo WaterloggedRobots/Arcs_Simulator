@@ -519,9 +519,13 @@ def spawn_head(obj):
                 old.remove()
             except Exception:
                 pass
+        # The Sim gimbal hangs under the mount node; the Real one is a node of
+        # its own, placed every viewer tick by real_mirror (on the mount, or
+        # on the real arm when the gimbal rides on a Sim Arm Cursor).
+        node_name = "%s/%s" % (_mount_name(obj), part) if part == "sim" else "/gimbal_real_%s" % obj["id"]
         try:
             root, nodes, handles = gmodel.build_twin(
-                wp.server, "%s/%s" % (_mount_name(obj), part), model,
+                wp.server, node_name, model,
                 SIM_RGB if part == "sim" else REAL_RGB, gmodel.joint_values(model, target),
                 _clicker(obj["id"], part))
             obj[part + "_head"], obj[part + "_nodes"], obj[part + "_parts"] = root, nodes, handles
@@ -530,6 +534,8 @@ def spawn_head(obj):
             obj[part + "_head"], obj[part + "_nodes"], obj[part + "_parts"] = None, [], []
         obj.pop("_shown_" + part, None)
         obj.pop("_vis_" + part, None)
+    obj.pop("_real_root_set", None)
+    place_real_root(obj, *(obj.get("_real_root") or (obj.get("pos", [0, 0, 0]), obj.get("wxyz", [1, 0, 0, 0]))))
     obj["_model_used"] = model
     obj["_model_sig"] = _model_sig(obj)
     _set_visible(obj, "real", False)
@@ -541,6 +547,25 @@ def _model_sig(obj):
     return (gmodel.path_of(cfg.get("model")), mtime)
 
 
+def place_real_root(obj, pos, wxyz):
+    """Where the Real gimbal's handle frame is in the world (the mount, or the
+    mount mirrored onto the real arm: real_mirror.tick)."""
+    pos = np.asarray(pos, dtype=float).reshape(3)
+    q = np.asarray(wxyz, dtype=float).reshape(4)
+    q = q / (np.linalg.norm(q) or 1.0)
+    obj["_real_root"] = (pos, q)
+    key = tuple(np.round(np.concatenate([pos, q]), 6))
+    h = obj.get("real_head")
+    if h is None or obj.get("_real_root_set") == key:
+        return
+    obj["_real_root_set"] = key
+    try:
+        h.position = tuple(float(v) for v in pos)
+        h.wxyz = tuple(float(v) for v in q)
+    except Exception:
+        pass
+
+
 def twin_camera_world(obj, part="sim"):
     """World (pos, wxyz) of a twin's camera frame: z lens, x right, y image
     down (a Camera object, which looks along -z, sits on it turned 180 deg about x)."""
@@ -548,6 +573,11 @@ def twin_camera_world(obj, part="sim"):
     g = obj.get("gimbal") or {}
     angles = g.get("target") if part == "sim" else (_rt.get(str(obj.get("id"))) or {}).get("read")
     q, p = gmodel.camera_pose(model, gmodel.joint_values(model, angles or g.get("target")))
+    if part == "real" and obj.get("_real_root") is not None:
+        rp, mq = obj["_real_root"]  # the Real gimbal may sit on the real arm
+        pos = np.asarray(rp, dtype=float) + gmodel.qrot(mq, p)
+        wq = gmodel.qmul(mq, q)
+        return pos, wq / (np.linalg.norm(wq) or 1.0)
     mq = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), dtype=float)
     pos = np.asarray(obj.get("pos", [0, 0, 0]), dtype=float) + gmodel.qrot(mq, p)
     wq = gmodel.qmul(mq, q)
@@ -1215,7 +1245,8 @@ def _tick_one(obj, clock):
     ok = real_ok(oid)
     if ok:
         _set_twin(obj, "real", rt["read"])
-    _set_visible(obj, "real", ok and _user_shows(obj, "real"))
+    # The Real gimbal is its own node: it also hides with its mount.
+    _set_visible(obj, "real", ok and _user_shows(obj, "real") and obj.get("visible", True) is not False)
     _set_visible(obj, "sim", _user_shows(obj, "sim"))
 
 
@@ -1372,6 +1403,24 @@ def _jmove_tick(oid, rt):
         _track_end(rt)
         return
     _drive_run(oid, rt, jm["keys"], min(t, jm["dur"]))
+
+
+def snap_to_real():
+    """Snap sim to real (the arm's): every gimbal whose angles read takes them
+    as its Sim target (J1 to the turn nearest the target). Returns how many."""
+    n = 0
+    for obj in gimbal_objects():
+        oid = obj.get("id")
+        if not real_ok(oid) or _aiming(obj):
+            continue
+        rt = _rt_for(oid)
+        read = list(rt["read"])
+        g = obj.setdefault("gimbal", clean_gimbal(None))
+        read[0] = unwrap_yaw(read[0], (g.get("target") or [None])[0])
+        g["target"] = clamp_angles(read)
+        _follow_now(obj)
+        n += 1
+    return n
 
 
 def go_to_initial_pose():

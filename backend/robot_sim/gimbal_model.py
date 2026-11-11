@@ -515,12 +515,12 @@ def _add_part(server, name, part, rgb, opacity, on_click, out=None):
     return h
 
 
-def build_base(server, name, model, rgb, on_click):
+def build_base(server, name, model, rgb, on_click, opacity=0.7):
     """Link-0 parts (the handle) under `name`; returns the root node."""
     root = server.scene.add_frame(name, show_axes=False)
     for i, part in enumerate(model["parts"]):
         if part["link"] == 0:
-            _add_part(server, "%s/p%d" % (name, i), part, rgb, 0.7, on_click)
+            _add_part(server, "%s/p%d" % (name, i), part, rgb, opacity, on_click)
     return root
 
 

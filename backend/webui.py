@@ -34,6 +34,7 @@ import app_paths
 import arms
 import file_manage as fman
 import path_bake as bake
+import real_mirror
 import robot_runtime as rr
 import robot_sim_run as viewer_main
 import simulatorview as sv
@@ -47,6 +48,7 @@ SETTINGS_DEFAULT = {
     "spacing": 0.05,
     "path_window_radius": 1.0,
     "path_window_on": False,
+    "real_ghosts": True,
     "camera_urdf": "",
     "robot_model": "aubo_i5",
     "dev_mode": False,
@@ -266,6 +268,8 @@ def apply_settings(data):
             rr.set_ik_pref(data.get("ik_pref"))
         except Exception:
             pass
+    if "real_ghosts" in data:
+        real_mirror.set_ghosts(data.get("real_ghosts") is not False)
     if "snap_to_grid" in data:
         try:
             wp.snap_to_grid = bool(data.get("snap_to_grid"))
@@ -585,6 +589,7 @@ def api_status():
         "sim": _sim_status_all(),
         "real": _real_status_all(),
         "gimbal_speed": wp.gimbal.speed_status(),
+        "real_side": real_mirror.view(),
         "gimbal_speed_note": wp.gimbal.speed_summary(),
         "arms": heavy.get("arms") or [],
         "active_arm": arms.active(),
@@ -1140,6 +1145,9 @@ def api_snap_sim_to_real():
     ok = False
     if hasattr(rr, "reset_sim_to_real"):
         ok = bool(rr.reset_sim_to_real())
+    if ok:
+        # The gimbals snap too: their Sim target becomes the angles read.
+        wp.gimbal.snap_to_real()
     return jsonify({"ok": bool(ok)})
 
 

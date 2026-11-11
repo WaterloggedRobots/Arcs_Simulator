@@ -349,6 +349,11 @@ def remove_extra_arms():
         remove_arm(aid)
 
 
+# arm id -> the robot answered at the last listing() (cheap to read every tick;
+# robot_connected() itself talks to the controller).
+real_ok = {}
+
+
 def listing():
     """For /api/status: every arm, the active one flagged."""
     import robot_runtime as rr
@@ -360,6 +365,7 @@ def listing():
                     connected = bool(rr.robot_connected())
                 except Exception:
                     connected = False
+                real_ok[aid] = connected
                 out.append({
                     "id": aid,
                     "name": _arms[aid]["name"],

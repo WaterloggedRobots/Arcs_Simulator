@@ -90,6 +90,11 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
 - **Empty** objects are drawn as grey, see-through waypoint markers (sphere with forward and side arrows), so their orientation is visible.
 - Add advanced objects such as **cameras**, to reproduce a real camera's position in the simulated world.
 - Add a **Gimbal** to drive a DJI RS4 gimbal over CAN from the timeline (see [Gimbal (DJI RS4)](#gimbal-dji-rs4)).
+- **Real side.** What rides on the Sim Arm Cursor (its children, at any depth) is mirrored onto the **Real Arm Cursor**, under the same hierarchy: each object keeps, relative to the real cursor, the transform it has relative to the sim cursor, so it shows where it really is on the real arm. While the robot isn't connected, the real side hangs on **Robot Not Connected**, an empty placed on the Sim Arm Cursor, so both sides overlap.
+  - An object with a Sim / Real pair (a gimbal) puts its real cursor there: the **Real Gimbal Cursor** is listed (and drawn) on the mirrored gimbal, posed by the angles read; objects on the Sim Gimbal Cursor (its Camera) mirror onto the Real Gimbal Cursor's camera. Not on an arm, a gimbal keeps its Real Gimbal Cursor under itself as before.
+  - Every other object gets a **ghost**: the same shape, half as opaque, listed in grey italics. Ghosts hold a transform only (no components). Select one to see its world or local transform (the Local / Global switch) in Properties, read only: it follows its sim object, never the other way round.
+  - *Preferences > Robot Settings > Ghosts on the real side* turns the ghosts off; the Real Gimbal Cursors stay (directly under the Real Arm Cursor or Robot Not Connected).
+  - **Snap sim to real** also snaps every gimbal whose angles read: its Sim target becomes the angles read.
 - **Parent hierarchy.** Objects can be parented to one another so a child moves with its parent. This is how you bind objects to the end effector — an EE-parented camera, for example, follows every move the arm makes.
 
 ### Waypoints
@@ -324,7 +329,7 @@ Components in the properties panel are listed in the order they were added, newe
 
 - **Gimbal** (the mount) — the gimbal's **handle** (grey). This is what you move, and it stores the handle's pose: gizmo, Properties transform, parenting (for example to the Sim Arm Cursor, so the gimbal rides on the arm). Unrotated, the hand end faces up and the camera end down.
 - **Sim Gimbal Cursor** (the *Sim gimbal*) — the gimbal's arms and motors built from boxes, in blue, with a long lens arrow at the camera, posed by the **target** angles: what you set, and the track when the playhead moves. A new gimbal gets a **Camera** object (*<name> camera*) parented to the Sim gimbal at its camera centre, so it turns with the gimbal: give it the real camera's type (sim, OpenCV, Sony). Other objects can be parented to the Sim gimbal too (drag them onto its row). A new gimbal's Sim gimbal starts at the real gimbal's pose: its target takes the first angles read (unless you set the target or add frames first).
-- **Real Gimbal Cursor** (the *Real gimbal*) — the same in orange, posed by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). Each cursor's 👁 in the object list hides or shows it. The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
+- **Real Gimbal Cursor** (the *Real gimbal*) — the same in orange, posed by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). Each cursor's 👁 in the object list hides or shows it. The Real gimbal is drawn only while reading works (on a Sim Arm Cursor it is listed on the real side, "(not reading)" meanwhile; see *Real side* under 3D objects); when a read fails it disappears and red text under the Sim gimbal's properties says why.
 
 The twins can't be moved, renamed or deleted on their own; their angles come from the target and from the gimbal.
 
