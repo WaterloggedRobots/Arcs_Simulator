@@ -734,8 +734,10 @@
     .gim-btns button { margin: 0; background: #3a3b44; }
     .gim-btns.gim-one { grid-template-columns: 1fr; }
     .gim-move-real { display: block; width: 100%; margin: 8px 0 2px; background: #b8752a; color: #fff; }
-    .gim-move-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
-    .gim-move-row select { margin: 8px 0 2px; height: 30px; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; }
+    .gim-move-row { display: grid; grid-template-columns: 1fr; gap: 6px; align-items: center; }
+    .gim-dirs { display: grid; grid-template-columns: auto 1fr auto 1fr auto 1fr; gap: 4px; align-items: center; font-size: 11px; color: #a9aab3; }
+    .gim-dirs select { min-width: 0; width: 100%; height: 24px; margin: 0; padding: 0 2px; font-size: 11px; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; }
+    .gim-frame .gim-dirs { grid-column: 1 / -1; margin: 1px 0 3px; }
     .gim-move-real:hover:not(:disabled) { background: #cf8735; }
     .gim-move-real:disabled { opacity: 0.45; cursor: default; }
     .gim-btns button:disabled { opacity: 0.45; cursor: default; }
@@ -748,7 +750,7 @@
     }
     .props .gim-comp input[readonly] { color: #9a9aa2; background: #18191d; }
     .gim-count { color: #9a9aa2; }
-    .gim-frames { max-height: 140px; overflow-y: auto; margin-top: 4px; }
+    .gim-frames { max-height: 260px; overflow-y: auto; margin-top: 4px; }
     .gim-frame { display: grid; grid-template-columns: 46px 1fr 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
     .gim-frame:hover { background: #2c2d36; }
     .gim-frame.on { background: #233a52; }
@@ -2177,11 +2179,11 @@
               <div class="col-note" id="gimIkNote" hidden></div>
               <div class="gim-move-row">
                 <button type="button" id="gimMove" class="gim-move-real" title="Move the real gimbal to the Sim gimbal's angles (takes Move time)">Move real to sim</button>
-                <select id="gimMoveDir" title="Which way J1 turns: Shortest = one absolute move (at most 180°); CW / CCW = J1 turned that way round by speed, any amount (as during Run), seen from the hand end looking down the handle.">
-                  <option value="short">Shortest</option>
-                  <option value="cw">CW</option>
-                  <option value="ccw">CCW</option>
-                </select>
+<div class="gim-dirs" id="gimMoveDirs" title="Which way each joint turns to the Sim gimbal's angles: Shortest, or CW / CCW round (any amount), each seen as the joint's label says. J1 turns by speed (as during Run), J3 in absolute steps of at most 90°; J2 only moves the short way while J1 turns.">
+                  <label data-dj="0">J1</label><select data-mdir="0"><option value="short">Shortest</option><option value="cw">CW</option><option value="ccw">CCW</option></select>
+                  <label data-dj="1">J2</label><select data-mdir="1"><option value="short">Shortest</option><option value="cw">CW</option><option value="ccw">CCW</option></select>
+                  <label data-dj="2">J3</label><select data-mdir="2"><option value="short">Shortest</option><option value="cw">CW</option><option value="ccw">CCW</option></select>
+                </div>
               </div>
               <div class="col-note" id="gimRealVsSim"></div>
               <div class="gim-btns gim-one">
@@ -4919,6 +4921,19 @@
         cx * cy * sz - sx * sy * cz,
       ];
     }
+    // A gimbal frame's direction per joint: how it gets there from the frame
+    // before (the first frame: from the real gimbal's pose, the move to the
+    // initial pose on Upload).
+    function gimFrameDirs(k, i, names, views) {
+      const d = (k.dir || ["", "", ""]);
+      const lab = { "": i === 0 ? "Short" : "As set", short: "Shortest", cw: "CW", ccw: "CCW" };
+      const from = i === 0 ? "from the real gimbal's pose (the move to the initial pose)" : "from the frame before";
+      return "<div class='gim-dirs' title='Which way each joint turns " + from + "'>" + [0, 1, 2].map((j) =>
+        "<label title='" + (views[j] ? "CW / CCW seen " + views[j] : "") + "'>" + names[j] + "</label>" +
+        "<select data-fdir='" + i + ":" + j + "'>" + ["", "short", "cw", "ccw"].filter((v) => !(i === 0 && v === "short"))
+          .map((v) => "<option value='" + v + "'" + ((d[j] || "") === v ? " selected" : "") + ">" + lab[v] + "</option>").join("") +
+        "</select>").join("") + "</div>";
+    }
     // Gimbal object: one scene object (mount empty + head cube). Its panel
     // section and the red "angle read failed" line at the bottom of the panel.
     let _gimFramesSig = "";
@@ -5066,15 +5081,22 @@
       const del = document.getElementById("gimDelete");
       if (del) del.disabled = atIdx < 0;
       const list = document.getElementById("gimFrames");
-      const sig = obj.id + "|" + atIdx + "|" + JSON.stringify(keys);
+      const jnames = ["yaw", "roll", "pitch"].map((a, i) => jn[a] || ("J" + (i + 1)));
+      const jviews = ["yaw", "roll", "pitch"].map((a) => ((mi.joints || []).find((j) => j.sdk === a) || {}).view || "");
+      document.querySelectorAll("#gimMoveDirs [data-dj]").forEach((lab) => {
+        const i = Number(lab.getAttribute("data-dj"));
+        setText(lab, jnames[i]);
+        lab.title = jviews[i] ? "CW / CCW seen " + jviews[i] : "";
+      });
+      const sig = obj.id + "|" + atIdx + "|" + JSON.stringify(keys) + "|" + jnames.join(",");
       if (list && sig !== _gimFramesSig) {
         _gimFramesSig = sig;
         list.innerHTML = keys.map((k, i) =>
           "<div class='gim-frame" + (i === atIdx ? " on" : "") + "' data-gi='" + i + "' title='Move the playhead to this frame'>" +
           "<span>" + Number(k.t).toFixed(2) + "s</span>" +
           "<span>J1 " + Number(k.yaw).toFixed(1) + " · J2 " + Number(k.roll).toFixed(1) + " · J3 " + Number(k.pitch).toFixed(1) + "</span>" +
-
-          "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button></div>"
+          "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button>" +
+          gimFrameDirs(k, i, jnames, jviews) + "</div>"
         ).join("");
       }
       // Look At on the Sim gimbal: the target aims at it (target fields locked).
@@ -5164,7 +5186,7 @@
       if (mv) mv.addEventListener("click", () => {
         const g = window.__lastObject && window.__lastObject.gimbal;
         const aiming = !!(g && g.look && g.look.added && g.look.on);
-        const dir = (byId("gimMoveDir") || {}).value || "short";
+        const dir = [0, 1, 2].map((i) => ((document.querySelector("[data-mdir='" + i + "']") || {}).value || "short"));
         postGimbal(aiming ? { action: "move", direction: dir } : { action: "move", target: gimbalTarget(), direction: dir });
       });
       const lt = byId("gimLookToggle");
@@ -5182,9 +5204,18 @@
       const del = byId("gimDelete");
       if (del) del.addEventListener("click", () => postGimbal({ action: "delete_frame", t: playhead }));
       const list = byId("gimFrames");
+      if (list) list.addEventListener("change", (e) => {
+        const sel = e.target.closest("[data-fdir]");
+        if (!sel) return;
+        const parts = sel.getAttribute("data-fdir").split(":").map(Number);
+        const dir = [null, null, null];
+        dir[parts[1]] = sel.value;
+        postGimbal({ action: "frame_dir", index: parts[0], dir: dir });
+      });
       if (list) list.addEventListener("click", (e) => {
         const g = window.__gimbal;
         if (!g) return;
+        if (e.target.closest(".gim-dirs")) return;
         const delBtn = e.target.closest("[data-gdel]");
         if (delBtn) {
           e.stopPropagation();

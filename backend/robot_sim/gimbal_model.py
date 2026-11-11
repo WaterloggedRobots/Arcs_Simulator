@@ -147,8 +147,18 @@ def parse(raw):
         if sdk not in SDK_KEYS:
             raise ValueError("joint %d sdk must be one of %s" % (i + 1, ", ".join(SDK_KEYS)))
         rng = j.get("range") or [-180, 180]
+        # CW / CCW of this joint are as seen looking along "view" (handle frame,
+        # zero pose); "view_name" says from where. Default: J1 from the hand end
+        # (looking down the handle, -z), the others looking against their axis.
+        view = j.get("view")
+        view = _vec(view, what="joint %d view" % (i + 1)) if view is not None else (
+            np.array([0.0, 0.0, -1.0]) if i == 0 else -axis)
+        if np.linalg.norm(view) < 1e-9:
+            raise ValueError("joint %d view is zero" % (i + 1))
         joints.append({"name": str(j.get("name") or "J%d" % (i + 1)), "sdk": sdk,
                        "axis": axis / np.linalg.norm(axis),
+                       "view": view / np.linalg.norm(view),
+                       "view_name": str(j.get("view_name") or ("from the hand end" if i == 0 else "")),
                        "point": _vec(j.get("point") or [0, 0, 0], scale=mm, what="joint %d point" % (i + 1)),
                        "range": [float(rng[0]), float(rng[1])],
                        # Reading -> model angle: sign * reading + offset (calibration).

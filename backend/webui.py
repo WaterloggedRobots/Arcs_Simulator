@@ -1730,7 +1730,8 @@ def api_cam_script():
 def api_gimbal():
     """Gimbal object: {id, action, ...}.
     update {cfg?, target?, look?} | move {target?} | insert_frame {t?, target?} |
-    delete_frame {t | index | ts} | move_frames {moves: [{t0, t}]} | use_read (target = angles read from the gimbal)."""
+    delete_frame {t | index | ts} | move_frames {moves: [{t0, t}]} |
+    frame_dir {index | t, dir: [J1, J2, J3]} | use_read (target = angles read from the gimbal)."""
     data = request.get_json(silent=True) or {}
     oid = str(data.get("id") or getattr(wp, "selected_obj_id", None) or "")
     act = str(data.get("action") or "update")
@@ -1740,7 +1741,7 @@ def api_gimbal():
     # One undo step per edit of the gimbal's settings, target or frames (without
     # one, Undo went back past them to before the gimbal was added).
     if (any(data.get(k) is not None for k in ("cfg", "target", "look", "world_target"))
-            or act in ("use_read", "insert_frame", "delete_frame", "move_frames")) and not _edits_locked():
+            or act in ("use_read", "insert_frame", "delete_frame", "move_frames", "frame_dir")) and not _edits_locked():
         wp._push_history()
     if any(data.get(k) is not None for k in ("cfg", "target", "look")):
         ok = wp.gimbal.update(oid, data)
@@ -1752,7 +1753,8 @@ def api_gimbal():
             return jsonify({"ok": False, "error": "Look At is aiming the gimbal",
                             "gimbal": wp.gimbal.status(oid)})
     if act == "move":
-        ok = wp.gimbal.request_move(oid, direction=str(data.get("direction") or "short"))
+        # direction: [J1, J2, J3] (short / cw / ccw), or one word for J1.
+        ok = wp.gimbal.request_move(oid, direction=data.get("direction") or "short")
     elif act == "calibrate":
         # The gimbal is in its home pose (camera at +x, level): its reading becomes the model's zero pose.
         ok = wp.gimbal.request_calibrate(oid)
@@ -1786,6 +1788,11 @@ def api_gimbal():
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
         ok = wp.gimbal.move_frames(oid, data.get("moves")) is not None
+    elif act == "frame_dir":
+        # A frame's direction per joint: {index | t, dir: [J1, J2, J3]} ("" / short / cw / ccw, null keeps one).
+        if _edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        ok = wp.gimbal.set_frame_dir(oid, data.get("dir"), index=data.get("index"), t=data.get("t"))
     _status_dirty.set()
     return jsonify({"ok": bool(ok), "gimbal": wp.gimbal.status(oid),
                     "tracks": list(getattr(wp, "extra_tracks", None) or [])})

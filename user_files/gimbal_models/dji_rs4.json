@@ -1,6 +1,6 @@
 {
   "name": "DJI RS 4",
-  "about": "Joint axes, offsets and boxes for the sandbox's Gimbal object. Lengths in mm, in the HANDLE's frame (the Gimbal object's mount): handle along z, hand end up (+z), camera end down; +y is the camera's left. All joints at 0 is the gimbal's HOME pose: the camera looks along +x (front), level, no roll. Each joint maps the RS 4's reading to the model angle as sign * reading + offset; Recalibrate sets the offsets from a reading taken in the home pose. DJI publishes no CAD or axis dimensions for the RS 4: the sizes below are estimates from its overall size (370 x 191 x 189 mm unfolded). A balanced gimbal has all three axes through the camera's centre of gravity, so 'point' is the same for each joint. Parts: the pan arm drops behind the camera (-x) to the roll motor on J2's axis; the roll arm goes round the camera's right (-y) to the tilt motor. Copy this file to make a model for another gimbal or rig; the Gimbal object picks it by file name. max_dps: the fastest each joint may turn, for the bake's speed check (DJI gives 360 deg/s as the RS 4's maximum controlled rotation speed; the sandbox's run drive turns J1 at up to 180 deg/s).",
+  "about": "Joint axes, offsets and boxes for the sandbox's Gimbal object. Lengths in mm, in the HANDLE's frame (the Gimbal object's mount): handle along z, hand end up (+z), camera end down; +y is the camera's left. All joints at 0 is the gimbal's HOME pose: the camera looks along +x (front), level, no roll. Each joint maps the RS 4's reading to the model angle as sign * reading + offset; Recalibrate sets the offsets from a reading taken in the home pose. DJI publishes no CAD or axis dimensions for the RS 4: the sizes below are estimates from its overall size (370 x 191 x 189 mm unfolded). A balanced gimbal has all three axes through the camera's centre of gravity, so 'point' is the same for each joint. Parts: the pan arm drops behind the camera (-x) to the roll motor on J2's axis; the roll arm goes round the camera's right (-y) to the tilt motor. Copy this file to make a model for another gimbal or rig; the Gimbal object picks it by file name. max_dps: the fastest each joint may turn, for the bake's speed check (DJI gives 360 deg/s as the RS 4's maximum controlled rotation speed; the sandbox's run drive turns J1 at up to 180 deg/s). view / view_name: CW and CCW of each joint (frames, Move real to sim) are as seen looking along view, in the handle frame at the zero pose.",
   "driver": "rs4_can.py",
   "aim_joints": [
     "J1",
@@ -27,7 +27,13 @@
       ],
       "sign": 1,
       "offset": -173.5,
-      "max_dps": 360
+      "max_dps": 360,
+      "view": [
+        0,
+        0,
+        -1
+      ],
+      "view_name": "from the hand end, looking down the handle"
     },
     {
       "name": "J2",
@@ -49,7 +55,13 @@
       ],
       "sign": 1,
       "offset": 179.0,
-      "max_dps": 360
+      "max_dps": 360,
+      "view": [
+        1,
+        0,
+        0
+      ],
+      "view_name": "from behind the camera, looking along the lens"
     },
     {
       "name": "J3",
@@ -71,7 +83,13 @@
       ],
       "sign": -1,
       "offset": -69.4,
-      "max_dps": 360
+      "max_dps": 360,
+      "view": [
+        0,
+        1,
+        0
+      ],
+      "view_name": "from the tilt motor (the camera's right), looking across the camera"
     }
   ],
   "camera": {

@@ -55,14 +55,20 @@ SIM_RGB = (80, 200, 255)    # as the Sim cursor
 REAL_RGB = (255, 180, 80)   # as the Real cursor
 PARTS = ("sim", "real")
 AXES = ("yaw", "roll", "pitch")
-# Stored J1 / J2 / J3 (keys yaw / roll / pitch) are kept as read, in -180..180.
-# The SDK's -56..146 "pitch" and +/-30 "roll" are limits for MOVE commands,
+# Stored J1 / J2 / J3 (keys yaw / roll / pitch) are joint readings (+/-180
+# as read; frames may go further round, below). The SDK's -56..146 "pitch" and +/-30 "roll" are limits for MOVE commands,
 # not for the joints: an RS4 with the camera looking along the handle reads
 # J3 = -90. (Clamping to them turned a copied J3 of -90 into -56.)
-# J1 goes on past +/-180 on the timeline (frames 0 -> 360 = one full turn);
-# the gimbal itself reads it in +/-180.
+# Joints go on past +/-180 on the timeline (J1 frames 0 -> 360 = one full
+# turn; a frame's CW / CCW / Shortest direction picks the turn, also for J2 /
+# J3); the gimbal itself reads them in +/-180 and moves are sent in +/-180.
 YAW_TURNS_MAX = 20
-LIMITS = {"yaw": (-360.0 * YAW_TURNS_MAX, 360.0 * YAW_TURNS_MAX), "roll": (-180.0, 180.0), "pitch": (-180.0, 180.0)}
+_TURNS = (-360.0 * YAW_TURNS_MAX, 360.0 * YAW_TURNS_MAX)
+LIMITS = {"yaw": _TURNS, "roll": _TURNS, "pitch": _TURNS}
+# A frame's direction per joint (how the joint gets there from the frame
+# before; the first frame's: from the real gimbal's reading, for the move to
+# the initial pose): "" = as set (straight between the stored values).
+FRAME_DIRS = ("", "short", "cw", "ccw")
 
 DEFAULT_CFG = {
     "drive": True,             # send moves (Move, initial pose, Run); reading never stops
@@ -272,8 +278,57 @@ def clean_keys(keys):
         except Exception:
             pass
         y, r, p = clamp_angles([_f(k.get("yaw")) + turns, k.get("roll"), k.get("pitch")])
-        out.append({"t": max(0.0, _f(k.get("t"))), "yaw": y, "roll": r, "pitch": p})
+        row = {"t": max(0.0, _f(k.get("t"))), "yaw": y, "roll": r, "pitch": p}
+        d = clean_dirs(k.get("dir"))
+        if any(d):
+            row["dir"] = d
+        out.append(row)
     return out
+
+
+def clean_dirs(d):
+    """[J1, J2, J3] directions, each one of FRAME_DIRS."""
+    d = list(d) if isinstance(d, (list, tuple)) else []
+    d = (d + ["", "", ""])[:3]
+    return [x if x in FRAME_DIRS else "" for x in (str(v or "") for v in d)]
+
+
+def _turn_to(v, prev, d, rising_ccw):
+    """The value equal to v (mod 360) reached from prev turning way d."""
+    if d == "short":
+        return prev + ((v - prev + 180.0) % 360.0) - 180.0
+    if d in ("cw", "ccw"):
+        up = (v - prev) % 360.0
+        if up < 1e-6 or up > 360.0 - 1e-6:
+            return prev  # already there: no full turn
+        if (d == "ccw") == rising_ccw:
+            return prev + up
+        return prev - (360.0 - up)
+    return v
+
+
+def resolve_keys(obj, keys):
+    """Frames with their directions applied, in order: a tagged joint takes
+    the turn of its value its direction gives from the frame before; an
+    untagged one keeps its step from the frame before (so it moves with it)."""
+    rising = [rising_is_ccw(obj, i) for i in range(3)] if obj is not None else [True] * 3
+    out, prev_old = [], None
+    for k in keys:
+        n = dict(k)
+        if out:
+            d = clean_dirs(k.get("dir"))
+            for i, a in enumerate(AXES):
+                if d[i]:
+                    n[a] = _turn_to(k[a], out[-1][a], d[i], rising[i])
+                else:
+                    n[a] = k[a] + (out[-1][a] - prev_old[a])
+        prev_old = k
+        out.append(n)
+    return out
+
+
+def _set_keys(oid, tr, keys):
+    tr["keys"] = clean_keys(resolve_keys(_find(oid), clean_keys(keys)))
 
 
 def _track(oid, create=False):
@@ -325,19 +380,48 @@ def insert_frame(oid, t, angles=None, reading=False):
         return False
     g = obj.setdefault("gimbal", clean_gimbal(None))
     if angles is not None and reading:
-        # A reading (+/-180): J1 nearest the track (or target) there, not turns back.
-        here = angles_at(keys_for(oid), t) or g.get("target")
-        angles = list(angles)
-        angles[0] = unwrap_yaw(angles[0], (here or [None])[0])
+        # A reading (+/-180): each joint nearest the track (or target) there, not turns back.
+        here = angles_at(keys_for(oid), t) or g.get("target") or [None] * 3
+        angles = [unwrap_yaw(a, h) for a, h in zip(list(angles)[:3], list(here)[:3])]
     ang = clamp_angles(angles if angles is not None else g.get("target"))
     g["target"] = ang
     t = max(0.0, _f(t))
     tr = _track(oid, create=True)
-    keys = [k for k in clean_keys(tr.get("keys")) if abs(k["t"] - t) > FRAME_EPS]
-    keys.append({"t": t, "yaw": ang[0], "roll": ang[1], "pitch": ang[2]})
-    tr["keys"] = clean_keys(keys)
+    old = clean_keys(tr.get("keys"))
+    was = next((k for k in old if abs(k["t"] - t) <= FRAME_EPS), None)
+    keys = [k for k in old if abs(k["t"] - t) > FRAME_EPS]
+    row = {"t": t, "yaw": ang[0], "roll": ang[1], "pitch": ang[2]}
+    if was is not None and was.get("dir"):
+        row["dir"] = was["dir"]  # replacing a frame keeps its directions
+    keys.append(row)
+    _set_keys(oid, tr, keys)
     _note_keys_changed(oid)
     return True
+
+
+def set_frame_dir(oid, dirs, index=None, t=None):
+    """A frame's direction per joint (dirs: [J1, J2, J3], None keeps one)."""
+    tr = _track(oid)
+    if tr is None:
+        return False
+    keys = clean_keys(tr.get("keys"))
+    i = int(_f(index, -1)) if index is not None else next(
+        (j for j, k in enumerate(keys) if t is not None and abs(k["t"] - _f(t)) <= FRAME_EPS), -1)
+    if not 0 <= i < len(keys):
+        return False
+    cur = clean_dirs(keys[i].get("dir"))
+    new = list(dirs) if isinstance(dirs, (list, tuple)) else []
+    new = (new + [None, None, None])[:3]
+    keys[i]["dir"] = clean_dirs([c if n is None else n for c, n in zip(cur, new)])
+    _set_keys(oid, tr, keys)
+    _note_keys_changed(oid)
+    return True
+
+
+def first_dirs(oid):
+    """The first frame's directions: the move to the initial pose."""
+    keys = keys_for(oid)
+    return clean_dirs(keys[0].get("dir")) if keys else ["", "", ""]
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +525,7 @@ def delete_frame(oid, t=None, index=None, ts=None):
         keys = [k for k in keys if all(abs(k["t"] - g) > FRAME_EPS for g in gone)]
     elif t is not None:
         keys = [k for k in keys if abs(k["t"] - _f(t)) > FRAME_EPS]
-    tr["keys"] = keys
+    _set_keys(oid, tr, keys)
     _note_keys_changed(oid)
     return len(keys) != n
 
@@ -467,7 +551,7 @@ def move_frames(oid, moves):
             and all(abs(k["t"] - t1) > FRAME_EPS for t1 in out)]
     for k, t1 in zip(moved, out):
         stay.append(dict(k, t=t1))
-    tr["keys"] = clean_keys(stay)
+    _set_keys(oid, tr, stay)
     _note_keys_changed(oid)
     return out
 
@@ -1165,9 +1249,11 @@ def _move(oid, rt, angles, duration, yaw=True, roll=True):
     """Absolute move; yaw=False leaves J1 out (the run drive turns it by speed),
     roll=False leaves the roll axis out."""
     mod = rt["mod"]
+    w = lambda a: ((a + 180.0) % 360.0) - 180.0  # the gimbal takes +/-180
     y, r, p = clamp_angles(angles)
-    y = (((y + 180.0) % 360.0) - 180.0) if yaw else None
-    r = r if roll else None
+    y = w(y) if yaw else None
+    r = w(r) if roll else None
+    p = w(p)
     try:
         ok = mod.move_to(y, r, p, duration=max(0.1, min(MAX_MOVE_S, float(duration))))
         rt["last_cmd"] = [y, r, p]
@@ -1252,25 +1338,32 @@ def _drive_run(oid, rt, keys, t):
     absolute moves for all three (J1 then can't turn more than 180 deg per move)."""
     if not keys:
         return
-    tracking = _can_track(rt)
+    # J1 by speed only when it turns in these frames: otherwise all three get
+    # absolute moves (J2 too, which is left out while J1 turns by speed).
+    tracking = _can_track(rt) and any(abs(b["yaw"] - a["yaw"]) > 0.5 for a, b in zip(keys, keys[1:]))
     if tracking:
         _track_j1(rt, keys, t)
-    elif any(abs(b["yaw"] - a["yaw"]) > 180 for a, b in zip(keys, keys[1:])):
-        rt["cmd_err"] = "the driver script can't turn J1 more than 180 deg per frame (needs track_begin / track_speed / track_end)"
     if t < rt["cmd_end"] - 1e-3:
         return
     nxt = next((k for k in keys if k["t"] > t + 0.05), None)
     if nxt is None:
         return  # past the last frame: hold
     tt = min(nxt["t"], t + MAX_MOVE_S)
-    dur = max(0.1, round(tt - t, 1))
+    # An absolute move goes the short way: one is at most STEP_MAX_DEG for a
+    # joint it drives, so a longer turn (a CW / CCW frame) goes the frames' way.
+    now = angles_at(keys, t)
     goal = angles_at(keys, tt)
+    driven = (2,) if tracking else (0, 1, 2)
+    step = max(abs(goal[i] - now[i]) for i in driven)
+    if step > STEP_MAX_DEG:
+        tt = t + (tt - t) * STEP_MAX_DEG / step
+        goal = angles_at(keys, tt)
+    dur = max(0.1, round(tt - t, 1))
     if tracking:
         # The SDK's absolute move is in camera ATTITUDE angles, not joints: with
         # J1 turning the camera (a roll), an absolute roll pulls it back the
         # short way once it passes 180 deg. So while J1 turns by speed nothing
         # absolute goes out unless J3 changes, and then pitch only.
-        now = angles_at(keys, t)
         if abs(goal[2] - now[2]) < 0.5:
             rt["cmd_end"] = tt
             return
@@ -1282,6 +1375,8 @@ def _drive_run(oid, rt, keys, t):
     else:
         rt["cmd_end"] = t + 0.2  # retry soon
 
+
+STEP_MAX_DEG = 90.0
 
 LOOK_STEP_DEG = 0.3
 LOOK_MOVE_S = 0.2
@@ -1376,16 +1471,16 @@ def _tick_one(obj, clock):
             for kind, angles, dur, direction in reqs:
                 if real_on:
                     continue
-                if direction in ("cw", "ccw") and _can_track(rt) and rt["read_ok"]:
+                turning = any(d in ("cw", "ccw") for d in direction)
+                if turning and rt["read_ok"]:
                     _jmove_start(rt, angles, dur, direction, obj)
                 else:
                     rt.pop("jmove", None)
                     _track_end(rt)
                     _move(oid, rt, angles, dur)
-                    if direction in ("cw", "ccw"):
+                    if turning:
                         # Said, not hidden: the move went the short way instead.
-                        rt["cmd_err"] = ("%s needs the driver's track_begin / track_speed / track_end and a "
-                                         "reading: moved the short way" % direction.upper())
+                        rt["cmd_err"] = "CW / CCW needs a reading from the gimbal: moved the short way"
             if "jmove" in rt and not real_on:
                 _jmove_tick(oid, rt)
             if real_on and not rt["running"]:
@@ -1528,10 +1623,23 @@ MOVE_DIRS = ("short", "cw", "ccw")
 JMOVE_DPS = 60.0  # J1 speed of a CW / CCW move (at least Move time)
 
 
+def move_dirs(direction):
+    """[J1, J2, J3] move directions (short / cw / ccw) from a list, or from
+    one word (older pages: J1's, J2 / J3 the short way)."""
+    if isinstance(direction, (list, tuple)):
+        d = [str(v or "short") for v in list(direction)[:3]] + ["short"] * 3
+    else:
+        d = [str(direction or "short"), "short", "short"]
+    return [x if x in MOVE_DIRS else "short" for x in d[:3]]
+
+
 def request_move(oid, angles=None, duration=None, direction="short"):
-    """Move the real gimbal to the target: direction "short" = one absolute
-    move (J1 the short way, at most 180 deg), "cw" / "ccw" = J1 turned that way
-    round by speed (any amount, as the run drive does), J2 / J3 absolute."""
+    """Move the real gimbal to the target, each joint its way (move_dirs):
+    all Shortest = one absolute move; a CW / CCW joint = a timed move from the
+    reading (_jmove_start) that turns it that way round: J1 by speed (any
+    amount, as the run drive does), J3 in absolute steps of at most
+    STEP_MAX_DEG. J2 gets no absolute move while J1 turns by speed (the
+    attitude problem), so its direction only counts on the timeline."""
     obj = _find(oid)
     if obj is None:
         return False
@@ -1539,39 +1647,48 @@ def request_move(oid, angles=None, duration=None, direction="short"):
     if angles is not None:
         g["target"] = clamp_angles(angles)
     dur = _f(duration, 0.0) or _f((g.get("cfg") or {}).get("move_s"), 2.0)
-    direction = direction if direction in MOVE_DIRS else "short"
+    direction = move_dirs(direction)
     rt = _rt_for(oid)
     with _rt_lock:
         rt["requests"] = [("move", list(g["target"]), dur, direction)]
     return True
 
 
-def rising_is_ccw(obj):
-    """Does a rising J1 reading turn the camera anticlockwise, seen from the
-    hand end (looking down the handle)? From the model: J1's axis against the
-    handle's +z, and its sign. (RS 4: axis -z, sign +1 -> clockwise.)"""
+def _joint(obj, i):
+    """The model joint driven by SDK key AXES[i]."""
     model = obj.get("_model_used") or model_of(obj)[0]
-    j = model["joints"][0]
-    return float(np.asarray(j["axis"], float)[2]) * float(j.get("sign", 1.0)) > 0
+    return next((j for j in model["joints"] if j["sdk"] == AXES[i]), model["joints"][min(i, len(model["joints"]) - 1)])
+
+
+def rising_is_ccw(obj, i=0):
+    """Does a rising reading of joint i (AXES order) turn it anticlockwise as
+    seen looking along the model's view for it (J1: from the hand end, down
+    the handle)? A turn about +axis looks anticlockwise from where the axis
+    points, i.e. looking along -axis. (RS 4 J1: axis -z, sign +1 -> clockwise.)"""
+    j = _joint(obj, i)
+    view = np.asarray(j.get("view", [0.0, 0.0, -1.0]), float)
+    return float(np.dot(np.asarray(j["axis"], float), -view)) * float(j.get("sign", 1.0)) > 0
 
 
 def _jmove_start(rt, angles, dur, direction, obj=None):
-    """CW / CCW (seen from the hand end): J1 from its reading to the target's
-    angle, turning that way; J2 / J3 to the target."""
+    """A timed move from the reading to the target, each joint its way
+    (move_dirs: short / cw / ccw, seen as the model's view for that joint),
+    driven like a run (_drive_run)."""
     r = list(rt["read"])
-    want = _f(angles[0]) % 360.0
-    rise = (direction == "ccw") == (rising_is_ccw(obj) if obj is not None else True)
-    if rise:
-        delta = (want - r[0]) % 360.0
-    else:
-        delta = -((r[0] - want) % 360.0)
-    if abs(delta) < 0.5 or abs(delta) > 359.5:
-        delta = 0.0  # already there (to within half a degree): no full turn
-    dur = max(_f(dur, 2.0), abs(delta) / JMOVE_DPS)
+    dirs = move_dirs(direction)
+    end = []
+    for i in range(3):
+        rising = rising_is_ccw(obj, i) if obj is not None else True
+        e = _turn_to(_f(angles[i]), r[i], dirs[i], rising)
+        if dirs[i] != "short" and abs(e - r[i]) > 359.5:
+            e = r[i]  # past it by under half a degree: no full turn
+        end.append(e)
+    delta = max(abs(e - a) for e, a in zip(end, r))
+    dur = max(_f(dur, 2.0), delta / JMOVE_DPS)
     _track_end(rt)
     rt["jmove"] = {"t0": time.time(), "dur": dur, "keys": [
         {"t": 0.0, "yaw": r[0], "roll": r[1], "pitch": r[2]},
-        {"t": dur, "yaw": r[0] + delta, "roll": _f(angles[1]), "pitch": _f(angles[2])}]}
+        {"t": dur, "yaw": end[0], "roll": end[1], "pitch": end[2]}]}
     rt["cmd_end"] = -1.0
 
 
@@ -1625,7 +1742,9 @@ def go_to_initial_pose():
         ang = initial_angles(obj.get("id"))
         if ang is None:
             continue
-        if request_move(obj.get("id"), ang):
+        # The first frame's directions: from the reading to the starting pose.
+        d = [x or "short" for x in first_dirs(obj.get("id"))]
+        if request_move(obj.get("id"), ang, direction=d):
             n += 1
     return n
 
@@ -1657,7 +1776,8 @@ def _model_status(obj):
     cfg = ((obj or {}).get("gimbal") or {}).get("cfg") or {}
     model, err, _ = gmodel.load(cfg.get("model"))
     return {"file": cfg.get("model") or gmodel.DEFAULT_FILE, "name": model["name"], "error": err,
-            "joints": [{"name": j["name"], "sdk": j["sdk"], "range": j["range"]} for j in model["joints"]],
+            "joints": [{"name": j["name"], "sdk": j["sdk"], "range": j["range"], "view": j.get("view_name") or ""}
+                       for j in model["joints"]],
             "folder": str(gmodel.models_dir())}
 
 
