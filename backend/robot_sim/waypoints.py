@@ -665,6 +665,17 @@ def _restore_objects_snapshot(doc):
             simulatorview.restore_scene_object(rec)
         except Exception as e:
             print("undo restore object failed", e)
+    # Objects on an arm's cursor (or base) keep their offset to it: the cursor
+    # is not in the undo history, so it may have moved since the snapshot
+    # (snap sim to real, jog, Go to). Restoring their world poses pulled them
+    # off it, and their copies off the Real Arm Cursor.
+    ids = {str(o.get("id")) for o in scene_objects}
+    for pid in sorted({str(o.get("parent_id")) for o in scene_objects if o.get("parent_id")}):
+        if pid.split("#")[0] not in ids:
+            try:
+                simulatorview._propagate_children(pid)
+            except Exception as e:
+                print("undo re-place children failed", pid, e)
     offsets.refresh_offset_viz()
     colliders.on_selection_changed()
     sel = doc.get("selected_obj_id")
