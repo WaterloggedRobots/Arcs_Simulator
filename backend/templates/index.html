@@ -737,7 +737,6 @@
     .gim-move-row { display: grid; grid-template-columns: 1fr; gap: 6px; align-items: center; }
     .gim-dirs { display: grid; grid-template-columns: auto 1fr auto 1fr auto 1fr; gap: 4px; align-items: center; font-size: 11px; color: #a9aab3; }
     .gim-dirs select { min-width: 0; width: 100%; height: 24px; margin: 0; padding: 0 2px; font-size: 11px; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; }
-    .gim-frame .gim-dirs { grid-column: 1 / -1; margin: 1px 0 3px; }
     .gim-move-real:hover:not(:disabled) { background: #cf8735; }
     .gim-move-real:disabled { opacity: 0.45; cursor: default; }
     .gim-btns button:disabled { opacity: 0.45; cursor: default; }
@@ -750,12 +749,6 @@
     }
     .props .gim-comp input[readonly] { color: #9a9aa2; background: #18191d; }
     .gim-count { color: #9a9aa2; }
-    .gim-frames { max-height: 260px; overflow-y: auto; margin-top: 4px; }
-    .gim-frame { display: grid; grid-template-columns: 46px 1fr 24px; gap: 6px; align-items: center; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
-    .gim-frame:hover { background: #2c2d36; }
-    .gim-frame.on { background: #233a52; }
-    .gim-frame .gim-fdel { width: 22px; min-width: 22px; height: 22px; margin: 0; padding: 0; background: #3a3b44; line-height: 1; }
-    .gim-frame .gim-fdel:hover { background: #6a3a3a; }
     .gim-conn { margin-top: 8px; font-size: 12px; }
     .gim-conn summary { cursor: pointer; color: #c8c8ce; }
     .props .gim-conn .row.name-row { grid-template-columns: 78px 1fr; padding-left: 0; padding-right: 0; }
@@ -1172,8 +1165,6 @@
       width: 56px; flex-shrink: 0; align-self: stretch; padding-left: 6px; border-left: 1px solid #111;
     }
     .tl-plus-col .hier-add { width: 19px; min-width: 19px; height: 18px; font-size: 13px; border-radius: 3px; }
-    .gim-frames-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-    .props #gimInsert.hier-add { background: var(--azure); color: var(--on-bright); border: 0; }
     .tl-plus-col .hier-add.real { background: var(--orange); color: var(--on-bright); }
     .tl-plus-col .hier-add.sim { background: var(--azure); color: var(--on-bright); }
     /* Camera rows: start / stop recording keys (the track's green / red diamonds). */
@@ -1385,6 +1376,10 @@
       pointer-events: auto;
     }
     .kf-menu button[hidden] { display: none !important; }
+    .kf-menu button:disabled { opacity: 0.4; cursor: default; }
+    .gim-edit-grid { display: grid; grid-template-columns: auto 90px 104px; gap: 6px 8px; align-items: center; font-size: 12px; min-width: 260px; }
+    .gim-edit-grid input, .gim-edit-grid select { width: 100%; margin: 0; height: 26px; box-sizing: border-box; background: #22232a; color: var(--text); border: 1px solid #333; border-radius: 4px; padding: 0 4px; font-size: 12px; }
+    .gim-edit-grid .head { color: #8a8a92; font-size: 11px; }
     .kf-menu .hintk { color: var(--muted); font-size: 11px; }
     .kf-menu .sep { height: 1px; background: #333; margin: 3px 0; }
     .kf-sub {
@@ -1677,6 +1672,31 @@
           </div>
         </div>
         <button data-act="lin_speed">Linear speed…</button>
+      </div>
+      <div id="gimMenu" class="kf-menu" hidden>
+        <button data-gact="edit">Edit…</button>
+        <div class="sep"></div>
+        <button data-gact="copy">Copy<span class="hintk">Ctrl+C</span></button>
+        <button data-gact="cut">Cut<span class="hintk">Ctrl+X</span></button>
+        <button data-gact="paste">Paste<span class="hintk">Ctrl+V</span></button>
+        <button data-gact="delete">Delete<span class="hintk">Del</span></button>
+      </div>
+      <div id="gimEditModal" class="tr-modal" hidden>
+        <div class="tr-card">
+          <h3 id="gimEditTitle">Edit gimbal frame</h3>
+          <div class="gim-edit-grid">
+            <span class="head"></span><span class="head">Angle (°)</span><span class="head" title="How the joint gets here from the frame before (the first frame: from the real gimbal's pose, the move to the initial pose)">Direction</span>
+            <label for="gimEditT">Time (s)</label><input id="gimEditT" type="number" step="0.01" min="0"><span></span>
+            <label id="gimEditL0" for="gimEditA0">J1</label><input id="gimEditA0" type="number" step="0.1"><select id="gimEditD0"></select>
+            <label id="gimEditL1" for="gimEditA1">J2</label><input id="gimEditA1" type="number" step="0.1"><select id="gimEditD1"></select>
+            <label id="gimEditL2" for="gimEditA2">J3</label><input id="gimEditA2" type="number" step="0.1"><select id="gimEditD2"></select>
+          </div>
+          <p class="col-note" id="gimEditNote" style="max-width:300px;font-size:11px;color:#8a8a92;margin:8px 0 0;"></p>
+          <div class="tr-actions">
+            <button type="button" id="gimEditCancel" class="btn-cancel">Cancel</button>
+            <button type="button" id="gimEditOk" class="btn-ok">OK</button>
+          </div>
+        </div>
       </div>
       <div id="overlapModal" class="tr-modal" hidden>
         <div class="tr-card">
@@ -2189,14 +2209,6 @@
               <div class="gim-btns gim-one">
                 <button type="button" id="gimUseRead" title="Copy the angles read from the real gimbal into the Sim gimbal's target">Copy real pose to sim</button>
               </div>
-              <div class="gim-frames-head">
-                <label class="field tight">Frames <span class="gim-count" id="gimFrameCount"></span></label>
-                <button type="button" id="gimInsert" class="hier-add" title="Insert a frame with the Sim gimbal's angles at the playhead (also the blue + on the gimbal's timeline row)">+</button>
-              </div>
-              <div class="gim-btns gim-one">
-                <button type="button" id="gimDelete" title="Delete the frame at the playhead">Delete frame</button>
-              </div>
-              <div id="gimFrames" class="gim-frames"></div>
               <div id="gimLookComp" class="gim-look" hidden>
                 <hr>
                 <div class="track-head">
@@ -3803,6 +3815,158 @@
           setTimeout(refresh, 80);
         });
     }
+    // Gimbal frames: right-click menu (Edit… / Copy / Cut / Paste / Delete,
+    // also Ctrl+C / X / V and Delete), the Edit window and the hover hint.
+    let gimClip = null;   // {tid, frames: [{dt, yaw, roll, pitch, dir}]}
+    let gimMenuCtx = null; // {tid, t, hit}
+    const GIM_DIR_LABEL = { "": "As set", short: "Shortest", cw: "CW", ccw: "CCW" };
+    function gimTrack(tid) { return (extraTracks || []).find((t) => t.id === tid) || null; }
+    function gimKeysSorted(tid) {
+      const tr = gimTrack(tid);
+      return ((tr && tr.keys) || []).slice().sort((a, b) => Number(a.t) - Number(b.t));
+    }
+    function gimRowAt(clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const row = Math.floor((clientY - rect.top - RULER_H) / TRACK_H);
+      const tr = visibleTracks()[row];
+      return isGimbalTrack(tr) ? tr : null;
+    }
+    function gimPost(tid, body) {
+      tracksSyncing += 1;
+      return fetch("/api/gimbal", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ id: String(tid).slice("gimbal_".length) }, body)) })
+        .then((r) => r.json()).then((d) => {
+          if (d && !d.ok && statusEl) statusEl.textContent = d.error || "Gimbal frame edit failed";
+          if (d && Array.isArray(d.tracks)) applyExtraTracks(d.tracks);
+          return d;
+        }).catch(() => null).finally(() => {
+          tracksSyncing = Math.max(0, tracksSyncing - 1);
+          renderTimeline();
+          setTimeout(refresh, 80);
+        });
+    }
+    function gimDeleteSel() {
+      if (!gimSel || !gimSel.ts.length || lockEdits) return;
+      const sel = gimSel;
+      gimSel = null;
+      gimPost(sel.tid, { action: "delete_frame", ts: sel.ts });
+    }
+    function gimCopy(cut) {
+      if (!gimSel || !gimSel.ts.length) return false;
+      const ks = gimKeysSorted(gimSel.tid).filter((k) => gimSelHas(gimSel.tid, k.t));
+      if (!ks.length) return false;
+      const t0 = Number(ks[0].t);
+      gimClip = { tid: gimSel.tid, frames: ks.map((k) => ({ dt: Number(k.t) - t0, yaw: k.yaw, roll: k.roll, pitch: k.pitch, dir: k.dir || null })) };
+      window.__clipKind = "gimbal";
+      if (cut) gimDeleteSel();
+      return true;
+    }
+    function gimPaste(t, tid) {
+      if (!gimClip || lockEdits) return;
+      const to = tid || gimClip.tid;
+      const t0 = Math.max(0, Number(t) || 0);
+      const frames = gimClip.frames.map((f) => ({ t: Math.round((t0 + f.dt) * 1e4) / 1e4, yaw: f.yaw, roll: f.roll, pitch: f.pitch, dir: f.dir }));
+      gimSel = { tid: to, ts: frames.map((f) => f.t), anchor: frames[0].t };  // the pasted frames
+      gimPost(to, { action: "paste_frames", frames: frames });
+    }
+    const gimMenu = document.getElementById("gimMenu");
+    function hideGimMenu() { if (gimMenu) gimMenu.hidden = true; gimMenuCtx = null; }
+    function showGimMenu(ctx, x, y) {
+      gimMenuCtx = ctx;
+      const tip = document.getElementById("hopTip");
+      if (tip) tip.hidden = true;
+      gimMenu.querySelectorAll("[data-gact]").forEach((b) => {
+        const a = b.getAttribute("data-gact");
+        b.hidden = !ctx.hit && a !== "paste";
+        b.disabled = (a === "paste" && !gimClip) || (a === "edit" && !!gimSel && gimSel.ts.length > 1);
+      });
+      gimMenu.querySelector(".sep").hidden = !ctx.hit;
+      gimMenu.hidden = false;
+      const r = gimMenu.getBoundingClientRect();
+      gimMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
+      gimMenu.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
+    }
+    if (gimMenu) {
+      gimMenu.addEventListener("mousedown", (e) => e.stopPropagation());
+      gimMenu.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const b = e.target.closest("[data-gact]");
+        if (!b || b.disabled || !gimMenuCtx) return;
+        const ctx = gimMenuCtx;
+        hideGimMenu();
+        const a = b.getAttribute("data-gact");
+        if (a === "edit") openGimEdit(ctx.tid, ctx.t);
+        else if (a === "copy") gimCopy(false);
+        else if (a === "cut") gimCopy(true);
+        else if (a === "paste") gimPaste(ctx.t, ctx.tid);
+        else if (a === "delete") gimDeleteSel();
+      });
+      document.addEventListener("click", (e) => { if (!e.target.closest("#gimMenu")) hideGimMenu(); });
+    }
+    let gimEditCtx = null;
+    function openGimEdit(tid, t) {
+      if (lockEdits) return;
+      const ks = gimKeysSorted(tid);
+      const i = ks.findIndex((k) => nearT(k.t, t));
+      if (i < 0) return;
+      const k = ks[i];
+      const jn = (window.__gimJoints && window.__gimJoints.names) || ["J1", "J2", "J3"];
+      const jv = (window.__gimJoints && window.__gimJoints.views) || ["", "", ""];
+      const tr = gimTrack(tid);
+      gimEditCtx = { tid: tid, index: i };
+      setText(document.getElementById("gimEditTitle"), "Edit frame " + (i + 1) + " · " + ((tr && tr.name) || "Gimbal"));
+      document.getElementById("gimEditT").value = Number(k.t).toFixed(2);
+      const d = k.dir || ["", "", ""];
+      ["yaw", "roll", "pitch"].forEach((a, j) => {
+        const lab = document.getElementById("gimEditL" + j);
+        setText(lab, jn[j]);
+        lab.title = jv[j] ? "CW / CCW seen " + jv[j] : "";
+        document.getElementById("gimEditA" + j).value = Number(k[a]).toFixed(1);
+        const sel = document.getElementById("gimEditD" + j);
+        sel.innerHTML = ["", "short", "cw", "ccw"].filter((v) => !(i === 0 && v === "short"))
+          .map((v) => "<option value='" + v + "'>" + (i === 0 && v === "" ? "Shortest" : GIM_DIR_LABEL[v]) + "</option>").join("");
+        sel.value = d[j] || "";
+      });
+      setText(document.getElementById("gimEditNote"), i === 0
+        ? "The first frame's directions are for the move from the real gimbal's pose to this starting pose (Upload)."
+        : "Direction: how each joint gets here from the frame before. CW / CCW take the turn of the angle that goes that way.");
+      document.getElementById("gimEditModal").hidden = false;
+      setTimeout(() => document.getElementById("gimEditA0").focus(), 0);
+    }
+    function closeGimEdit() { document.getElementById("gimEditModal").hidden = true; gimEditCtx = null; }
+    document.getElementById("gimEditCancel").onclick = closeGimEdit;
+    document.getElementById("gimEditOk").onclick = () => {
+      const c = gimEditCtx;
+      if (!c) return;
+      const num = (id) => { const v = parseFloat(document.getElementById(id).value); return isFinite(v) ? v : null; };
+      const t = num("gimEditT");
+      const body = { action: "edit_frame", index: c.index,
+        angles: [num("gimEditA0"), num("gimEditA1"), num("gimEditA2")],
+        dir: [0, 1, 2].map((j) => document.getElementById("gimEditD" + j).value) };
+      if (t != null) body.t = Math.max(0, t);
+      closeGimEdit();
+      if (t != null) gimSel = { tid: c.tid, ts: [Math.max(0, t)], anchor: Math.max(0, t) };
+      gimPost(c.tid, body);
+    };
+    document.getElementById("gimEditModal").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); document.getElementById("gimEditOk").click(); }
+      else if (e.key === "Escape") { e.preventDefault(); closeGimEdit(); }
+    });
+    function gimFrameHint(hit) {
+      const ks = gimKeysSorted(hit.tid);
+      const i = ks.findIndex((k) => nearT(k.t, hit.t));
+      const k = ks[i];
+      if (!k) return "";
+      const jn = (window.__gimJoints && window.__gimJoints.names) || ["J1", "J2", "J3"];
+      const d = k.dir || ["", "", ""];
+      const lines = [(hit.tr.name || "Gimbal") + "  frame " + (i + 1) + " · " + Number(k.t).toFixed(2) + " s"];
+      ["yaw", "roll", "pitch"].forEach((a, j) => {
+        const dl = i === 0 && !d[j] ? "Shortest" : GIM_DIR_LABEL[d[j] || ""];
+        lines.push(jn[j] + "  " + Number(k[a]).toFixed(1).padStart(7) + "°  " + dl);
+      });
+      lines.push("right-click: Edit… · Copy · Cut · Paste · Delete");
+      return lines.join("\n");
+    }
     function hitSample(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
       const x = clientX - rect.left;
@@ -4057,6 +4221,7 @@
       };
     }
     function doClip(kind) {
+      window.__clipKind = "arm";
       const clipIds = new Set();
       selectedKfs.forEach((i) => {
         const kf = keyframes.find((k) => k.index === i);
@@ -4614,6 +4779,19 @@
         return;
       }
       if (!dragSm && !dragKf) {
+        const gh = hitGimFrame(e.clientX, e.clientY);
+        if (gh && gimMenu && !gimMenu.hidden) return;  // no hint over the open menu
+        if (gh) {
+          const tip = document.getElementById("hopTip");
+          if (tip) {
+            tip.textContent = gimFrameHint(gh);
+            tip.style.whiteSpace = "pre";
+            tip.hidden = false;
+            tip.style.left = (e.clientX + 12) + "px";
+            tip.style.top = (e.clientY + 14) + "px";
+          }
+          return;
+        }
         const lbar = hitLookBar(e.clientX, e.clientY);
         const hop = lbar ? null : hitHop(e.clientX, e.clientY);
         if (hop && hitKeyframe(e.clientX, e.clientY) < 0) showHopTip(hop, e.clientX, e.clientY);
@@ -4746,6 +4924,10 @@
       Promise.resolve(p).finally(() => setTimeout(refresh, 80));
     }
     scrollEl.addEventListener("pointerup", onTlPointerUp);
+    scrollEl.addEventListener("dblclick", (e) => {
+      const g = hitGimFrame(e.clientX, e.clientY);
+      if (g) { e.preventDefault(); openGimEdit(g.tid, g.t); }
+    });
     window.addEventListener("pointerup", (e) => {
       if (dragKf || dragSm || gimDrag) onTlPointerUp(e);
     });
@@ -4767,6 +4949,20 @@
       return null;
     }
     scrollEl.addEventListener("contextmenu", (e) => {
+      const gHit = hitGimFrame(e.clientX, e.clientY);
+      const gRow = gHit ? gHit.tr : gimRowAt(e.clientY);
+      if (gRow) {
+        e.preventDefault();
+        hideKfMenu();
+        if (lockEdits) return;
+        if (gHit && !gimSelHas(gHit.tid, gHit.t)) gimSel = { tid: gHit.tid, ts: [gHit.t], anchor: gHit.t };
+        const rect = canvas.getBoundingClientRect();
+        const t = gHit ? gHit.t : snapToTick(xToTime(e.clientX - rect.left));
+        renderTimeline();
+        showGimMenu({ tid: gRow.id, t: t, hit: !!gHit }, e.clientX, e.clientY);
+        return;
+      }
+      hideGimMenu();
       const hit = hitKeyframe(e.clientX, e.clientY);
       const clipHit = hitClipAt(e.clientX, e.clientY);
       const hitKf = hit >= 0 ? keyframes.find((k) => k.index === hit) : null;
@@ -4816,6 +5012,8 @@
     window.addEventListener("keydown", (e) => {
       const tag = (e.target && e.target.tagName) || "";
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const gem = document.getElementById("gimEditModal");
+      if (gem && !gem.hidden) return;  // the gimbal frame Edit window has the keys
       if ((e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         fetch("/api/camera", {
@@ -4847,33 +5045,26 @@
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
         e.preventDefault();
-        doClip("copy");
+        if (!gimCopy(false)) doClip("copy");
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
         e.preventDefault();
-        doClip("cut");
+        if (!lockEdits && !gimCopy(true)) doClip("cut");
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
-        doPaste();
+        // Gimbal frames paste at the playhead, on the selected gimbal track (or the one they came from).
+        if (window.__clipKind === "gimbal" && gimClip) gimPaste(snapToTick(playhead), gimSel ? gimSel.tid : null);
+        else doPaste();
         return;
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return;
       if (gimSel && gimSel.ts.length) {
         // Selected gimbal frames on the timeline.
         e.preventDefault();
-        if (lockEdits) return;
-        const sel = gimSel;
-        gimSel = null;
-        fetch("/api/gimbal", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: String(sel.tid).slice("gimbal_".length), action: "delete_frame", ts: sel.ts }) })
-          .then((r) => r.json()).then((d) => {
-            if (d && !d.ok && statusEl) statusEl.textContent = d.error || "Delete frames failed";
-            if (d && Array.isArray(d.tracks)) applyExtraTracks(d.tracks);
-            renderTimeline();
-          }).catch(() => {}).finally(() => setTimeout(refresh, 80));
+        gimDeleteSel();
         return;
       }
       fetch("/api/delete_selected", { method: "POST" });
@@ -4921,22 +5112,8 @@
         cx * cy * sz - sx * sy * cz,
       ];
     }
-    // A gimbal frame's direction per joint: how it gets there from the frame
-    // before (the first frame: from the real gimbal's pose, the move to the
-    // initial pose on Upload).
-    function gimFrameDirs(k, i, names, views) {
-      const d = (k.dir || ["", "", ""]);
-      const lab = { "": i === 0 ? "Short" : "As set", short: "Shortest", cw: "CW", ccw: "CCW" };
-      const from = i === 0 ? "from the real gimbal's pose (the move to the initial pose)" : "from the frame before";
-      return "<div class='gim-dirs' title='Which way each joint turns " + from + "'>" + [0, 1, 2].map((j) =>
-        "<label title='" + (views[j] ? "CW / CCW seen " + views[j] : "") + "'>" + names[j] + "</label>" +
-        "<select data-fdir='" + i + ":" + j + "'>" + ["", "short", "cw", "ccw"].filter((v) => !(i === 0 && v === "short"))
-          .map((v) => "<option value='" + v + "'" + ((d[j] || "") === v ? " selected" : "") + ">" + lab[v] + "</option>").join("") +
-        "</select>").join("") + "</div>";
-    }
     // Gimbal object: one scene object (mount empty + head cube). Its panel
     // section and the red "angle read failed" line at the bottom of the panel.
-    let _gimFramesSig = "";
     // Joints: the fields are J1-J3. World: the camera's yaw, pitch, roll in the world.
     let gimWorld = false;
     function gimbalFields() {
@@ -5074,31 +5251,14 @@
       setVal("gimChannel", cfg.channel != null ? cfg.channel : 0);
       setVal("gimBitrate", cfg.bitrate != null ? cfg.bitrate : 1000000);
       setVal("gimMoveS", cfg.move_s != null ? cfg.move_s : 2);
-      const keys = g.keys || [];
-      const cnt = document.getElementById("gimFrameCount");
-      if (cnt) setText(cnt, "(" + keys.length + ")");
-      const atIdx = keys.findIndex((k) => Math.abs(Number(k.t) - playhead) < 1e-4);
-      const del = document.getElementById("gimDelete");
-      if (del) del.disabled = atIdx < 0;
-      const list = document.getElementById("gimFrames");
       const jnames = ["yaw", "roll", "pitch"].map((a, i) => jn[a] || ("J" + (i + 1)));
       const jviews = ["yaw", "roll", "pitch"].map((a) => ((mi.joints || []).find((j) => j.sdk === a) || {}).view || "");
+      window.__gimJoints = { names: jnames, views: jviews };
       document.querySelectorAll("#gimMoveDirs [data-dj]").forEach((lab) => {
         const i = Number(lab.getAttribute("data-dj"));
         setText(lab, jnames[i]);
         lab.title = jviews[i] ? "CW / CCW seen " + jviews[i] : "";
       });
-      const sig = obj.id + "|" + atIdx + "|" + JSON.stringify(keys) + "|" + jnames.join(",");
-      if (list && sig !== _gimFramesSig) {
-        _gimFramesSig = sig;
-        list.innerHTML = keys.map((k, i) =>
-          "<div class='gim-frame" + (i === atIdx ? " on" : "") + "' data-gi='" + i + "' title='Move the playhead to this frame'>" +
-          "<span>" + Number(k.t).toFixed(2) + "s</span>" +
-          "<span>J1 " + Number(k.yaw).toFixed(1) + " · J2 " + Number(k.roll).toFixed(1) + " · J3 " + Number(k.pitch).toFixed(1) + "</span>" +
-          "<button type='button' class='gim-fdel' data-gdel='" + i + "' title='Delete frame'>×</button>" +
-          gimFrameDirs(k, i, jnames, jviews) + "</div>"
-        ).join("");
-      }
       // Look At on the Sim gimbal: the target aims at it (target fields locked).
       const look = g.look || {};
       const lc = document.getElementById("gimLookComp");
@@ -5198,34 +5358,6 @@
       ["gimUseRead", "gimUseRead2"].forEach((id) => {
         const ur = byId(id);
         if (ur) ur.addEventListener("click", () => postGimbal({ action: "use_read" }));
-      });
-      const ins = byId("gimInsert");
-      if (ins) ins.addEventListener("click", () => postGimbal({ action: "insert_frame", t: playhead, target: gimbalTarget() }));
-      const del = byId("gimDelete");
-      if (del) del.addEventListener("click", () => postGimbal({ action: "delete_frame", t: playhead }));
-      const list = byId("gimFrames");
-      if (list) list.addEventListener("change", (e) => {
-        const sel = e.target.closest("[data-fdir]");
-        if (!sel) return;
-        const parts = sel.getAttribute("data-fdir").split(":").map(Number);
-        const dir = [null, null, null];
-        dir[parts[1]] = sel.value;
-        postGimbal({ action: "frame_dir", index: parts[0], dir: dir });
-      });
-      if (list) list.addEventListener("click", (e) => {
-        const g = window.__gimbal;
-        if (!g) return;
-        if (e.target.closest(".gim-dirs")) return;
-        const delBtn = e.target.closest("[data-gdel]");
-        if (delBtn) {
-          e.stopPropagation();
-          postGimbal({ action: "delete_frame", index: Number(delBtn.getAttribute("data-gdel")) });
-          return;
-        }
-        const row = e.target.closest("[data-gi]");
-        if (!row) return;
-        const k = (g.keys || [])[Number(row.getAttribute("data-gi"))];
-        if (k) setPlayhead(Number(k.t));
       });
     })();
     // A real-side row (ghost or stand-in) as a read-only object for Properties:

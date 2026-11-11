@@ -418,6 +418,48 @@ def set_frame_dir(oid, dirs, index=None, t=None):
     return True
 
 
+def edit_frame(oid, index, t=None, angles=None, dirs=None):
+    """The timeline's Edit window: one frame's time, angles and directions
+    (each left as it is when None). A frame already at the new time is replaced."""
+    tr = _track(oid)
+    if tr is None:
+        return False
+    keys = clean_keys(tr.get("keys"))
+    i = int(_f(index, -1))
+    if not 0 <= i < len(keys):
+        return False
+    k = dict(keys[i])
+    if t is not None:
+        k["t"] = max(0.0, _f(t))
+    if angles is not None:
+        a = list(angles) + [None] * 3
+        cur = [k["yaw"], k["roll"], k["pitch"]]
+        k["yaw"], k["roll"], k["pitch"] = clamp_angles([c if v is None else v for c, v in zip(cur, a[:3])])
+    if dirs is not None:
+        cur = clean_dirs(k.get("dir"))
+        new = (list(dirs) + [None] * 3)[:3]
+        k["dir"] = clean_dirs([c if n is None else n for c, n in zip(cur, new)])
+    rest = [x for j, x in enumerate(keys) if j != i and abs(x["t"] - k["t"]) > FRAME_EPS]
+    rest.append(k)
+    _set_keys(oid, tr, rest)
+    _note_keys_changed(oid)
+    return True
+
+
+def paste_frames(oid, frames):
+    """The timeline's Paste: frames [{t, yaw, roll, pitch, dir?}] (absolute
+    times), each replacing a frame at its time."""
+    rows = clean_keys(frames)
+    if not rows:
+        return False
+    tr = _track(oid, create=True)
+    keys = [k for k in clean_keys(tr.get("keys"))
+            if all(abs(k["t"] - r["t"]) > FRAME_EPS for r in rows)]
+    _set_keys(oid, tr, keys + rows)
+    _note_keys_changed(oid)
+    return True
+
+
 def first_dirs(oid):
     """The first frame's directions: the move to the initial pose."""
     keys = keys_for(oid)

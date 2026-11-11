@@ -1731,7 +1731,8 @@ def api_gimbal():
     """Gimbal object: {id, action, ...}.
     update {cfg?, target?, look?} | move {target?} | insert_frame {t?, target?} |
     delete_frame {t | index | ts} | move_frames {moves: [{t0, t}]} |
-    frame_dir {index | t, dir: [J1, J2, J3]} | use_read (target = angles read from the gimbal)."""
+    frame_dir {index | t, dir: [J1, J2, J3]} | edit_frame {index, t?, angles?, dir?} |
+    paste_frames {frames} | use_read (target = angles read from the gimbal)."""
     data = request.get_json(silent=True) or {}
     oid = str(data.get("id") or getattr(wp, "selected_obj_id", None) or "")
     act = str(data.get("action") or "update")
@@ -1741,7 +1742,8 @@ def api_gimbal():
     # One undo step per edit of the gimbal's settings, target or frames (without
     # one, Undo went back past them to before the gimbal was added).
     if (any(data.get(k) is not None for k in ("cfg", "target", "look", "world_target"))
-            or act in ("use_read", "insert_frame", "delete_frame", "move_frames", "frame_dir")) and not _edits_locked():
+            or act in ("use_read", "insert_frame", "delete_frame", "move_frames", "frame_dir",
+                       "edit_frame", "paste_frames")) and not _edits_locked():
         wp._push_history()
     if any(data.get(k) is not None for k in ("cfg", "target", "look")):
         ok = wp.gimbal.update(oid, data)
@@ -1793,6 +1795,14 @@ def api_gimbal():
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
         ok = wp.gimbal.set_frame_dir(oid, data.get("dir"), index=data.get("index"), t=data.get("t"))
+    elif act in ("edit_frame", "paste_frames"):
+        # The timeline's Edit window {index, t?, angles?, dir?} and Paste {frames: [{t, yaw, roll, pitch, dir?}]}.
+        if _edits_locked():
+            return jsonify({"ok": False, "error": "stop playback first"}), 409
+        if act == "edit_frame":
+            ok = wp.gimbal.edit_frame(oid, data.get("index"), t=data.get("t"), angles=data.get("angles"), dirs=data.get("dir"))
+        else:
+            ok = wp.gimbal.paste_frames(oid, data.get("frames"))
     _status_dirty.set()
     return jsonify({"ok": bool(ok), "gimbal": wp.gimbal.status(oid),
                     "tracks": list(getattr(wp, "extra_tracks", None) or [])})
