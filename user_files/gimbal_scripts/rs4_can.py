@@ -279,6 +279,25 @@ def track_speed(dps):
     _gimbal.speed(yaw=float(dps))
 
 
+# J3 alone during a run (optional): the axis probe showed that in 3D ROLL 360
+# mode an INCREMENTAL pitch move turns only J3 (the pitch speed command turns
+# J1 too), and that a pitch step of +x turns the J3 reading by -x. The sandbox
+# uses it, with J1 by speed, when the handle is tilted (absolute moves are
+# camera angles against gravity there, not joints).
+J3_INCR_SIGN = -1.0
+
+
+def track_j3(delta, duration=0.5):
+    """Turn J3 by delta degrees (its reading) in duration s; no reply is awaited."""
+    if _gimbal is None:
+        raise RuntimeError("not connected")
+    ctrl = 0x00 | (1 << 1) | (1 << 2)          # incremental; yaw and roll invalid
+    raw = int(round(J3_INCR_SIGN * float(delta) * 10))
+    payload = struct.pack("<hhhBB", 0, 0, max(-32768, min(32767, raw)), ctrl,
+                          max(1, min(255, int(round(float(duration) * 10)))))
+    _gimbal.send_command(0x0E, 0x00, payload, want_reply=False)
+
+
 def track_end():
     """End of a run (or pause): stop, hand speed control back, normal mode."""
     if _gimbal is None:

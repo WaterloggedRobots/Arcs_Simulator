@@ -5184,6 +5184,7 @@
       if (st) {
         let txt = g.read_ok ? "Reading the real gimbal." : (g.connected ? "Connected, angle read failing." : "Real gimbal not connected (retrying).");
         txt += drive ? " Moves are sent to it." : " Moves are not sent (Drive off).";
+        if (drive && g.joint_drive) txt += " Handle " + Math.round(Number(g.tilt) || 0) + "° from upright: J1 and J3 are turned as joints, J2 holds.";
         if (g.cmd_err) txt += " " + g.cmd_err;
         setText(st, txt);
       }

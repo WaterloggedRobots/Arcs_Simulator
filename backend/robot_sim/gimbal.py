@@ -1337,6 +1337,47 @@ def _can_track(rt):
     return all(callable(getattr(rt.get("mod"), f, None)) for f in TRACK_FUNCS)
 
 
+def _can_j3(rt):
+    """The driver can turn J3 alone during a run (track_j3: RS 4 incremental
+    pitch in 3D ROLL 360 mode, which the axis probe showed moves J3 only)."""
+    return callable(getattr(rt.get("mod"), "track_j3", None))
+
+
+def _joint_mode(obj, rt):
+    """Drive J1 and J3 as joints (J1 by speed, J3 by track_j3 steps, J2 held),
+    with no absolute moves: the handle is tilted, so absolute moves (camera
+    angles against gravity) would turn the wrong joints."""
+    return handle_tilt(obj) > ATTITUDE_TILT_MAX and _can_track(rt) and _can_j3(rt)
+
+
+J3_STEP_S = 0.4     # each J3 step aims this far ahead on the track
+J3_MIN_DEG = 0.5    # smaller corrections are not sent
+J3_MAX_DPS = 180.0
+J3_SETTLE_S = 0.15  # after a step, before the next reading counts (reads come at 10 Hz)
+
+
+def _track_j3(rt, keys, t):
+    """J3 during a run in joint mode: a step from the J3 reading to the track
+    J3_STEP_S ahead, sent when the last one is done (closed loop on the reading)."""
+    if "track" not in rt or not (rt["read_ok"] and rt["read"]):
+        return  # 3D ROLL 360 is set by _track_j1's track_begin first
+    now = time.time()
+    if now < rt.get("j3_busy", 0.0):
+        return
+    want = angles_at(keys, t + J3_STEP_S)[2]
+    d = want - unwrap_yaw(rt["read"][2], want)
+    if abs(d) < J3_MIN_DEG:
+        return
+    d = max(-STEP_MAX_DEG, min(STEP_MAX_DEG, d))
+    dur = max(J3_STEP_S, abs(d) / J3_MAX_DPS)
+    try:
+        rt["mod"].track_j3(d, dur)
+        rt["j3_busy"] = now + dur + J3_SETTLE_S  # the next step reads the finished one
+    except Exception as e:
+        rt["cmd_err"] = "J3 step failed: %s" % e
+        rt["j3_busy"] = now + 0.5
+
+
 def _track_end(rt):
     """End of a run (or pause): stop J1, hand control back, normal mode."""
     tk = rt.pop("track", None)
@@ -1401,6 +1442,11 @@ def _drive_run(oid, rt, keys, t):
     J2 / J3 get the next frame, timed to arrive on it. A driver without them:
     absolute moves for all three (J1 then can't turn more than 180 deg per move)."""
     if not keys:
+        return
+    if _joint_mode(_find(oid), rt):
+        # Handle tilted: J1 by speed, J3 by steps, nothing absolute (J2 holds).
+        _track_j1(rt, keys, t)
+        _track_j3(rt, keys, t)
         return
     # J1 by speed only when it turns in these frames: otherwise all three get
     # absolute moves (J2 too, which is left out while J1 turns by speed).
@@ -1536,7 +1582,8 @@ def _tick_one(obj, clock):
                 if real_on:
                     continue
                 turning = any(d in ("cw", "ccw") for d in direction)
-                if turning and rt["read_ok"]:
+                # Handle tilted: every move as joints (the timed move below), none absolute.
+                if (turning or _joint_mode(obj, rt)) and rt["read_ok"]:
                     _jmove_start(rt, angles, dur, direction, obj)
                 else:
                     rt.pop("jmove", None)
@@ -1879,6 +1926,9 @@ def status(oid):
         "read_age": (time.time() - rt["read_at"]) if rt["read_at"] else None,
         "read_err": err,
         "cmd_err": rt["cmd_err"] if connected else "",
+        # Handle tilted: J1 / J3 driven as joints (no absolute moves), J2 held.
+        "tilt": round(handle_tilt(obj), 1),
+        "joint_drive": bool(connected and _joint_mode(obj, rt)),
         "keys": keys_for(oid),
         "track_id": track_id(oid),
         "limits": LIMITS,
