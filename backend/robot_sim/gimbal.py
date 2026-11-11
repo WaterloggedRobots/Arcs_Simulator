@@ -1287,9 +1287,31 @@ def _sim_playing():
 RESTORE_HOLD_S = 0.5
 
 
+# The SDK's absolute move is in camera ATTITUDE (angles against gravity, the
+# gimbal holding its heading), not joints. The two only match with the handle
+# upright: tilted (e.g. horizontal on the arm's flange) an absolute pitch made
+# the RS 4 swing J1 to reach it. Past this tilt no absolute move is sent.
+ATTITUDE_TILT_MAX = 20.0
+
+
+def handle_tilt(obj):
+    """Degrees between the real gimbal's hand end (handle +z) and world up:
+    its mount on the real arm (real_mirror), else its own mount."""
+    root = (obj or {}).get("_real_root")
+    q = root[1] if root else (obj or {}).get("wxyz", [1, 0, 0, 0])
+    z = gmodel.qrot(np.asarray(q, float), [0.0, 0.0, 1.0])
+    return math.degrees(math.acos(max(-1.0, min(1.0, float(z[2])))))
+
+
 def _move(oid, rt, angles, duration, yaw=True, roll=True):
     """Absolute move; yaw=False leaves J1 out (the run drive turns it by speed),
-    roll=False leaves the roll axis out."""
+    roll=False leaves the roll axis out. Not sent with the handle tilted past
+    ATTITUDE_TILT_MAX (it would go to the wrong pose): False, and said."""
+    tilt = handle_tilt(_find(oid))
+    if tilt > ATTITUDE_TILT_MAX:
+        rt["cmd_err"] = ("handle %.0f° from upright: the RS 4's absolute moves are camera angles against gravity, "
+                         "not joints, so they would turn the wrong joints (J1 swings); not sent" % tilt)
+        return False
     mod = rt["mod"]
     w = lambda a: ((a + 180.0) % 360.0) - 180.0  # the gimbal takes +/-180
     y, r, p = clamp_angles(angles)

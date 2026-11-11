@@ -10,8 +10,8 @@ This script tries each candidate command with a small move (default 20 deg),
 prints how much every joint and attitude angle changed, says whether only
 one joint moved, then undoes the move and shows what is left over:
 
-  speed   yaw / roll            0x0E/0x01 for --secs seconds
-  incr    yaw / roll            0x0E/0x00 incremental position (ctrl bit0 = 0)
+  speed   yaw / roll / pitch    0x0E/0x01 for --secs seconds
+  incr    yaw / roll / pitch    0x0E/0x00 incremental position (ctrl bit0 = 0)
   abs     yaw                   0x0E/0x00 absolute position (only with --with-abs:
                                 in 3D ROLL 360 it flipped the camera upside down)
 
@@ -23,6 +23,12 @@ it with the sandbox closed:
     python docs/examples/gimbal/rs4_axis_probe.py
     python docs/examples/gimbal/rs4_axis_probe.py --lock
     python docs/examples/gimbal/rs4_axis_probe.py --only incr-yaw-3 --step 30
+    python docs/examples/gimbal/rs4_axis_probe.py --axes pitch
+
+pitch: does the pitch speed (or incremental) command turn J3 only? The
+sandbox needs that to drive J3 as a joint when the handle is not upright
+(its absolute pitch is the camera's angle against gravity, so with the
+handle horizontal the gimbal swings J1 to reach it).
 
 Send back the summary table at the end.
 """
@@ -110,17 +116,17 @@ def set_lock(g):
     time.sleep(0.5)
 
 
-def tests(step, secs, with_abs=False):
+def tests(step, secs, with_abs=False, axes=NAMES):
     dps = step / secs
     out = []
     for mode in (0, 3):
-        for axis in ("yaw", "roll"):
+        for axis in axes:
             out.append(("speed-%s-%d" % (axis, mode), mode,
                         lambda g, s, a=axis: speed_for(g, a, s * dps, secs)))
-        for axis in ("yaw", "roll"):
+        for axis in axes:
             out.append(("incr-%s-%d" % (axis, mode), mode,
                         lambda g, s, a=axis: position(g, a, s * step, secs, absolute=False)))
-        if with_abs:
+        if with_abs and "yaw" in axes:
             out.append(("abs-yaw-%d" % mode, mode, None))  # needs the start angle: handled below
     return out
 
@@ -162,6 +168,8 @@ def main():
     ap.add_argument("--secs", type=float, default=1.0, help="time per test move (default 1 s)")
     ap.add_argument("--lock", action="store_true", help="set Lock mode (no follow) before the tests")
     ap.add_argument("--only", default=None, help="run one test by name, e.g. incr-yaw-3")
+    ap.add_argument("--axes", default="yaw,roll,pitch",
+                    help="SDK axes to test, comma separated (default yaw,roll,pitch)")
     ap.add_argument("--with-abs", action="store_true",
                     help="also absolute yaw (in 3D ROLL 360 it flipped the RS4 camera upside down)")
     args = ap.parse_args()
@@ -176,7 +184,8 @@ def main():
             print("start world     yaw %7.1f roll %7.1f pitch %7.1f" % a)
             if args.lock:
                 set_lock(g)
-            for name, mode, fn in tests(args.step, args.secs, args.with_abs or bool(args.only and args.only.startswith("abs"))):
+            axes = tuple(a for a in (x.strip() for x in args.axes.split(",")) if a in NAMES) or NAMES
+            for name, mode, fn in tests(args.step, args.secs, args.with_abs or bool(args.only and args.only.startswith("abs")), axes):
                 if args.only and name != args.only:
                     continue
                 try:
