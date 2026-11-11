@@ -9280,6 +9280,8 @@
         if (!realState.at_start) {
           e.preventDefault();
           goingToStart = true;
+          // The arm and every reading gimbal must be on the path's start (gimbal: its first frame).
+          if (statusEl) statusEl.textContent = "Moving to the start pose" + (realState.gimbal_start ? " · " + realState.gimbal_start : "");
           btn.setPointerCapture(e.pointerId);
           const q = realState.start_q;
           fetch("/api/move_hold", {

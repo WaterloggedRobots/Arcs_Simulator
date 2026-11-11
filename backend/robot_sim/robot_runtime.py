@@ -3161,14 +3161,27 @@ def _first_path_q():
 
 
 def real_at_start():
+    """The real arm on the path's first sample and every reading gimbal on its
+    first frame (gimbal.at_initial_pose): otherwise Run does the move phase."""
     q0 = _first_path_q()
     if q0 is None or robot is None:
         return False
     try:
         qr = _flat(robot.GetJoints(), 6)
-        return qr is not None and np.allclose(qr, q0, atol=0.012)
+        if qr is None or not np.allclose(qr, q0, atol=0.012):
+            return False
     except Exception:
         return False
+    return gimbal_start_check()[0]
+
+
+def gimbal_start_check():
+    try:
+        import gimbal
+        return gimbal.at_initial_pose()
+    except Exception as e:
+        print("gimbal start check failed", e)
+        return True, ""
 
 
 def start_goto_path_start():
@@ -3623,6 +3636,13 @@ def _ee_lerp_samples(recs, t):
     return None
 
 
+def _gimbal_start_text():
+    try:
+        return gimbal_start_check()[1]
+    except Exception:
+        return ""
+
+
 def real_path_status():
     # Polled by /api/clock during play; a failure here would leave the page
     # stuck in run mode, so never raise.
@@ -3644,6 +3664,8 @@ def real_path_status():
         "t": float(_rp["t"]),
         "t_end": float(_rp["t_end"]),
         "at_start": bool(at),
+        # Why the gimbal isn't at its start yet (or a J2 note); the page shows it.
+        "gimbal_start": _gimbal_start_text(),
         "locked": edits_locked(),
         "start_q": start_q,
         "speed": HOLD_MOVE_SPEED,

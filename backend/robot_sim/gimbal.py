@@ -1378,11 +1378,52 @@ def _can_j3(rt):
     return callable(getattr(rt.get("mod"), "track_j3", None))
 
 
+def _sim_tilt(obj):
+    """Tilt of the Sim gimbal's mount (where the project puts the handle)."""
+    q = (obj or {}).get("wxyz", [1, 0, 0, 0])
+    z = gmodel.qrot(np.asarray(q, float), [0.0, 0.0, 1.0])
+    return math.degrees(math.acos(max(-1.0, min(1.0, float(z[2])))))
+
+
 def _joint_mode(obj, rt):
     """Drive J1 and J3 as joints (J1 by speed, J3 by track_j3 steps, J2 held),
-    with no absolute moves: the handle is tilted, so absolute moves (camera
-    angles against gravity) would turn the wrong joints."""
-    return handle_tilt(obj) > ATTITUDE_TILT_MAX and _can_track(rt) and _can_j3(rt)
+    with no absolute moves: the handle is tilted (the real one now, or the
+    Sim one: where the arm will take it), so absolute moves (camera angles
+    against gravity) would turn the wrong joints. Deciding on the real handle
+    alone sent the move to the initial pose absolute while the arm was still
+    on its way with the handle upright: with J2 near 180 the RS 4 then took
+    the other solution for the same camera angles, J1 180 deg off."""
+    tilted = handle_tilt(obj) > ATTITUDE_TILT_MAX or _sim_tilt(obj) > ATTITUDE_TILT_MAX
+    return tilted and _can_track(rt) and _can_j3(rt)
+
+
+START_TOL_DEG = 3.0
+
+
+def at_initial_pose():
+    """(ok, why): every gimbal with frames whose real gimbal reads is on its
+    first frame (to START_TOL_DEG; J1 / J3, and J2 unless it is held in joint
+    drive). A gimbal that doesn't read isn't checked. The run's start check
+    (robot_runtime.real_at_start) and the page use it."""
+    notes = []
+    for obj in gimbal_objects():
+        oid = str(obj.get("id"))
+        keys = keys_for(oid)
+        if not keys or not real_ok(oid):
+            continue
+        rt = _rt_for(oid)
+        r, k = rt["read"], keys[0]
+        joint = _joint_mode(obj, rt)
+        names = [j["name"] for j in sorted(model_of(obj)[0]["joints"], key=lambda j: AXES.index(j["sdk"]))]
+        off = [abs(((r[i] - k[a] + 180.0) % 360.0) - 180.0) for i, a in enumerate(AXES)]
+        bad = [i for i in ((0, 2) if joint else (0, 1, 2)) if off[i] > START_TOL_DEG]
+        name = obj.get("name") or oid
+        if bad:
+            return False, "%s not at its first frame: %s" % (name, ", ".join(
+                "%s off by %.0f°" % (names[i], off[i]) for i in bad))
+        if joint and off[1] > START_TOL_DEG:
+            notes.append("%s J2 is %.0f° off its first frame (not driven with the handle tilted)" % (name, off[1]))
+    return True, "; ".join(notes)
 
 
 J3_STEP_S = 0.4     # each J3 step aims this far ahead on the track
