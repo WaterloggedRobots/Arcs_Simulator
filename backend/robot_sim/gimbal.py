@@ -1115,11 +1115,13 @@ def _clock():
     return t, real_on, sim_on
 
 
-def _move(oid, rt, angles, duration, yaw=True):
-    """Absolute move; yaw=False leaves J1 out (the run drive turns it by speed)."""
+def _move(oid, rt, angles, duration, yaw=True, roll=True):
+    """Absolute move; yaw=False leaves J1 out (the run drive turns it by speed),
+    roll=False leaves the roll axis out."""
     mod = rt["mod"]
     y, r, p = clamp_angles(angles)
     y = (((y + 180.0) % 360.0) - 180.0) if yaw else None
+    r = r if roll else None
     try:
         ok = mod.move_to(y, r, p, duration=max(0.1, min(MAX_MOVE_S, float(duration))))
         rt["last_cmd"] = [y, r, p]
@@ -1216,7 +1218,20 @@ def _drive_run(oid, rt, keys, t):
         return  # past the last frame: hold
     tt = min(nxt["t"], t + MAX_MOVE_S)
     dur = max(0.1, round(tt - t, 1))
-    if _move(oid, rt, angles_at(keys, tt), dur, yaw=not tracking):
+    goal = angles_at(keys, tt)
+    if tracking:
+        # The SDK's absolute move is in camera ATTITUDE angles, not joints: with
+        # J1 turning the camera (a roll), an absolute roll pulls it back the
+        # short way once it passes 180 deg. So while J1 turns by speed nothing
+        # absolute goes out unless J3 changes, and then pitch only.
+        now = angles_at(keys, t)
+        if abs(goal[2] - now[2]) < 0.5:
+            rt["cmd_end"] = tt
+            return
+        ok = _move(oid, rt, goal, dur, yaw=False, roll=False)
+    else:
+        ok = _move(oid, rt, goal, dur)
+    if ok:
         rt["cmd_end"] = t + dur
     else:
         rt["cmd_end"] = t + 0.2  # retry soon
