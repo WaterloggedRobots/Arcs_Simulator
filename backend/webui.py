@@ -130,6 +130,19 @@ def _merged_status(fn):
     return mine
 
 
+def _display_tracks():
+    """The tracks for the page: a gimbal track's frames as played (a "real pose
+    at run" frame with the angles it plays: gimbal.keys_for), keeping its flags.
+    The page never edits gimbal frames through /api/tracks (the server keeps its own)."""
+    out = []
+    for tr in list(getattr(wp, "extra_tracks", None) or []):
+        tid = str((tr or {}).get("id") or "") if isinstance(tr, dict) else ""
+        if tid.startswith(wp.gimbal.TRACK_PREFIX):
+            tr = dict(tr, keys=wp.gimbal.keys_for(tid[len(wp.gimbal.TRACK_PREFIX):]))
+        out.append(tr)
+    return out
+
+
 def _with_solo(st, kind):
     """No arm playing: the gimbal-only playback of that kind, if any (gimbal.solo_status)."""
     if st.get("active") or getattr(wp, "gimbal", None) is None:
@@ -446,7 +459,7 @@ def _build_status_heavy():
     st["saved_paths"] = list(getattr(wp, "saved_paths", None) or [])
     st["selected_path_id"] = getattr(wp, "selected_path_id", None)
     st["show_pose_markers"] = bool(getattr(wp, "show_pose_markers", True))
-    st["tracks"] = list(getattr(wp, "extra_tracks", None) or [])
+    st["tracks"] = _display_tracks()
     try:
         st["arms"] = arms.listing()
         st["arm_rows"] = _arm_rows()
@@ -614,7 +627,7 @@ def api_status():
         "saved_paths": list(getattr(wp, "saved_paths", None) or []),
         "selected_path_id": getattr(wp, "selected_path_id", None),
         "show_pose_markers": bool(heavy.get("show_pose_markers", True)),
-        "tracks": heavy.get("tracks") or list(getattr(wp, "extra_tracks", None) or []),
+        "tracks": heavy.get("tracks") or _display_tracks(),
         "snap_to_grid": bool(getattr(wp, "snap_to_grid", False)),
         "item_vis": wp.item_vis_view() if hasattr(wp, "item_vis_view") else (getattr(wp, "item_vis", {}) or {}),
         "list_vis": getattr(wp, "list_vis", {}) or {},
@@ -1308,7 +1321,7 @@ def api_tracks():
         # Camera, Look At and gimbal tracks follow their objects, not the client list.
         if hasattr(wp, "sync_camera_tracks"):
             wp.sync_camera_tracks()
-    return jsonify({"ok": True, "tracks": list(getattr(wp, "extra_tracks", None) or [])})
+    return jsonify({"ok": True, "tracks": _display_tracks()})
 
 
 @app.route("/api/transition", methods=["POST"])
@@ -1782,7 +1795,8 @@ def api_gimbal():
             if angles is None:
                 return jsonify({"ok": False, "error": "the real gimbal is not reading",
                                 "gimbal": wp.gimbal.status(oid)})
-        ok = wp.gimbal.insert_frame(oid, t, angles, reading=angles is not None)
+        # live: a "real pose at run" frame (the reading when the run starts; Sim: camera along +x).
+        ok = wp.gimbal.insert_frame(oid, t, angles, reading=angles is not None, live=bool(data.get("live")))
     elif act == "delete_frame":
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
@@ -1802,12 +1816,13 @@ def api_gimbal():
         if _edits_locked():
             return jsonify({"ok": False, "error": "stop playback first"}), 409
         if act == "edit_frame":
-            ok = wp.gimbal.edit_frame(oid, data.get("index"), t=data.get("t"), angles=data.get("angles"), dirs=data.get("dir"))
+            ok = wp.gimbal.edit_frame(oid, data.get("index"), t=data.get("t"), angles=data.get("angles"),
+                                      dirs=data.get("dir"), live=data.get("live"))
         else:
             ok = wp.gimbal.paste_frames(oid, data.get("frames"))
     _status_dirty.set()
     return jsonify({"ok": bool(ok), "gimbal": wp.gimbal.status(oid),
-                    "tracks": list(getattr(wp, "extra_tracks", None) or [])})
+                    "tracks": _display_tracks()})
 
 
 @app.route("/api/cam_click", methods=["POST"])

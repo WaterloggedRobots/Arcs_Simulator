@@ -282,6 +282,8 @@ def clean_keys(keys):
         d = clean_dirs(k.get("dir"))
         if any(d):
             row["dir"] = d
+        if k.get("live"):
+            row["live"] = True
         out.append(row)
     return out
 
@@ -344,9 +346,57 @@ def _track(oid, create=False):
     return tr
 
 
-def keys_for(oid):
+def stored_keys(oid):
+    """The frames as stored (a live frame with the angles it was made with)."""
     tr = _track(oid)
     return clean_keys((tr or {}).get("keys"))
+
+
+def keys_for(oid):
+    """The frames as played: a live frame ("real pose at run") takes the
+    real gimbal's reading from the start of the run (rt["live_read"]), or,
+    outside a run (Simulate, scrubbing, speed check, export), the angles that
+    point the camera along world +x, level, from the Sim mount (_live_sim)."""
+    keys = stored_keys(oid)
+    if not any(k.get("live") for k in keys):
+        return keys
+    obj = _find(oid)
+    rt = _rt.get(str(oid)) or {}
+    out, prev = [], None
+    for k in keys:
+        if k.get("live"):
+            src = rt.get("live_read") or (_live_sim(obj, prev) if obj is not None else None)
+            if src is not None:
+                ref = prev or [k["yaw"], k["roll"], k["pitch"]]
+                a = [unwrap_yaw(v, r) for v, r in zip(src, ref)]
+                k = dict(k, yaw=a[0], roll=a[1], pitch=a[2])
+        out.append(k)
+        prev = [k["yaw"], k["roll"], k["pitch"]]
+    return out
+
+
+_live_cache = {}
+
+
+def _live_sim(obj, prev):
+    """Joint angles (readings) that turn the camera along world +x, level,
+    with the handle at the Sim mount: a live frame outside a run."""
+    model = obj.get("_model_used") or model_of(obj)[0]
+    mq = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), float)
+    key = (str(obj.get("id")), tuple(np.round(mq, 4)), str(obj.get("_model_sig")))
+    hit = _live_cache.get(key)
+    if hit is None:
+        seed = prev or (obj.get("gimbal") or {}).get("target") or [0.0, 0.0, 0.0]
+        try:
+            hit, _err = gmodel.ik(model, mq, gmodel.world_q(0.0, 0.0, 0.0), seed)
+            hit = [float(v) for v in list(hit)[:3]]
+        except Exception as e:
+            print("live frame pose failed", e)
+            hit = list(seed)
+        if len(_live_cache) > 64:
+            _live_cache.clear()
+        _live_cache[key] = hit
+    return list(hit)
 
 
 def angles_at(keys, t):
@@ -373,8 +423,9 @@ def initial_angles(oid):
 FRAME_EPS = 1e-4
 
 
-def insert_frame(oid, t, angles=None, reading=False):
-    """Frame at t with the given (or the target) angles; replaces one at t."""
+def insert_frame(oid, t, angles=None, reading=False, live=False):
+    """Frame at t with the given (or the target) angles; replaces one at t.
+    live: a "real pose at run" frame (keys_for)."""
     obj = _find(oid)
     if obj is None:
         return False
@@ -393,6 +444,8 @@ def insert_frame(oid, t, angles=None, reading=False):
     row = {"t": t, "yaw": ang[0], "roll": ang[1], "pitch": ang[2]}
     if was is not None and was.get("dir"):
         row["dir"] = was["dir"]  # replacing a frame keeps its directions
+    if live:
+        row["live"] = True
     keys.append(row)
     _set_keys(oid, tr, keys)
     _note_keys_changed(oid)
@@ -418,7 +471,7 @@ def set_frame_dir(oid, dirs, index=None, t=None):
     return True
 
 
-def edit_frame(oid, index, t=None, angles=None, dirs=None):
+def edit_frame(oid, index, t=None, angles=None, dirs=None, live=None):
     """The timeline's Edit window: one frame's time, angles and directions
     (each left as it is when None). A frame already at the new time is replaced."""
     tr = _track(oid)
@@ -439,6 +492,11 @@ def edit_frame(oid, index, t=None, angles=None, dirs=None):
         cur = clean_dirs(k.get("dir"))
         new = (list(dirs) + [None] * 3)[:3]
         k["dir"] = clean_dirs([c if n is None else n for c, n in zip(cur, new)])
+    if live is not None:
+        if live:
+            k["live"] = True
+        else:
+            k.pop("live", None)
     rest = [x for j, x in enumerate(keys) if j != i and abs(x["t"] - k["t"]) > FRAME_EPS]
     rest.append(k)
     _set_keys(oid, tr, rest)
@@ -1425,9 +1483,9 @@ def at_initial_pose():
     notes = []
     for obj in gimbal_objects():
         oid = str(obj.get("id"))
-        keys = keys_for(oid)
-        if not keys or not real_ok(oid):
-            continue
+        keys = stored_keys(oid)
+        if not keys or not real_ok(oid) or keys[0].get("live"):
+            continue  # a live first frame is wherever the gimbal is
         rt = _rt_for(oid)
         r, k = rt["read"], keys[0]
         joint = _joint_mode(obj, rt)
@@ -1645,6 +1703,11 @@ def _tick_one(obj, clock):
     # Model file chosen or edited on disk: redraw.
     if wp.server is not None and obj.get("handle") is not None and obj.get("_model_sig") != _model_sig(obj):
         rebuild(obj)
+    # A run starts: live frames take the reading now; cleared when it ends.
+    if real_on and not rt["running"] and rt["read_ok"] and rt["read"]:
+        rt["live_read"] = list(rt["read"])
+    elif not real_on and not rt["running"]:
+        rt.pop("live_read", None)
     keys = keys_for(oid)
     # Simulate: the Sim gimbal's pose before it is put back when it ends, as the
     # arm's is (the playhead's jump back used to set it from the track there).
@@ -2013,6 +2076,9 @@ def go_to_initial_pose():
         ang = initial_angles(obj.get("id"))
         if ang is None:
             continue
+        st = stored_keys(obj.get("id"))
+        if st and st[0].get("live"):
+            continue  # "real pose at run": it starts from wherever it is
         # The first frame's directions: from the reading to the starting pose.
         d = [x or "short" for x in first_dirs(obj.get("id"))]
         g = obj.setdefault("gimbal", clean_gimbal(None))
