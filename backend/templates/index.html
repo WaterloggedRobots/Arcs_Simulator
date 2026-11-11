@@ -2574,16 +2574,16 @@
       simBtn.textContent = "Simulate";
       if (upBtn) {
         upBtn.textContent = uploading ? "Uploading…" : "Upload";
-        upBtn.disabled = uploading || playing || !runnable || bakingBusy || !!(window.__lastBake && window.__lastBake.pending);
+        upBtn.disabled = uploading || playing || !runnable || bakingBusy || window.__realLinkOn === false || !!(window.__lastBake && window.__lastBake.pending);
       }
       if (showMove) {
         realBtn.textContent = "Move";
         realBtn.className = "real move";
-        realBtn.disabled = bakingBusy;
+        realBtn.disabled = bakingBusy || window.__realLinkOn === false;
       } else if (showRun) {
         realBtn.textContent = "Run";
         realBtn.className = "real run";
-        realBtn.disabled = !runnable || bakingBusy;
+        realBtn.disabled = !runnable || bakingBusy || window.__realLinkOn === false;
       }
     }
     let selectedKf = null;
@@ -7812,9 +7812,13 @@
         if (!el) return;
         // A gimbal-only timeline runs on the real gimbal with the arm offline.
         const on = realOn || (!!(d && d.gimbal_only_real) && ["uploadReal", "runReal", "realStop"].includes(id));
-        el.disabled = !on;
         el.classList.toggle("off-real", !on);
+        // Upload / Run also need a baked, runnable timeline: syncPlayButtons decides those.
+        if (id === "uploadReal" || id === "runReal") return;
+        el.disabled = !on;
       });
+      window.__realLinkOn = realOn || !!(d && d.gimbal_only_real);
+      syncPlayButtons();
       const moveBtn = document.getElementById("moveRobotPose");
       if (moveBtn) {
         moveBtn.classList.toggle("off-real", !realOn);
