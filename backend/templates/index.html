@@ -816,6 +816,12 @@
       cursor: ew-resize;
       user-select: none;
     }
+    /* Every other label right before a number field: drag it to change the value (scrub). */
+    .props label:not(.drag):has(+ input[type="number"]:not([readonly]):not(:disabled)) {
+      cursor: ew-resize;
+      user-select: none;
+    }
+    .props label.scrubbing { color: var(--text); }
     .props input[type="number"] {
       width: 100%;
       min-width: 0;
@@ -6023,6 +6029,57 @@
       });
     });
 
+    // Scrub (as in Unity): drag a label to the left / right to change the number
+    // field right after it, for every field in Properties (gimbal angles,
+    // collider, camera, offsets, ...; the label.drag fields above have their own).
+    // Shift: x10, Alt: x0.1. The field's own change handler runs once, on release.
+    (function setupScrub() {
+      const panel = document.getElementById("propsPanel");
+      if (!panel) return;
+      const decimals = (step) => {
+        const s = String(step);
+        return s.indexOf(".") >= 0 ? s.length - s.indexOf(".") - 1 : 0;
+      };
+      panel.addEventListener("pointerdown", (e) => {
+        const lab = e.target.closest ? e.target.closest("label") : null;
+        if (!lab || !panel.contains(lab) || lab.classList.contains("drag") || e.button !== 0) return;
+        const input = lab.nextElementSibling;
+        if (!input || input.tagName !== "INPUT" || input.type !== "number" || input.readOnly || input.disabled) return;
+        if (panel.classList.contains("readonly")) return;
+        e.preventDefault();
+        lab.setPointerCapture(e.pointerId);
+        lab.classList.add("scrubbing");
+        const stepAttr = parseFloat(input.getAttribute("step"));
+        const step = Number.isFinite(stepAttr) && stepAttr > 0 ? stepAttr : 0.01;
+        const dec = Math.min(6, decimals(input.getAttribute("step") || "0.01"));
+        const lo = input.min !== "" ? parseFloat(input.min) : -Infinity;
+        const hi = input.max !== "" ? parseFloat(input.max) : Infinity;
+        const start = e.clientX;
+        const base = parseFloat(input.value || "0") || 0;
+        let moved = false;
+        function move(ev) {
+          const k = ev.shiftKey ? 10 : (ev.altKey ? 0.1 : 1);
+          const dx = ev.clientX - start;
+          if (!moved && Math.abs(dx) < 2) return;
+          moved = true;
+          let v = base + dx * step * k;
+          v = Math.max(lo, Math.min(hi, v));
+          input.value = v.toFixed(dec);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        function up() {
+          lab.classList.remove("scrubbing");
+          lab.removeEventListener("pointermove", move);
+          lab.removeEventListener("pointerup", up);
+          lab.removeEventListener("pointercancel", up);
+          if (moved) input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        lab.addEventListener("pointermove", move);
+        lab.addEventListener("pointerup", up);
+        lab.addEventListener("pointercancel", up);
+      });
+    })();
+
     window.TracksUI = {
       add: addExtraTrack,
       apply: applyExtraTracks,
@@ -6215,7 +6272,7 @@
           const mark = (o.parent_id ? "↳ " : "");
           // Sim / Real cursors (arm and gimbal): a dot in the cursor's colour.
           const twinDot = o.dot ? "<span class='gim-twin " + o.dot + "'></span>" : "";
-          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + twinDot + (o.name || o.kind) + "</span>" + (o.twin ? "" : eyeHtml("obj", o.id)) + "</div>" + walk(o.id, depth + 1);
+          return "<div class='hier-row" + (selIds.indexOf(o.id) >= 0 ? " on" : "") + "' draggable='" + (builtIn(o.id) ? "false" : "true") + "' data-oid='" + o.id + "' style='padding-left:" + pad + "px'><span class='hier-label'>" + mark + twinDot + (o.name || o.kind) + "</span>" + eyeHtml("obj", o.id) + "</div>" + walk(o.id, depth + 1);
         }).join("");
       }
       let tree = walk("", 0);

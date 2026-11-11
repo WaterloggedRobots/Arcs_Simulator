@@ -57,7 +57,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
 | **Control Panel** | Bake, simulate, run, and hand the real arm over to the simulator's pose. |
 | **Timeline** | The move over time: an arm track and a camera track, with waypoint frames and generated sample points. |
 | **Speed Graph** | How fast the arm travels along the path. |
-| **Object Properties** | Transform, joint poses and components for whatever is selected in the world view. |
+| **Object Properties** | Transform, joint poses and components for whatever is selected in the world view. Every number field can be typed in or **scrubbed**: drag its label left or right (Shift ×10, Alt ×0.1); the change is applied when you let go. |
 
 ---
 
@@ -324,7 +324,7 @@ Components in the properties panel are listed in the order they were added, newe
 
 - **Gimbal** (the mount) — the gimbal's **handle** (grey). This is what you move, and it stores the handle's pose: gizmo, Properties transform, parenting (for example to the Sim Arm Cursor, so the gimbal rides on the arm). Unrotated, the hand end faces up and the camera end down.
 - **Sim Gimbal Cursor** (the *Sim gimbal*) — the gimbal's arms and motors built from boxes, in blue, with a long lens arrow at the camera, posed by the **target** angles: what you set, and the track when the playhead moves. A new gimbal gets a **Camera** object (*<name> camera*) parented to the Sim gimbal at its camera centre, so it turns with the gimbal: give it the real camera's type (sim, OpenCV, Sony). Other objects can be parented to the Sim gimbal too (drag them onto its row). A new gimbal's Sim gimbal starts at the real gimbal's pose: its target takes the first angles read (unless you set the target or add frames first).
-- **Real Gimbal Cursor** (the *Real gimbal*) — the same in orange, posed by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
+- **Real Gimbal Cursor** (the *Real gimbal*) — the same in orange, posed by the angles **read from the gimbal**. The app tries to read them all the time (about 10 times a second, reconnecting every 2 s). Each cursor's 👁 in the object list hides or shows it. The Real gimbal is drawn, and listed, only while reading works; when a read fails it disappears and red text under the Sim gimbal's properties says why.
 
 The twins can't be moved, renamed or deleted on their own; their angles come from the target and from the gimbal.
 

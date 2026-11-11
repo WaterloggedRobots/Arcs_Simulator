@@ -630,6 +630,14 @@ def _set_twin(obj, part, angles):
         _follow_sim(obj)
 
 
+def _user_shows(obj, part):
+    """The cursor's eye in the object list (item_vis "obj:<oid>#sim" / "#real")."""
+    try:
+        return (wp.item_vis or {}).get("obj:%s" % part_id(obj.get("id"), part), True) is not False
+    except Exception:
+        return True
+
+
 def _set_visible(obj, part, on):
     h = obj.get(part + "_head")
     if h is None or obj.get("_vis_" + part) == bool(on):
@@ -1147,7 +1155,8 @@ def _tick_one(obj, clock):
     ok = real_ok(oid)
     if ok:
         _set_twin(obj, "real", rt["read"])
-    _set_visible(obj, "real", ok)
+    _set_visible(obj, "real", ok and _user_shows(obj, "real"))
+    _set_visible(obj, "sim", _user_shows(obj, "sim"))
 
 
 SDK_ORDER = ("yaw", "roll", "pitch")
