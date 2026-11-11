@@ -1401,6 +1401,10 @@ def _tick_one(obj, clock):
             rt["adopt_read"] = False
             if not keys_for(oid) and not aiming:
                 g["target"] = clamp_angles(rt["read"])
+        # A snap of sim to real that came before this gimbal read: its first good reading.
+        if rt.get("snap_until") and rt["read_ok"]:
+            if time.time() < rt.pop("snap_until") and not aiming:
+                _snap_one(obj, rt)
         if calib:
             _calibrate_home(obj, cfg, rt)  # after the read: the reading is fresh
     elif calib:
@@ -1581,19 +1585,33 @@ def _jmove_tick(oid, rt):
     _drive_run(oid, rt, jm["keys"], min(t, jm["dur"]))
 
 
+SNAP_WAIT_S = 30.0
+
+
+def _snap_one(obj, rt):
+    read = list(rt["read"])
+    g = obj.setdefault("gimbal", clean_gimbal(None))
+    read[0] = unwrap_yaw(read[0], (g.get("target") or [None])[0])
+    g["target"] = clamp_angles(read)
+
+
 def snap_to_real():
     """Snap sim to real (the arm's): every gimbal whose angles read takes them
-    as its Sim target (J1 to the turn nearest the target). Returns how many."""
+    as its Sim target (J1 to the turn nearest the target). A gimbal not reading
+    yet (the arm's snap when the robot connects comes before the gimbal's first
+    reading) takes its first good reading in the next SNAP_WAIT_S. Returns how
+    many snapped now."""
     n = 0
     for obj in gimbal_objects():
         oid = obj.get("id")
-        if not real_ok(oid) or _aiming(obj):
+        if _aiming(obj):
             continue
         rt = _rt_for(oid)
-        read = list(rt["read"])
-        g = obj.setdefault("gimbal", clean_gimbal(None))
-        read[0] = unwrap_yaw(read[0], (g.get("target") or [None])[0])
-        g["target"] = clamp_angles(read)
+        if not real_ok(oid):
+            rt["snap_until"] = time.time() + SNAP_WAIT_S
+            continue
+        rt.pop("snap_until", None)
+        _snap_one(obj, rt)
         _follow_now(obj)
         n += 1
     return n

@@ -94,7 +94,7 @@ Add items with the **+** button in the relevant tab. Each item has its own visib
   - An object with a Sim / Real pair (a gimbal) puts its real cursor there: the **Real Gimbal Cursor** is listed (and drawn) on the mirrored gimbal, posed by the angles read; objects on the Sim Gimbal Cursor (its Camera) mirror onto the Real Gimbal Cursor's camera. Not on an arm, a gimbal keeps its Real Gimbal Cursor under itself as before.
   - Every other object gets a **ghost**: the same shape, half as opaque, listed in grey italics. Ghosts hold a transform only (no components). Select one to see its world or local transform (the Local / Global switch) in Properties, read only: it follows its sim object, never the other way round.
   - *Preferences > Robot Settings > Ghosts on the real side* turns the ghosts off; the Real Gimbal Cursors stay (directly under the Real Arm Cursor or Robot Not Connected).
-  - Snapping the sim arm to the real pose (the Snap prompt, the *Real* Sim Go pose, a run's end, start-up) also snaps every gimbal whose angles read: its Sim target becomes the angles read.
+  - Snapping the sim arm to the real pose (the Snap prompt, the *Real* Sim Go pose, a run's end, start-up) also snaps every gimbal: its Sim target becomes the angles read. A gimbal that isn't reading yet (at start-up and on reconnect the arm usually connects first) takes its first reading in the next 30 s.
 - **Parent hierarchy.** Objects can be parented to one another so a child moves with its parent. This is how you bind objects to the end effector — an EE-parented camera, for example, follows every move the arm makes.
 
 ### Waypoints
