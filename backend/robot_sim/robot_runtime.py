@@ -3893,6 +3893,25 @@ def _move_cursor_children():
         print("cursor children failed:", e)
 
 
+def _place_sim_gizmo(pos):
+    """The Sim Arm Cursor's gizmo onto pos with the cursor's new heading. While
+    it is shown, each tick takes the heading from the gizmo (local axes): moved
+    but not turned, it turned the cursor back after a joint / IK field edit,
+    away from its children (and their copies on the Real Arm Cursor moved)."""
+    if _sim_gizmo is None:
+        return
+    prev = getattr(wp, "_suspend_gizmo_cb", False)
+    wp._suspend_gizmo_cb = True
+    try:
+        _sim_gizmo.position = tuple(float(v) for v in pos)
+        show = wp._gizmo_display_wxyz(_sim_wxyz) if hasattr(wp, "_gizmo_display_wxyz") else _sim_wxyz
+        _sim_gizmo.wxyz = tuple(float(v) for v in show)
+    except Exception:
+        pass
+    finally:
+        wp._suspend_gizmo_cb = prev
+
+
 def apply_selected_ik(ik):
     import path_bake as bake
     if getattr(bake, "selected_sample", None) is not None:
@@ -3918,11 +3937,7 @@ def apply_selected_ik(ik):
     _set_sim_heading(wxyz)
     if _cursor_sim is not None:
         _cursor_sim.position = tuple(float(v) for v in pos)
-    if _sim_gizmo is not None:
-        try:
-            _sim_gizmo.position = tuple(float(v) for v in pos)
-        except Exception:
-            pass
+    _place_sim_gizmo(pos)
     _ik_sim_cursor()
     _draw_sim_dir(pos)
     _move_cursor_children()
@@ -3944,11 +3959,7 @@ def apply_selected_q(q):
     _set_sim_heading(wxyz)
     if _cursor_sim is not None:
         _cursor_sim.position = tuple(float(v) for v in pos)
-    if _sim_gizmo is not None:
-        try:
-            _sim_gizmo.position = tuple(float(v) for v in pos)
-        except Exception:
-            pass
+    _place_sim_gizmo(pos)
     _draw_sim_dir(pos)
     _move_cursor_children()
     return True
