@@ -971,9 +971,9 @@ def _span_times(seg):
 
 def _carry_from(olds, new, i):
     """Keep the sample frames of the old span with the same end times; for a
-    span split by a new waypoint, the old span's frames inside it (their timing
-    resampled). new["kept_times"] marks frames kept from a baked (or kept) span:
-    the timeline shows them while unbaked."""
+    span split or merged (a waypoint added or deleted), the old frames inside it
+    (their timing resampled). new["kept_times"] marks frames kept from a baked
+    (or kept) span: the timeline shows them while unbaked."""
     if i + 1 >= len(wp.waypoints):
         return False
     t0 = float(wp.waypoints[i].get("t") or 0.0)
@@ -989,21 +989,26 @@ def _carry_from(olds, new, i):
     news = new.get("samples") or []
     if len(news) < 3 or t1 <= t0 + eps:
         return False
+    # A span split by a new waypoint, or merged by a deleted one: the frames of
+    # the old spans that fall inside it (a deleted waypoint's time included),
+    # their timing resampled onto the new samples.
+    inner, used = set(), []
     for old in olds:
         se = _span_times(old)
-        if not se or se[0] > t0 + eps or se[1] < t1 - eps:
+        if not se or se[1] <= t0 + eps or se[0] >= t1 - eps:
             continue
-        inner = sorted(float(sm["t"]) for sm in (old.get("samples") or [])
-                       if sm.get("t") is not None and t0 + eps < float(sm["t"]) < t1 - eps)
-        if not inner:
-            return False
-        ts = [t0] + inner + [t1]
-        tn = np.interp(np.linspace(0.0, 1.0, len(news)), np.linspace(0.0, 1.0, len(ts)), ts)
-        for k in range(1, len(news) - 1):
-            news[k]["t"] = float(tn[k])
-        new["kept_times"] = _shown(old)
-        return True
-    return False
+        used.append(old)
+        for sm in old.get("samples") or []:
+            if sm.get("t") is not None and t0 + eps < float(sm["t"]) < t1 - eps:
+                inner.add(round(float(sm["t"]), 6))
+    if not inner:
+        return False
+    ts = [t0] + sorted(inner) + [t1]
+    tn = np.interp(np.linspace(0.0, 1.0, len(news)), np.linspace(0.0, 1.0, len(ts)), ts)
+    for k in range(1, len(news) - 1):
+        news[k]["t"] = float(tn[k])
+    new["kept_times"] = any(_shown(o) for o in used)
+    return True
 
 
 def _shown(seg):

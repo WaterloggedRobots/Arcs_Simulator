@@ -3284,7 +3284,8 @@ def delete_selected():
         waypoints.pop(idx)
     deselect_all()
     draw_path()
-    _bake_call("invalidate_from", 0, drop_all=True)
+    # Unbaked, sample frames kept (as when a waypoint is added).
+    _bake_call("invalidate_from", 0)
     print("Deleted waypoints", idxs)
 
 
