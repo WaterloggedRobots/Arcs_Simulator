@@ -6471,8 +6471,8 @@
       const tn = Number(t || 0);
       spdSim.push({ t: tn, v: s });
       spdReal.push({ t: tn, v: r });
-      /* Scale to the recent window, not the all-time peak, so the axis comes
-         back down after one fast reading. */
+      /* The recent window's peak (the graph's axis also fits every sample
+         drawn: renderSpeedGraph). */
       const SPD_WIN_S = 3;
       let m = 0.05;
       for (let i = spdSim.length - 1; i >= 0 && tn - spdSim[i].t <= SPD_WIN_S; i--) m = Math.max(m, spdSim[i].v);
@@ -6493,7 +6493,12 @@
       ctx.fillStyle = "#16171b";
       ctx.fillRect(0, 0, w, h);
       const padL = 44, padR = 8, padT = 8, padB = 18;
-      const ymax = spdMax * 1.15;
+      // The axis fits the fastest sample drawn (both lines, the whole graph), so
+      // no part of a line runs off the top: the graph squeezes down instead.
+      let peak = Math.max(0.05, spdMax);
+      for (const p of spdSim) if (p.v > peak) peak = p.v;
+      for (const p of spdReal) if (p.v > peak) peak = p.v;
+      const ymax = peak * 1.15;
       const t0 = 0;
       const t1 = Math.max(DEFAULT_DURATION || 8, playhead || 1, Number(simState.t_end || 0), Number(realState.t_end || 0), 1);
       const xOf = (t) => padL + ((t - t0) / (t1 - t0)) * (w - padL - padR);
@@ -6507,6 +6512,12 @@
       ctx.fillStyle = "#8a8a93";
       ctx.font = "10px sans-serif";
       ctx.fillText(ymax.toFixed(2) + " m/s", 4, padT + 8);
+      ctx.fillText((ymax / 2).toFixed(2), 8, yOf(ymax / 2) + 3);
+      ctx.strokeStyle = "#222329";
+      ctx.beginPath();
+      ctx.moveTo(padL, yOf(ymax / 2));
+      ctx.lineTo(w - padR, yOf(ymax / 2));
+      ctx.stroke();
       ctx.fillText("0", 8, h - padB);
       const draw = (arr, col) => {
         if (arr.length < 2) return;

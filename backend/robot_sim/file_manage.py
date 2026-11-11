@@ -506,6 +506,19 @@ def write_export_json(path=None, title=None):
     data = build_motion_doc(include_waypoint_flag=False)
     data["sim_poses"] = _dump_sim_poses()
     data["objects"] = _dump_scene_objects()
+    try:
+        # Gimbal poses: per gimbal its frames and its pose every 0.1 s ("gimbals"),
+        # and on each point the gimbals' J1-J3 at that time ("gimbal": {id: [J1, J2, J3]}).
+        import gimbal
+        data["gimbals"] = gimbal.export_tracks()
+        ids = [g["id"] for g in data["gimbals"]]
+        if ids:
+            t = 0.0
+            for pt in data.get("points") or []:
+                t = float(pt["t"]) if pt.get("t") is not None else t + float(pt.get("dur") or 0.0)
+                pt["gimbal"] = {oid: gimbal.angles_now(oid, t) for oid in ids}
+    except Exception as e:
+        print("export gimbals failed", e)
     stem = _safe_stem(title or data.get("title"), "export")
     data["title"] = stem
     dest = Path(path) if path else app_paths.ensure_dir(app_paths.EXPORTS_DIR) / (stem + ".json")

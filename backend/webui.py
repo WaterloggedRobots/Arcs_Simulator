@@ -1239,8 +1239,10 @@ def api_file_load_autosave():
 @app.route("/api/file/export", methods=["POST"])
 def api_file_export():
     data = request.get_json(silent=True) or {}
-    out = fman.write_export_json(path=data.get("path"))
-    return jsonify({"ok": True, "path": str(out) if out else None})
+    out = fman.write_export_json(path=data.get("path"), title=data.get("title")) or {}
+    # The page downloads doc (with the gimbals' frames and poses).
+    return jsonify({"ok": bool(out.get("ok")), "path": out.get("path"), "count": out.get("count"),
+                    "doc": out.get("doc"), "title": out.get("title")})
 
 
 @app.route("/api/delete_selected", methods=["POST"])

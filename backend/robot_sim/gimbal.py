@@ -460,6 +460,41 @@ def paste_frames(oid, frames):
     return True
 
 
+EXPORT_STEP_S = 0.1
+
+
+def export_tracks(step=EXPORT_STEP_S):
+    """For the Export file: each gimbal with frames, its frames (angles in
+    degrees, J1-J3 as yaw / roll / pitch, unwrapped, with directions) and its
+    pose every `step` s from 0 to the last frame (what Simulate plays)."""
+    out = []
+    for obj in gimbal_objects():
+        oid = str(obj.get("id"))
+        keys = keys_for(oid)
+        if not keys:
+            continue
+        model, _ = model_of(obj)
+        end = keys[-1]["t"]
+        n = int(math.floor(end / step + 1e-9))
+        ts = [round(i * step, 6) for i in range(n + 1)]
+        if ts[-1] < end - 1e-9:
+            ts.append(round(end, 6))
+        poses = []
+        for t in ts:
+            a = angles_at(keys, t)
+            poses.append({"t": t, "yaw": round(a[0], 3), "roll": round(a[1], 3), "pitch": round(a[2], 3)})
+        out.append({"id": oid, "name": obj.get("name") or oid, "model": model.get("name"),
+                    "joints": {"J1": "yaw", "J2": "roll", "J3": "pitch"}, "units": "deg",
+                    "frames": keys, "poses": poses})
+    return out
+
+
+def angles_now(oid, t):
+    """[J1, J2, J3] of a gimbal's track at time t (None without frames)."""
+    a = angles_at(keys_for(oid), t)
+    return None if a is None else [round(v, 3) for v in a]
+
+
 def first_dirs(oid):
     """The first frame's directions: the move to the initial pose."""
     keys = keys_for(oid)
