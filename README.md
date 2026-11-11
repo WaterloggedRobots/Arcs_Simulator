@@ -349,7 +349,7 @@ On a balanced gimbal all three axes pass through the camera's centre of gravity,
 
 **Joints / World.** The switch beside the Sim gimbal's **Target** (and the Real gimbal's readout) shows the angles as the motors' **J1–J3** or as the camera's **world** yaw (heading), pitch (lens above the horizon) and roll (picture turned, positive = right side down). Typing world angles solves J1–J3 for them (inverse kinematics, from the current angles so the gimbal doesn't flip); frames and the track are still joint angles. If the gimbal can't reach that orientation it goes to the nearest one and says how far off it is.
 
-**Turning the camera turns the gimbal.** Rotating the Sim gimbal's Camera with its gizmo, or in Properties with **Global** on, solves J1–J3 so the gimbal points the camera that way, and the model moves with it (the camera stays on the gimbal, at the nearest orientation it reaches). Rotating it with **Local** on sets the camera's offset on the gimbal instead. Not while Look At aims the gimbal.
+**Turning the camera turns the gimbal.** Rotating the Sim gimbal's Camera with its gizmo, or in Properties with **Global** on, solves J1–J3 so the gimbal points the camera that way, and the model moves with it (the camera stays on the gimbal, at the nearest orientation it reaches). Rotating it with **Local** on sets the camera's offset on the gimbal instead. Moving it (gizmo arrows, or the position fields) moves it on the gimbal, like any child. Not while Look At aims the gimbal.
 
 Joints to world needs the handle's pose (the mount: on the arm, the flange) and the model's axes; world to joints also needs them to be right.
 

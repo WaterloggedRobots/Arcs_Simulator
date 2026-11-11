@@ -524,7 +524,7 @@ def build_base(server, name, model, rgb, on_click, opacity=0.7):
     return root
 
 
-def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
+def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.10):
     """One twin: nested joint nodes with their link parts, and a camera frame
     with lens / right arrows (no body). Returns (root, [joint nodes], [part handles])."""
     root = server.scene.add_frame(name, show_axes=False)
@@ -540,11 +540,12 @@ def build_twin(server, name, model, rgb, angles, on_click, arrow_len=0.24):
                 _add_part(server, "%s/p%d" % (path, i), part, rgb, 0.55, on_click, parts)
     cam = path + "/camera"
     server.scene.add_frame(cam, show_axes=False, wxyz=tuple(model["cam_q"]), position=tuple(model["cam_origin"]))
-    for sub, axis, length, shaft, head in (("lens", 2, arrow_len, 0.007, 0.018), ("side", 0, arrow_len * 0.4, 0.005, 0.012)):
+    # Lens and right arrows, the size of the arm cursors' (waypoints.add_forward_arrow).
+    for sub, axis, length, shaft, head in (("lens", 2, arrow_len, 0.004, 0.010), ("side", 0, arrow_len * 0.4, 0.003, 0.007)):
         pts = np.zeros((1, 2, 3), dtype=np.float32)
         pts[0, 1, axis] = float(length)
         server.scene.add_arrows(name="%s/%s" % (cam, sub), points=pts, colors=np.asarray(rgb, dtype=np.uint8).reshape(3),
-                                shaft_radius=shaft, head_radius=head, head_length=head * 2.2)
+                                shaft_radius=shaft, head_radius=head, head_length=head * 1.8)
     return root, nodes, parts
 
 

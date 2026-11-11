@@ -645,7 +645,10 @@ def _bind_object_gizmo(obj, visible=False):
         dq = _qmul(new_q, _qinv(old_q))
         obj["pos"] = new_pos
         obj["wxyz"] = new_q
-        if _gimbal().drive_from_child(obj):
+        # On a Sim gimbal: turning the object turns the gimbal (J1-J3 solved);
+        # moving it moves it on the gimbal (its offset), like any child.
+        turned = abs(float(np.dot(new_q, old_q))) < 0.999999  # more than ~0.2 deg
+        if turned and _gimbal().drive_from_child(obj):
             # On a Sim gimbal: the gimbal turns to this orientation (J1-J3 solved)
             # and the object stays on it, so it snaps to what the gimbal reaches.
             _refresh_camera_viz(obj)
