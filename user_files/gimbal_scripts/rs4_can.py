@@ -402,12 +402,23 @@ def track_begin():
         raise RuntimeError("not connected")
     if _stream is not None:
         return
+    global _mode_at
     seed = _gimbal.get_angles()
     _gimbal.set_roll360(RUN_MODE)
+    _mode_at = time.time()
     _stream = _Streamer(_gimbal)
     if seed is not None:
         with _stream.lock:
             _stream.joint, _stream.joint_t = seed, time.time()
+
+
+MODE_SETTLE_S = 0.8   # after the mode change the RS 4 ignored speed commands for about 0.6 s
+_mode_at = 0.0
+
+
+def track_ready():
+    """The run mode has settled: speed commands are followed (rs4_spin_360.py waits 0.8 s too)."""
+    return _stream is not None and time.time() - _mode_at >= MODE_SETTLE_S
 
 
 def track_speed(dps):

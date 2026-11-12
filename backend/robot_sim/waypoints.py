@@ -372,8 +372,9 @@ def flush_idle_path_rebuild(delay=0.28):
     global _pending_rebuild_idx
     if _pending_rebuild_idx is None:
         return
-    if selected_ctrl is not None:
-        return
+    # A Bezier handle stays selected after its drag: rebuilt once it has been
+    # still for `delay` too (waiting for it to be deselected left the span's
+    # sample frames and bake as they were).
     import time as _t
     if _t.time() - _gizmo_last_move < delay:
         return
@@ -431,7 +432,7 @@ def _release_gizmo_drag():
             _snap_global_gizmos_apply()
         finally:
             _suspend_gizmo_cb = False
-    if _pending_rebuild_idx is not None and selected_ctrl is None:
+    if _pending_rebuild_idx is not None:
         idx = _pending_rebuild_idx
         _pending_rebuild_idx = None
         _bake_call("on_waypoint_moved", idx)
@@ -1221,7 +1222,7 @@ def unfold_collapsed_ctrls(idx):
         inn = ic is None or float(np.linalg.norm(np.asarray(ic, dtype=float).reshape(3) - pb)) < 1e-6
         if on and inn:
             place_segment_ctrls(a, b, force=True)
-            if selected_idx is not None:
+            if selected_idx is not None and selected_ctrl is None:
                 show_dotted_for_selection(selected_idx)
             draw_path()
 

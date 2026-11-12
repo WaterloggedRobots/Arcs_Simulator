@@ -373,11 +373,17 @@ def keys_for(oid):
     out, prev, shift = [], None, [0.0, 0.0, 0.0]
     for k in keys:
         if k.get("live"):
-            src = read or (_live_sim(obj, prev) if obj is not None else None)
+            near = prev or [k["yaw"], k["roll"], k["pitch"]]
+            sim = _live_sim(obj, prev, k["t"]) if obj is not None else None
+            sim = None if sim is None else [unwrap_yaw(v, r) for v, r in zip(sim, near)]
+            src = read or sim
             if src is not None:
-                ref = prev or [k["yaw"], k["roll"], k["pitch"]]
-                a = [unwrap_yaw(v, r) for v, r in zip(src, ref)]
-                shift = [a[i] - k[x] for i, x in enumerate(AXES)] if read else [0.0, 0.0, 0.0]
+                a = [unwrap_yaw(v, r) for v, r in zip(src, near)]
+                # The frames after it were made against what it plays in the sim
+                # (not its stored angles, which can be any pose it was made at:
+                # the home pose's J3 -69 sent a run's J3 88 deg off).
+                shift = ([a[i] - sim[i] for i in range(3)] if read and sim is not None
+                         else [0.0, 0.0, 0.0])
                 k = dict(k, yaw=a[0], roll=a[1], pitch=a[2])
         elif any(shift):
             k = dict(k, **{x: k[x] + shift[i] for i, x in enumerate(AXES)})
@@ -396,11 +402,69 @@ def _keys_sig(keys):
 _live_cache = {}
 
 
-def _live_sim(obj, prev):
+def _qmul(a, b):
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b
+    return np.array([w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2, w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                     w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2])
+
+
+def _slerp(a, b, u):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    d = float(np.dot(a, b))
+    if d < 0:
+        b, d = -b, -d
+    if d > 0.9995:
+        q = a + (b - a) * u
+    else:
+        th = math.acos(min(1.0, d))
+        q = (math.sin((1 - u) * th) * a + math.sin(u * th) * b) / math.sin(th)
+    return q / (np.linalg.norm(q) or 1.0)
+
+
+def _cursor_wxyz_at(t):
+    """The Sim Arm Cursor's rotation at path time t: from the bake's samples
+    when they have poses, else between the waypoints. None without a path."""
+    pts = []
+    try:
+        import path_bake as bake
+        for seg in bake.segments or []:
+            for sm in seg.get("samples") or []:
+                if sm.get("t") is not None and sm.get("wxyz") is not None:
+                    pts.append((float(sm["t"]), np.asarray(sm["wxyz"], float).reshape(4)))
+    except Exception:
+        pts = []
+    if len(pts) < 2:
+        pts = [(float(w.get("t") or 0.0), np.asarray(w.get("wxyz"), float).reshape(4))
+               for w in (wp.waypoints or []) if w.get("wxyz") is not None]
+    if not pts:
+        return None
+    pts.sort(key=lambda p: p[0])
+    if t <= pts[0][0]:
+        return pts[0][1]
+    for (ta, qa), (tb, qb) in zip(pts, pts[1:]):
+        if t <= tb:
+            return qa if tb - ta < 1e-9 else _slerp(qa, qb, (t - ta) / (tb - ta))
+    return pts[-1][1]
+
+
+def _mount_wxyz_at(obj, t):
+    """The Sim mount's rotation when the path is at time t (what Simulate
+    shows then): on the Sim Arm Cursor it turns with the cursor along the
+    path; anywhere else it is where it is now."""
+    if t is not None and str(obj.get("parent_id") or "") == "sim_cursor" and obj.get("local_wxyz") is not None:
+        cq = _cursor_wxyz_at(float(t))
+        if cq is not None:
+            return _qmul(cq, np.asarray(obj["local_wxyz"], float).reshape(4))
+    return np.asarray(obj.get("wxyz", [1, 0, 0, 0]), float)
+
+
+def _live_sim(obj, prev, t=None):
     """Joint angles (readings) that turn the camera along world +x, level,
-    with the handle at the Sim mount: a live frame outside a run."""
+    with the handle where the Sim mount is at path time t: a live frame
+    outside a run, and what a run's live frame is measured against."""
     model = obj.get("_model_used") or model_of(obj)[0]
-    mq = np.asarray(obj.get("wxyz", [1, 0, 0, 0]), float)
+    mq = _mount_wxyz_at(obj, t)
     key = (str(obj.get("id")), tuple(np.round(mq, 4)), str(obj.get("_model_sig")))
     hit = _live_cache.get(key)
     if hit is None:
@@ -1440,6 +1504,7 @@ def _move(oid, rt, angles, duration, yaw=True, roll=True):
 
 
 TRACK_LOOKAHEAD_S = 0.3
+FF_CATCHUP_DPS = 15.0  # a run's J1 behind (or ahead of) the frames closes at most this fast
 RUNAWAY_DEG = 45.0   # J1 this much further off than its best: stopped
 TRACK_MAX_DPS = 180.0
 TRACK_FUNCS = ("track_begin", "track_speed", "track_end")
@@ -1636,6 +1701,17 @@ def _track_j1(rt, keys, t, follow=True):
         # on the reading: the turn adds up to the frames' own, wherever the
         # RS 4's stabilising puts J1 meanwhile.
         now = time.time()
+        ready = getattr(mod, "track_ready", None)
+        if callable(ready) and not ready():
+            # The gimbal is still changing mode: nothing sent counts yet.
+            try:
+                mod.track_speed(0.0)
+            except Exception:
+                pass
+            tk["cmd"], tk["ff_at"] = 0.0, now
+            tk.setdefault("ff", angles_at(keys, 0.0)[0] if t < 1.0 else want_now)
+            tk["ff_t"] = t
+            return
         if "ff" not in tk or t < tk.get("ff_t", t) - 0.5:
             # A run (or Repeat) starts on the first frame (the start check),
             # though its first tick comes a moment later.
@@ -1647,7 +1723,8 @@ def _track_j1(rt, keys, t, follow=True):
         # The track's own slope over the next tick, plus what has been sent too
         # little or too much so far (sharp at the frames: ends on the last one).
         slope = (angles_at(keys, t + PERIOD_S)[0] - want_now) / PERIOD_S
-        rate = slope + (want_now - tk["ff"]) / TRACK_LOOKAHEAD_S
+        fix = (want_now - tk["ff"]) / TRACK_LOOKAHEAD_S
+        rate = slope + max(-FF_CATCHUP_DPS, min(FF_CATCHUP_DPS, fix))  # a late start catches up gently
         rate = max(-TRACK_MAX_DPS, min(TRACK_MAX_DPS, rate))
         if abs(rate) < 0.2:
             rate = 0.0
@@ -1859,6 +1936,8 @@ def _tick_one(obj, clock):
     # A run starts: live frames take the reading now; cleared when it ends.
     if real_on and not rt["running"]:
         rt.pop("run_keys", None)
+        if isinstance(rt.get("track"), dict):
+            rt["track"].pop("ff", None)  # counts from the run's own first frame
         if rt["read_ok"] and rt["read"]:
             rt["live_read"] = list(rt["read"])
     elif not real_on and not rt["running"]:
@@ -1939,8 +2018,10 @@ def _tick_one(obj, clock):
                     rt["mod"].track_speed(0.0)
                 except Exception:
                     pass
+        if rt.get("pre_run") and (real_on or not _run_waiting()):
+            rt.pop("pre_run", None)
         if (not (real_on and not aiming) and "track" in rt and "jmove" not in rt and not hold
-                and not rt.get("start_hold")):
+                and not rt.get("start_hold") and not rt.get("pre_run")):
             _track_end(rt)  # run stopped or paused: normal mode before any other move
         if cfg.get("drive", True):
             for kind, angles, dur, direction in reqs:
@@ -1964,6 +2045,15 @@ def _tick_one(obj, clock):
                 _jmove_tick(oid, rt)
             elif hold:
                 _drive_run(oid, rt, keys[:1], 0.0)
+            elif (not real_on and "track" not in rt and keys and _keys_move(keys) and _run_waiting()
+                  and rt["read_ok"] and not aiming and _run_drive_kind(obj, rt, keys) == "joint"):
+                # The run will turn J1 by speed: its mode is set now, while it
+                # waits (the RS 4 took about 0.6 s after the mode change to
+                # follow the speed, and J1 then trailed the frames all run).
+                _track_j1(rt, keys[:1], 0.0, follow=False)
+                rt["pre_run"] = True
+            elif rt.get("pre_run") and not real_on and "track" in rt:
+                _track_j1(rt, keys[:1], 0.0, follow=False)  # J1 held (speed 0) until the run starts
             if real_on and not rt["running"]:
                 rt["cmd_end"] = -1.0
             if real_on and aiming:
