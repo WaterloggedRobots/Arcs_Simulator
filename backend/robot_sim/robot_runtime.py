@@ -1513,12 +1513,16 @@ def _cursor_children():
 
 
 def _tool_offsets(obj):
-    """Look At (pos offset, rx/ry/rz) from a cursor child's local transform."""
-    rec = {
-        "pos": [float(v) for v in np.asarray(obj.get("local_pos", [0, 0, 0]), dtype=float).reshape(3)],
-        "wxyz": [float(v) for v in np.asarray(obj.get("local_wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)],
-    }
-    return offset_to_look_at(rec)
+    """Look At (pos offset, rx/ry/rz) from a cursor child's local transform:
+    the tool's +z at the target, or, for a Camera object (it views along its
+    -z, y up), its -z (the look-at frame turned 180 deg about y). Copying the
+    transform alone pointed a camera tool straight away from the target."""
+    lp = [float(v) for v in np.asarray(obj.get("local_pos", [0, 0, 0]), dtype=float).reshape(3)]
+    lq = np.asarray(obj.get("local_wxyz", [1, 0, 0, 0]), dtype=float).reshape(4)
+    r = R.from_quat([lq[1], lq[2], lq[3], lq[0]]).inv()
+    if obj.get("camera"):
+        r = R.from_euler("y", np.pi) * r
+    return lp, [float(v) for v in r.as_euler("xyz")]
 
 
 def _use_tool(key):

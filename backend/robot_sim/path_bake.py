@@ -422,6 +422,8 @@ def _fill_missing_track_records():
         if rec is not None and not _track_on(rec):
             continue
         offsets = [cur_off]
+        if rec and rec.get("name") and hasattr(rr, "_track_target_pos") and rr._track_target_pos(rec.get("name")) is not None:
+            continue  # its own target and offsets are trusted (_reaim_waypoints turns it to match)
         if rec:
             own = (list(rec.get("offset") or [0.0, 0.0, 0.0]), list(rec.get("pos_offset") or [0.0, 0.0, 0.0]))
             aim = rr.look_at_wxyz_offset(w.get("pos"), rec.get("name"), own[0], own[1]) if w.get("pos") is not None else None
@@ -434,6 +436,39 @@ def _fill_missing_track_records():
         _, name, off, pos_off = hit
         w["track_object"] = {"on": True, "added": True, "name": name,
                              "offset": list(off), "pos_offset": list(pos_off)}
+
+
+_REAIM_TOL = np.radians(1.0)
+
+
+def _reaim_waypoints():
+    """A waypoint whose Look At (its own target and offsets) no longer gives
+    its saved rotation (the offset was changed after it was placed) is turned
+    to its aim, with new joints. Its span's samples were aimed while its
+    joints kept the old rotation, and the IK of the next sample failed."""
+    if not hasattr(rr, "look_at_wxyz_offset"):
+        return 0
+    n = 0
+    for idx, w in enumerate(list(wp.waypoints)):
+        rec = w.get("track_object") or {}
+        if not _track_on(rec) or w.get("pos") is None or w.get("wxyz") is None:
+            continue
+        aim = rr.look_at_wxyz_offset(w["pos"], rec.get("name"), rec.get("offset"), rec.get("pos_offset"))
+        if aim is None or _quat_angle(aim, w["wxyz"]) < _REAIM_TOL:
+            continue
+        q = None
+        try:
+            ee_pos, ee_wxyz = rr._ee_from_cursor(w["pos"], aim, "sim")
+            q = rr._ik_to_pose(ee_pos, ee_wxyz, seed=w.get("q"))
+        except Exception as e:
+            print("re-aim waypoint", idx, "IK failed:", e)
+        print("bake: waypoint %d turned %.0f deg to its Look At" % (idx, np.degrees(_quat_angle(aim, w["wxyz"]))))
+        wp.move_waypoint(idx, w["pos"], wxyz=np.asarray(aim, dtype=np.float32), q=q)
+        if q is None:
+            w["q"] = None
+            w["q_dirty"] = True
+        n += 1
+    return n
 
 
 def _aim_samples_at_track(i, samples):
@@ -1297,6 +1332,7 @@ def _run_bake_body(spacing_m=None):
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
 
     _fill_missing_track_records()
+    _reaim_waypoints()
     rebuild_preview()
     seed = None
     if rr.robot_sim is not None:
@@ -1568,6 +1604,7 @@ def _run_optomise_body(spacing_m=None):
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
     _fill_missing_track_records()
+    _reaim_waypoints()
     rebuild_preview()
     seed = _bake_seed()
     baked = 0

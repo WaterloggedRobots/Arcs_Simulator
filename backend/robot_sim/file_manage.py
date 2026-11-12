@@ -944,6 +944,10 @@ def _restore_sim_track(rec):
                 pos_offset=rec.get("pos_offset") or [0.0, 0.0, 0.0],
             )
             rr._track["tool"] = str(rec.get("tool") or "")
+            if rr._track["tool"] and hasattr(rr, "_use_tool"):
+                # Offsets from the tool as it is now (a camera tool's saved
+                # offset from before pointed it away from the target).
+                rr._use_tool(rr._track["tool"])
         else:
             rr.set_track_object(on=False, name="", pick=False, added=False, offset=[0.0, 0.0, 0.0], pos_offset=[0.0, 0.0, 0.0])
     except Exception as e:
