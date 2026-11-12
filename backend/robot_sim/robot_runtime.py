@@ -2121,15 +2121,60 @@ def _ik_to_xyzrpy(pose, seed=None):
     return np.asarray(raw, dtype=float).reshape(-1)[:6]
 
 
+JOINT_LIMIT_DEFAULT = 3.05  # rad, the URDF's +/-175 deg
+
+
+def _joint_ranges():
+    """[(lo, hi)] per joint J1..J6 from the IK model (the URDF limits)."""
+    out = []
+    model = robot_ik or robot_sim
+    by_name = {}
+    try:
+        by_name = {getattr(j, "name", None): j for j in model.joint_list}
+    except Exception:
+        by_name = {}
+    for name in _JOINT_ORDER:
+        j = by_name.get(name)
+        lo = getattr(j, "min_angle", None) if j is not None else None
+        hi = getattr(j, "max_angle", None) if j is not None else None
+        try:
+            lo, hi = float(lo), float(hi)
+            if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+                raise ValueError
+        except Exception:
+            lo, hi = -JOINT_LIMIT_DEFAULT, JOINT_LIMIT_DEFAULT
+        out.append((lo, hi))
+    return out
+
+
+def _most_leeway(q):
+    """The same pose with each joint turned by whole turns (the flange and
+    every link end up the same) to the value furthest inside its limits.
+    The IK from the current joints went the short way: with J6 at +174 a
+    Look At needing -90 got +270, past the limit (the arm stopped there)."""
+    if q is None:
+        return None
+    q = np.asarray(q, dtype=float).reshape(-1)[:6].copy()
+    for j, (lo, hi) in enumerate(_joint_ranges()[:q.size]):
+        best, room = q[j], min(q[j] - lo, hi - q[j])
+        for k in (-2, -1, 1, 2):
+            v = q[j] + k * 2.0 * np.pi
+            r = min(v - lo, hi - v)
+            if r > room + 1e-9:
+                best, room = v, r
+        q[j] = best
+    return q
+
+
 def _ik_to_pose(pos, wxyz, seed=None):
     if robot_connected():
         pose = aubo_pose_from_viewer(pos, wxyz)
-        return _ik_to_xyzrpy(pose, seed=seed)
+        return _most_leeway(_ik_to_xyzrpy(pose, seed=seed))
     if use_local_ik():
         q_now = seed
         if q_now is None and robot_sim is not None:
             q_now = _flat(robot_sim.angle_vector(), 6)
-        return solve_backup_ik(pos, wxyz, q_now)
+        return _most_leeway(solve_backup_ik(pos, wxyz, q_now))
     return None
 
 
@@ -2291,8 +2336,34 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
             return None
         return qq
 
+    def _j6_seed(seed_use):
+        """The seed with J6 already turned the way the target needs, taken
+        within its limits: J6 turns the flange about its own axis, so the
+        twist between the seed's flange and the target is J6's change. From
+        +174 a Look At needing +96 more went to +270 (past the limit) and
+        stopped there; this starts it from -90."""
+        try:
+            _set_q(model, seed_use)
+            _p, w0 = _ee_frame(model)
+            rel = (R.from_quat(wxyz_to_xyzw(w0)).inv() * R.from_matrix(rot)).as_matrix()
+            twist = float(np.arctan2(rel[1, 0], rel[0, 0]))
+            lo, hi = _joint_ranges()[5]
+            want = float(seed_use[5]) + twist
+            if lo <= want <= hi:
+                return None
+            alt = np.array(seed_use, dtype=float).copy()
+            alt[5] = _most_leeway(np.r_[alt[:5], want])[5]
+            return alt if lo <= alt[5] <= hi else None
+        except Exception:
+            return None
+
     with _ik_lock:
         try:
+            alt = _j6_seed(seed)
+            if alt is not None:
+                q = _try(alt, "J6 within limits")
+                if q is not None:
+                    return q
             q = _try(seed, "seed" if seed_q is not None else "live")
             if q is not None:
                 return q
