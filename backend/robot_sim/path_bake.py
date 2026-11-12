@@ -2155,8 +2155,12 @@ def _apply_seg_time_profile(seg, t0, t1):
             tau = timeline._bez(0.0, c1[0], c2[0], 1.0, s)
             sm["t"] = t0 + max(0.0, min(1.0, tau)) * span
     elif mode in ("linear", "uniform") or raw_mode in (None, "", "uniform"):
+        # Constant speed: time by distance along the span. Samples are 0.02 m
+        # apart except the last hop, which takes the rest (up to 1.55 x): even
+        # times per sample made that hop 1.5 x faster, a bump at every waypoint.
         for k in range(1, len(samples) - 1):
-            samples[k]["t"] = t0 + span * (float(k) / float(n))
+            frac = arc[k] if arc else float(k) / float(n)
+            samples[k]["t"] = t0 + span * frac
     else:
         for k, sm in enumerate(samples):
             if k == 0 or k == len(samples) - 1:
@@ -2165,6 +2169,22 @@ def _apply_seg_time_profile(seg, t0, t1):
             if u is None:
                 u = float(k) / float(n)
             sm["t"] = t0 + span * timeline._ease_time_frac(mode, float(u))
+
+
+def _even_by_index(seg, samples, t0, t1, tol=1e-4):
+    """A linear span whose interior times are exactly t0 + span * k / n (the
+    old linear timing, never dragged) while its hops differ in length."""
+    if str(seg.get("transition") or "linear") not in ("linear", "uniform") or len(samples) < 3:
+        return False
+    n = len(samples) - 1
+    for k in range(1, n):
+        t = samples[k].get("t")
+        if t is None or samples[k].get("t_lock") is not None:
+            return False
+        if abs(float(t) - (t0 + (t1 - t0) * k / n)) > tol:
+            return False
+    arc = _arc_fracs(samples)
+    return bool(arc) and max(abs(arc[k] - k / n) for k in range(1, n)) > 0.01
 
 
 def assign_sample_times():
@@ -2185,8 +2205,10 @@ def assign_sample_times():
         missing = [
             k for k in range(1, len(samples) - 1) if samples[k].get("t") is None
         ]
-        if missing and len(missing) == len(samples) - 2:
-            # A span with no frames yet takes its transition profile.
+        if (missing and len(missing) == len(samples) - 2) or _even_by_index(seg, samples, t0, t1):
+            # A span with no frames yet takes its transition profile; so does a
+            # linear one still timed evenly per sample (the old linear timing,
+            # fast on its short-or-long last hop), now timed by distance.
             _apply_seg_time_profile(seg, t0, t1)
         else:
             samples[0]["t"] = t0
