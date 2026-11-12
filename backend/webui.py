@@ -1904,9 +1904,14 @@ def api_speed_export():
     except Exception as e:
         print("speed export gimbals failed", e)
         gimbals = []
+    try:
+        runs = wp.gimbal.run_logs()
+    except Exception as e:
+        print("speed export gimbal runs failed", e)
+        runs = []
     doc = {"format": "speed_export", "title": fman.SESSION.get("title"), "units": {"speed": "m/s", "t": "s"},
            "sim_ee": series(data.get("sim")), "real_ee": series(data.get("real")),
-           "overspeed": over, "gimbals": gimbals}
+           "overspeed": over, "gimbals": gimbals, "gimbal_runs": runs}
     path.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")
     return jsonify({"ok": True, "path": str(path), "sim": len(doc["sim_ee"]), "real": len(doc["real_ee"]),
                     "gimbals": len(gimbals), "doc": json.loads(json.dumps(doc, default=str))})

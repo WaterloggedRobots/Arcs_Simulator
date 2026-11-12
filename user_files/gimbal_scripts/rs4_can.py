@@ -17,12 +17,15 @@ yaw / roll / pitch). get_angles(joint=False) gives the camera's WORLD
 The "Sandbox driver" section at the end is what the sandbox calls (from one
 thread only): connect(cfg), get_angles(), move_to(yaw, roll, pitch, duration),
 close(), and optionally get_world() (camera attitude, for Calibrate) and
-track_begin() / track_speed(dps) / track_end() (J1 along the track during a Run). Running this file directly runs the reference demo.
+track_begin() / track_speed(dps) / track_j3(delta, s) / track_end() (J1 and J3
+along the track during a Run; a streamer thread owns the bus in between) and
+track_stats() (longest gap between speed commands, for the speed export). Running this file directly runs the reference demo.
 
 Needs, in the Python that runs the sandbox:  pip install python-can pyusb libusb-package
 """
 import struct
 import sys
+import threading
 import time
 import can
 import functools, usb.core, libusb_package
@@ -232,6 +235,8 @@ def get_angles():
     """(J1, J2, J3) joint angles in degrees (SDK joint yaw, roll, pitch); raises if the read fails."""
     if _gimbal is None:
         raise RuntimeError("not connected")
+    if _stream is not None:
+        return _stream.reading()  # during a run the streamer owns the bus
     a = _gimbal.get_angles()
     if a is None:
         raise RuntimeError("no reply from gimbal (or error reply)")
@@ -244,6 +249,8 @@ def get_world():
     uses it. Raises if the read fails."""
     if _gimbal is None:
         raise RuntimeError("not connected")
+    if _stream is not None:
+        raise RuntimeError("not read during a run")
     a = _gimbal.get_angles(joint=False)
     if a is None:
         raise RuntimeError("no reply from gimbal (or error reply)")
@@ -254,36 +261,169 @@ def move_to(yaw=None, roll=None, pitch=None, duration=2.0):
     """Absolute move; returns at once (True if the gimbal accepted it)."""
     if _gimbal is None:
         raise RuntimeError("not connected")
+    if _stream is not None:
+        # During a run the streamer owns the bus: queued, sent without a reply.
+        ctrl = 0x01 | (0x02 if yaw is None else 0) | (0x04 if roll is None else 0) | (0x08 if pitch is None else 0)
+        raw = lambda a: int(round((a or 0) * 10))
+        _stream.push(0x0E, 0x00, struct.pack("<hhhBB", raw(yaw), raw(roll), raw(pitch), ctrl,
+                                             max(1, min(255, int(duration * 10)))))
+        return True
     return _gimbal.move_abs(yaw=yaw, roll=roll, pitch=pitch, duration=duration, wait=False)
 
 
 # Run drive (optional): during a Run the sandbox turns J1 along the track with
-# speed commands, for any number of turns, and sends J2 / J3 as absolute moves
-# with yaw left out. In 3D ROLL 360 mode the SDK's yaw speed turns only J1 (RS4
-# tests, docs/examples/gimbal/rs4_spin_360.py); the sandbox resends the speed
-# every tick (it must come more often than every 0.5 s) and works out its sign.
-RUN_MODE = 3  # 3D ROLL 360
+# speed commands, for any number of turns, and J3 by incremental steps. In 3D
+# ROLL 360 mode the SDK's yaw speed turns only J1 (RS4 tests,
+# docs/examples/gimbal/rs4_spin_360.py).
+#
+# Between track_begin and track_end a streamer thread owns the bus, as in
+# rs4_spin_360.py (the spin that ran smoothly): it sends the J1 speed every
+# STREAM_TICK_S, always, and asks for the angles WITHOUT waiting for the reply
+# (replies are picked up as they come in). Waiting for replies between speed
+# commands left gaps of a quarter second and more, so J1 turned in bursts.
+# Meanwhile get_angles() returns the streamer's latest reading, and track_j3 /
+# move_to are queued for it (sent without waiting for a reply).
+RUN_MODE = 3            # 3D ROLL 360
+STREAM_TICK_S = 0.05    # speed command period during a run
+STREAM_READ_S = 0.1     # angle request period during a run
+STREAM_STALE_S = 0.6    # no reading this long: get_angles raises
+SPEED_HOLD_S = 1.0      # the sandbox hasn't set a speed this long: J1 stops
+
+
+class _Streamer:
+    def __init__(self, g):
+        self.g = g
+        self.lock = threading.Lock()
+        self.v = 0.0
+        self.v_at = time.time()
+        self.queue = []          # packets to send (built by the caller's thread)
+        self.joint = None
+        self.joint_t = 0.0
+        self.buf = bytearray()
+        self.max_gap = 0.0
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="rs4-stream", daemon=True)
+        self.thread.start()
+
+    def set_speed(self, dps):
+        with self.lock:
+            self.v, self.v_at = float(dps), time.time()
+
+    def push(self, cmd_set, cmd_id, payload):
+        with self.lock:
+            self.queue.append((cmd_set, cmd_id, payload))
+
+    def reading(self):
+        with self.lock:
+            j, at = self.joint, self.joint_t
+        if j is None:
+            raise RuntimeError("no angle reply from the gimbal yet")
+        if time.time() - at > STREAM_STALE_S:
+            raise RuntimeError("no angle reply from the gimbal for %.1f s" % (time.time() - at))
+        return j
+
+    def _poll(self):
+        while True:
+            msg = self.g.bus.recv(timeout=0)
+            if msg is None:
+                break
+            if msg.arbitration_id == RX_ID:
+                self.buf += msg.data
+        buf = self.buf
+        while True:
+            start = buf.find(b"\xAA")
+            if start < 0:
+                buf.clear()
+                return
+            del buf[:start]
+            if len(buf) < 12:
+                return
+            length = struct.unpack_from("<H", buf, 1)[0] & 0x03FF
+            if length < 18 or crc16(bytes(buf[:10])) != struct.unpack_from("<H", buf, 10)[0]:
+                del buf[:1]
+                continue
+            if len(buf) < length:
+                return
+            pkt = bytes(buf[:length])
+            if crc32(pkt[:-4]) != struct.unpack("<I", pkt[-4:])[0]:
+                del buf[:1]
+                continue
+            del buf[:length]
+            data = pkt[12:-4]
+            if len(data) >= 10 and data[0] == 0x0E and data[1] == 0x02 and data[2] == 0x00 and data[3] == 0x02:
+                a = tuple(v / 10 for v in struct.unpack_from("<hhh", data, 4))
+                with self.lock:
+                    self.joint, self.joint_t = a, time.time()
+
+    def _send(self, cmd_set, cmd_id, payload, reply=False):
+        g = self.g
+        g.seq = (g.seq + 1) & 0xFFFF
+        g._send(build_packet(cmd_set, cmd_id, payload, g.seq, 0x03 if reply else 0x00))
+
+    def _run(self):
+        next_tick = next_read = time.time()
+        last = None
+        while not self.stop.is_set():
+            now = time.time()
+            try:
+                with self.lock:
+                    v = self.v if now - self.v_at < SPEED_HOLD_S else 0.0
+                    queue, self.queue = self.queue, []
+                payload = struct.pack("<hhhB", int(v * 10), 0, 0, 0x80 | 0x08)
+                self._send(0x0E, 0x01, payload)
+                for item in queue:
+                    self._send(*item)
+                if now >= next_read:
+                    self._send(0x0E, 0x02, bytes([0x02]), reply=True)
+                    next_read = now + STREAM_READ_S
+                self._poll()
+            except Exception as e:
+                print("rs4 stream:", e)
+            if last is not None:
+                self.max_gap = max(self.max_gap, now - last)
+            last = now
+            next_tick += STREAM_TICK_S
+            if next_tick < time.time():
+                next_tick = time.time()
+            time.sleep(max(0.0, next_tick - time.time()))
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=1.0)
+
+
+_stream = None
 
 
 def track_begin():
-    """Start of a run: 3D ROLL 360 mode for the whole run."""
+    """Start of a run: 3D ROLL 360 mode, then the streamer (J1 speed every 50 ms)."""
+    global _stream
     if _gimbal is None:
         raise RuntimeError("not connected")
+    if _stream is not None:
+        return
+    seed = _gimbal.get_angles()
     _gimbal.set_roll360(RUN_MODE)
+    _stream = _Streamer(_gimbal)
+    if seed is not None:
+        with _stream.lock:
+            _stream.joint, _stream.joint_t = seed, time.time()
 
 
 def track_speed(dps):
-    """J1 speed in deg/s (taken over from the joystick); no reply is awaited."""
+    """J1 speed in deg/s (taken over from the joystick); the streamer resends it."""
     if _gimbal is None:
         raise RuntimeError("not connected")
-    _gimbal.speed(yaw=float(dps))
+    if _stream is None:
+        _gimbal.speed(yaw=float(dps))
+        return
+    _stream.set_speed(dps)
 
 
 # J3 alone during a run (optional): the axis probe showed that in 3D ROLL 360
 # mode an INCREMENTAL pitch move turns only J3 (the pitch speed command turns
 # J1 too), and that a pitch step of +x turns the J3 reading by -x. The sandbox
-# uses it, with J1 by speed, when the handle is tilted (absolute moves are
-# camera angles against gravity there, not joints).
+# uses it, with J1 by speed, during a run.
 J3_INCR_SIGN = -1.0
 
 
@@ -295,11 +435,28 @@ def track_j3(delta, duration=0.5):
     raw = int(round(J3_INCR_SIGN * float(delta) * 10))
     payload = struct.pack("<hhhBB", 0, 0, max(-32768, min(32767, raw)), ctrl,
                           max(1, min(255, int(round(float(duration) * 10)))))
-    _gimbal.send_command(0x0E, 0x00, payload, want_reply=False)
+    if _stream is not None:
+        _stream.push(0x0E, 0x00, payload)
+    else:
+        _gimbal.send_command(0x0E, 0x00, payload, want_reply=False)
+
+
+_last_gap = None
+
+
+def track_stats():
+    """Longest gap between speed commands in this (or the last) run, in s, for the sandbox's log."""
+    return {"max_gap": round(_stream.max_gap if _stream is not None else (_last_gap or 0.0), 3)}
 
 
 def track_end():
-    """End of a run (or pause): stop, hand speed control back, normal mode."""
+    """End of a run (or pause): stop the streamer, stop J1, hand speed control back, normal mode."""
+    global _stream, _last_gap
+    st, _stream = _stream, None
+    if st is not None:
+        st.close()
+        _last_gap = st.max_gap
+        print("rs4 run drive: longest gap between speed commands %.0f ms" % (st.max_gap * 1000))
     if _gimbal is None:
         return
     _gimbal.speed(0, 0, 0)
@@ -308,7 +465,10 @@ def track_end():
 
 
 def close():
-    global _bus, _gimbal
+    global _bus, _gimbal, _stream
+    st, _stream = _stream, None
+    if st is not None:
+        st.close()
     bus, _bus, _gimbal = _bus, None, None
     if bus is not None:
         try:

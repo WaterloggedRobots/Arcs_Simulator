@@ -356,23 +356,41 @@ def keys_for(oid):
     """The frames as played: a live frame ("real pose at run") takes the
     real gimbal's reading from the start of the run (rt["live_read"]), or,
     outside a run (Simulate, scrubbing, speed check, export), the angles that
-    point the camera along world +x, level, from the Sim mount (_live_sim)."""
+    point the camera along world +x, level, from the Sim mount (_live_sim).
+    During a run the frames after a live frame move with it (by the reading
+    minus the angles the live frame was made with), so the run makes the same
+    turns from wherever the gimbal is; they are worked out once, when the run
+    starts (rt["run_keys"])."""
     keys = stored_keys(oid)
     if not any(k.get("live") for k in keys):
         return keys
-    obj = _find(oid)
     rt = _rt.get(str(oid)) or {}
-    out, prev = [], None
+    run = rt.get("run_keys")
+    if run is not None and run[0] == _keys_sig(keys):
+        return [dict(k) for k in run[1]]
+    obj = _find(oid)
+    read = rt.get("live_read")
+    out, prev, shift = [], None, [0.0, 0.0, 0.0]
     for k in keys:
         if k.get("live"):
-            src = rt.get("live_read") or (_live_sim(obj, prev) if obj is not None else None)
+            src = read or (_live_sim(obj, prev) if obj is not None else None)
             if src is not None:
                 ref = prev or [k["yaw"], k["roll"], k["pitch"]]
                 a = [unwrap_yaw(v, r) for v, r in zip(src, ref)]
+                shift = [a[i] - k[x] for i, x in enumerate(AXES)] if read else [0.0, 0.0, 0.0]
                 k = dict(k, yaw=a[0], roll=a[1], pitch=a[2])
+        elif any(shift):
+            k = dict(k, **{x: k[x] + shift[i] for i, x in enumerate(AXES)})
         out.append(k)
         prev = [k["yaw"], k["roll"], k["pitch"]]
+    if read:
+        rt["run_keys"] = (_keys_sig(keys), [dict(k) for k in out])
     return out
+
+
+def _keys_sig(keys):
+    return tuple((round(k["t"], 4), round(k["yaw"], 3), round(k["roll"], 3), round(k["pitch"], 3),
+                  bool(k.get("live")), tuple(k.get("dir") or ())) for k in keys)
 
 
 _live_cache = {}
@@ -1614,7 +1632,22 @@ def _track_j1(rt, keys, t, follow=True):
         tk["last"] = j1
     want = angles_at(keys, t + TRACK_LOOKAHEAD_S)[0]
     if not follow:
-        rate = (want - angles_at(keys, t)[0]) / TRACK_LOOKAHEAD_S
+        # Closed on what has been sent (the speeds times their durations), not
+        # on the reading: the turn adds up to the frames' own, wherever the
+        # RS 4's stabilising puts J1 meanwhile.
+        now = time.time()
+        if "ff" not in tk or t < tk.get("ff_t", t) - 0.5:
+            # A run (or Repeat) starts on the first frame (the start check),
+            # though its first tick comes a moment later.
+            tk["ff"], tk["ff_at"] = (angles_at(keys, 0.0)[0] if t < 1.0 else want_now), now
+        else:
+            tk["ff"] += tk["cmd"] * min(1.0, now - tk["ff_at"])  # the driver holds a speed up to 1 s
+            tk["ff_at"] = now
+        tk["ff_t"] = t
+        # The track's own slope over the next tick, plus what has been sent too
+        # little or too much so far (sharp at the frames: ends on the last one).
+        slope = (angles_at(keys, t + PERIOD_S)[0] - want_now) / PERIOD_S
+        rate = slope + (want_now - tk["ff"]) / TRACK_LOOKAHEAD_S
         rate = max(-TRACK_MAX_DPS, min(TRACK_MAX_DPS, rate))
         if abs(rate) < 0.2:
             rate = 0.0
@@ -1654,6 +1687,64 @@ def _track_j1(rt, keys, t, follow=True):
         rt["cmd_err"] = "J1 speed failed: %s" % e
 
 
+def _run_drive_kind(obj, rt, keys):
+    """How a real run drives the gimbal, decided once when it starts:
+    "joint" (J1 by speed and J3 by steps, only the frames' own changes on top
+    of the RS 4's stabilising; J2 held) when the driver can and the frames
+    don't need J2, or the handle is tilted; else "absolute" (attitude moves,
+    J1 by speed when it turns)."""
+    if not (_can_track(rt) and keys):
+        return "absolute"
+    j3 = any(abs(b["pitch"] - a["pitch"]) > 0.5 for a, b in zip(keys, keys[1:]))
+    if j3 and not _can_j3(rt):
+        return "absolute"
+    j2 = any(abs(b["roll"] - a["roll"]) > 0.5 for a, b in zip(keys, keys[1:]))
+    if j2 and handle_tilt(obj) <= ATTITUDE_TILT_MAX:
+        return "absolute"
+    return "joint"
+
+
+RUN_LOG_MAX = 6000  # samples (10 a second: 10 minutes)
+
+
+def _log_run(obj, rt, keys, t):
+    """One sample of the real run for the speed export: path time, the track
+    as played, the reading, the J1 speed sent and the handle's tilt."""
+    log = rt["run_log"]
+    if len(log["samples"]) >= RUN_LOG_MAX:
+        return
+    want = angles_at(keys, t) if keys else None
+    r = rt["read"] if rt["read_ok"] and rt["read"] else None
+    tk = rt.get("track") or {}
+    log["samples"].append({
+        "t": round(float(t), 3), "at": round(time.time(), 3),
+        "track": None if want is None else [round(v, 2) for v in want],
+        "read": None if r is None else [round(v, 2) for v in r],
+        "j1_have": None if "have" not in tk else round(tk["have"], 2),
+        "j1_cmd": None if "cmd" not in tk else round(tk["cmd"] * tk.get("sign", 1.0), 2),
+        "tilt": round(handle_tilt(obj), 1),
+    })
+
+
+def run_logs():
+    """The last real run of each gimbal (its samples), for the speed export."""
+    out = []
+    for obj in gimbal_objects():
+        rt = _rt.get(str(obj.get("id"))) or {}
+        log = rt.get("run_log")
+        if isinstance(log, dict):
+            stats = None
+            f = getattr(rt.get("mod"), "track_stats", None)
+            if callable(f):
+                try:
+                    stats = f()
+                except Exception:
+                    stats = None
+            out.append(dict(log, id=str(obj.get("id")), name=obj.get("name"),
+                            j1_sign=rt.get("j1_sign"), driver=stats))
+    return out
+
+
 def _drive_run(oid, rt, keys, t, follow=True):
     """During a real run: J1 follows the track with speed commands (the
     driver's track_begin / track_speed / track_end; any number of turns), and
@@ -1661,8 +1752,12 @@ def _drive_run(oid, rt, keys, t, follow=True):
     absolute moves for all three (J1 then can't turn more than 180 deg per move)."""
     if not keys:
         return
-    if _joint_mode(_find(oid), rt):
-        # Handle tilted: J1 by speed, J3 by steps, nothing absolute (J2 holds).
+    if not follow:
+        joint = rt.get("run_drive", "joint" if _joint_mode(_find(oid), rt) else "absolute") == "joint"
+    else:
+        joint = _joint_mode(_find(oid), rt)
+    if joint:
+        # J1 by speed, J3 by steps, nothing absolute (J2 holds).
         if not follow:
             # A run: only the frames' own changes, on top of the RS 4's
             # stabilising (which holds the camera while the arm moves the
@@ -1762,12 +1857,24 @@ def _tick_one(obj, clock):
     if wp.server is not None and obj.get("handle") is not None and obj.get("_model_sig") != _model_sig(obj):
         rebuild(obj)
     # A run starts: live frames take the reading now; cleared when it ends.
-    if real_on and not rt["running"] and rt["read_ok"] and rt["read"]:
-        rt["live_read"] = list(rt["read"])
+    if real_on and not rt["running"]:
+        rt.pop("run_keys", None)
+        if rt["read_ok"] and rt["read"]:
+            rt["live_read"] = list(rt["read"])
     elif not real_on and not rt["running"]:
         rt.pop("live_read", None)
+        rt.pop("run_keys", None)
         rt.pop("j3_ff", None)
+        rt.pop("run_drive", None)
     keys = keys_for(oid)
+    if real_on and not rt["running"]:
+        # One way of driving for the whole run: the handle's tilt changes as the
+        # arm moves, and switching mid-run (absolute moves with a closed loop on
+        # J1, then joints) made J1 turn in bursts.
+        rt["run_drive"] = _run_drive_kind(obj, rt, keys)
+        rt["run_log"] = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "drive": rt["run_drive"],
+                         "tilt_start": round(handle_tilt(obj), 1), "frames": [dict(k) for k in keys], "samples": []}
+        print("gimbal run %s: drive %s (handle %.0f° from upright)" % (oid, rt["run_drive"], handle_tilt(obj)))
     # Simulate: the Sim gimbal's pose before it is put back when it ends, as the
     # arm's is (the playhead's jump back used to set it from the track there).
     playing = _sim_playing()
@@ -1864,6 +1971,8 @@ def _tick_one(obj, clock):
             elif real_on:
                 _drive_run(oid, rt, keys, t, follow=False)
         _read(oid, rt)
+        if real_on and isinstance(rt.get("run_log"), dict):
+            _log_run(obj, rt, keys, t)
         # A new gimbal starts where the real one is (first good reading), unless
         # its pose was set by hand, frames were added or Look At aims it.
         if rt.get("adopt_read") and rt["read_ok"]:
