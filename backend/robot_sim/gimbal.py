@@ -2018,7 +2018,7 @@ def _tick_one(obj, clock):
                     rt["mod"].track_speed(0.0)
                 except Exception:
                     pass
-        if rt.get("pre_run") and (real_on or not _run_waiting()):
+        if rt.get("pre_run") and (real_on or not _run_waiting() or not (keys and keys[0].get("live"))):
             rt.pop("pre_run", None)
         if (not (real_on and not aiming) and "track" in rt and "jmove" not in rt and not hold
                 and not rt.get("start_hold") and not rt.get("pre_run")):
@@ -2045,11 +2045,17 @@ def _tick_one(obj, clock):
                 _jmove_tick(oid, rt)
             elif hold:
                 _drive_run(oid, rt, keys[:1], 0.0)
-            elif (not real_on and "track" not in rt and keys and _keys_move(keys) and _run_waiting()
-                  and rt["read_ok"] and not aiming and _run_drive_kind(obj, rt, keys) == "joint"):
+            elif (not real_on and "track" not in rt and keys and keys[0].get("live") and _keys_move(keys)
+                  and _run_waiting() and rt["read_ok"] and not aiming and "initial_req" not in rt
+                  and not rt.get("start_hold") and _run_drive_kind(obj, rt, keys) == "joint"):
                 # The run will turn J1 by speed: its mode is set now, while it
                 # waits (the RS 4 took about 0.6 s after the mode change to
                 # follow the speed, and J1 then trailed the frames all run).
+                # Only with a real-pose first frame: otherwise the move to the
+                # initial pose is under way, and changing the mode / taking over
+                # the speed under it (an absolute move with the handle upright)
+                # kept the gimbal off its first frame: Run stuck in the move phase.
+                # (With a fixed first frame the hold after the move sets the mode.)
                 _track_j1(rt, keys[:1], 0.0, follow=False)
                 rt["pre_run"] = True
             elif rt.get("pre_run") and not real_on and "track" in rt:
