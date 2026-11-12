@@ -1442,6 +1442,8 @@ def _run_bake_body(spacing_m=None):
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
 
+    if hasattr(rr, "refresh_tool_offsets"):
+        rr.refresh_tool_offsets()  # tools moved on the cursor since: aim from where they are now
     _fill_missing_track_records()
     _reaim_waypoints()
     rebuild_preview()
@@ -1726,6 +1728,8 @@ def _run_optomise_body(spacing_m=None):
         set_spacing(spacing_m)
     if len(wp.waypoints) < 2:
         return {"ok": False, "error": "need at least 2 waypoints", "baked": 0, "total": 0}
+    if hasattr(rr, "refresh_tool_offsets"):
+        rr.refresh_tool_offsets()  # tools moved on the cursor since: aim from where they are now
     _fill_missing_track_records()
     _reaim_waypoints()
     rebuild_preview()

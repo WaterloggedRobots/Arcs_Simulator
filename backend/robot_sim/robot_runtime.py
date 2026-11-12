@@ -1525,6 +1525,41 @@ def _tool_offsets(obj):
     return lp, [float(v) for v in r.as_euler("xyz")]
 
 
+def _tool_by_name(key):
+    key = str(key or "").strip()
+    if not key:
+        return None
+    for obj in _cursor_children():
+        if key in (str(obj.get("id")), str(obj.get("name") or "")):
+            return obj
+    return None
+
+
+def refresh_tool_offsets():
+    """Look At records with a tool take its current local transform: the Sim
+    Arm Cursor's and every waypoint's. Moving the camera on the cursor after
+    picking it left the aim from where it had been (9 cm off: the camera
+    looked past the target). Records typed by hand have no tool and stay."""
+    changed = False
+    recs = [_track] + [w.get("track_object") for w in (getattr(wp, "waypoints", None) or [])]
+    for rec in recs:
+        if not isinstance(rec, dict) or not rec.get("tool"):
+            continue
+        obj = _tool_by_name(rec.get("tool"))
+        if obj is None:
+            continue
+        lp, eu = _tool_offsets(obj)
+        old_p = list(rec.get("pos_offset") or [0.0, 0.0, 0.0])[:3]
+        old_r = list(rec.get("offset") or [0.0, 0.0, 0.0])[:3]
+        if np.allclose(old_p, lp, atol=1e-6) and np.allclose(old_r, eu, atol=1e-6):
+            continue
+        rec["pos_offset"], rec["offset"] = list(lp), list(eu)
+        changed = True
+    if changed:
+        _track["_ik_key"] = None
+    return changed
+
+
 def _use_tool(key):
     """Copy a cursor child's local transform into the Look At offsets."""
     key = str(key or "").strip()
@@ -1682,6 +1717,7 @@ def track_status():
 def tick_track_object():
     if not _track.get("on"):
         return
+    refresh_tool_offsets()
     tgt = _track_target_pos(_track.get("name"))
     _track["valid"] = tgt is not None
     if tgt is None:
