@@ -1017,7 +1017,7 @@ def _timeline_payload_body():
         "keyframes": kfs,
         "samples": samples,
         "spans": spans,
-        "runnable": time_ok,
+        "runnable": bool(time_ok and not any(s.get("status") == "out" for s in samples)),
         "sim_runnable": bake.is_ik_playable(),
         "ik_ok": ok_all,
         "path_distance": bake.path_distance(),

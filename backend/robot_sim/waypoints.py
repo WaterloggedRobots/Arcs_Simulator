@@ -1106,6 +1106,12 @@ def show_dotted_for_selection(idx):
             prev["dotted_out"] = make_dotted_line(
                 prev["pos"], prev["out_ctrl_pos"], name=f"/dot{arms.ns()}/{idx - 1}/out"
             )
+        try:
+            # The span before has two handles: its start's too (clear_dotted_lines hid it).
+            if prev.get("out_ctrl") is not None:
+                prev["out_ctrl"].visible = True
+        except Exception:
+            pass
 
     if idx < len(waypoints) - 1 and waypoints[idx + 1]["mode"] == "arc" and not wp.get("force_fk"):
         nxt = waypoints[idx + 1]
@@ -1196,6 +1202,28 @@ def place_segment_ctrls(i_prev, i_new, force=False):
         _set_ctrl_world(i_new, "in", nxt["in_ctrl_pos"])
     else:
         _set_ctrl_world(i_new, "in", in_pos)
+
+
+def unfold_collapsed_ctrls(idx):
+    """After a waypoint moved: a span next to it whose two handles both sit on
+    their waypoints (a dwell: both ends had the same pose) gets handles at its
+    thirds again, so the curve has its four control points instead of two."""
+    for a in (idx - 1, idx):
+        b = a + 1
+        if a < 0 or b >= len(waypoints) or _clip_boundary(a, b):
+            continue
+        pa = np.asarray(waypoints[a]["pos"], dtype=float).reshape(3)
+        pb = np.asarray(waypoints[b]["pos"], dtype=float).reshape(3)
+        if float(np.linalg.norm(pb - pa)) < 1e-6:
+            continue  # still a dwell
+        oc, ic = waypoints[a].get("out_ctrl_pos"), waypoints[b].get("in_ctrl_pos")
+        on = oc is None or float(np.linalg.norm(np.asarray(oc, dtype=float).reshape(3) - pa)) < 1e-6
+        inn = ic is None or float(np.linalg.norm(np.asarray(ic, dtype=float).reshape(3) - pb)) < 1e-6
+        if on and inn:
+            place_segment_ctrls(a, b, force=True)
+            if selected_idx is not None:
+                show_dotted_for_selection(selected_idx)
+            draw_path()
 
 
 def _ctrl_is_stub(anchor, ctrl_pos):

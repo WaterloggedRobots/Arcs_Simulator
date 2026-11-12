@@ -2552,6 +2552,7 @@
       else if (realState.uploaded && !realState.active) bits.push("buffer on controller");
       else if (realState.uploaded && !realState.armed) bits.push("uploaded — starting");
       else if (phase) bits.push("run: " + phase);
+      if (window.__outOfSpan) bits.push(window.__outOfSpan);
       if (window.__gimSpeedNote) bits.push(window.__gimSpeedNote);
       el.textContent = bits.join("  ·  ");
       el.title = el.textContent;
@@ -7422,6 +7423,7 @@
       window.__lastBake = b;
       window.__gimSpeed = d.gimbal_speed || {};
       window.__gimSpeedNote = d.gimbal_speed_note || "";
+      window.__outOfSpan = d.out_of_span_note || "";
       const ikPts = (b.ik_pts != null) ? b.ik_pts : (b.samples || 0);
       const ikTot = (b.ik_total != null) ? b.ik_total : (b.samples || 0);
       const spdOk = b.speed_ok || 0;

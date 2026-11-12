@@ -924,12 +924,16 @@ def invalidate_from(idx, drop_all=False, keep_times=None):
 
 
 def on_waypoint_moved(idx):
+    """A waypoint or a handle moved (a spatial edit): its spans lose their
+    sample frames (_same_curve), later spans are unbaked and keep theirs."""
     if idx is None:
         return
     try:
         idx = int(idx)
     except Exception:
         return
+    if hasattr(wp, "unfold_collapsed_ctrls"):
+        wp.unfold_collapsed_ctrls(idx)
     invalidate_from(idx)
 
 
@@ -1011,6 +1015,50 @@ def _carry_from(olds, new, i):
     return True
 
 
+def _curve_of(seg):
+    """The span's curve from its sig: its ends' poses and its two handles."""
+    sig = (seg or {}).get("sig")
+    if not sig or len(sig) != 2 or sig[0] is None or sig[1] is None:
+        return None
+    return tuple(sig[0][:4]) + tuple(sig[1][:2])
+
+
+def _same_curve(old, new):
+    a, b = _curve_of(old), _curve_of(new)
+    return a is None or b is None or a == b
+
+
+def out_of_span():
+    """[(span, sample index, t)] of sample frames outside their span's
+    waypoint times (a waypoint dragged past them): red on the timeline, and
+    the path can't be baked or run until they are back inside."""
+    out = []
+    for i, seg in enumerate(segments):
+        if i + 1 >= len(wp.waypoints):
+            break
+        ta, tb = wp.waypoints[i].get("t"), wp.waypoints[i + 1].get("t")
+        if ta is None or tb is None:
+            continue
+        sms = seg.get("samples") or []
+        for k, sm in enumerate(sms[1:-1], start=1):
+            t = sm.get("t")
+            if t is not None and not (float(ta) - 1e-6 <= float(t) <= float(tb) + 1e-6):
+                out.append((i, k, float(t)))
+    return out
+
+
+def out_of_span_text(out=None):
+    out = out_of_span() if out is None else out
+    if not out:
+        return ""
+    spans = sorted({i for i, _k, _t in out})
+    return ("bake failed: %d sample frame%s outside the waypoint times of span%s %s (drag %s, or the "
+            "waypoint, back so %s between the span's waypoints)" % (
+                len(out), "" if len(out) == 1 else "s", "" if len(spans) == 1 else "s",
+                ", ".join("%d-%d" % (i + 1, i + 2) for i in spans),
+                "it" if len(out) == 1 else "them", "it is" if len(out) == 1 else "they are"))
+
+
 def _shown(seg):
     """The span's sample frames were on the timeline (baked, or kept from a bake)."""
     return bool(seg.get("status") == "ok" or seg.get("kept_times"))
@@ -1029,6 +1077,8 @@ def _carry_sample_times(old, new, i):
     news = new.get("samples") or []
     if len(olds) < 3 or len(news) < 3 or i + 1 >= len(wp.waypoints):
         return False
+    if not _same_curve(old, new):
+        return False  # the span's curve was edited: its frames go (only timing edits keep them)
     t0 = float(wp.waypoints[i].get("t") or 0.0)
     t1 = float(wp.waypoints[i + 1].get("t") or t0)
     # Same span only: after an insert or delete, index i is a different span.
@@ -1262,6 +1312,8 @@ def _run_bake_body(spacing_m=None):
     # Re-bake from the first hole so a pending first span cannot sit
     # in front of leftover "ok" spans from an older waypoint order.
     hole = 0
+    out = out_of_span()
+    out_segs = {i for i, _k, _t in out}
     for i, seg in enumerate(segments):
         sig = (_wp_sig(i), _wp_sig(i + 1))
         qs = [sm for sm in (seg.get("samples") or []) if sm.get("q") is not None]
@@ -1270,6 +1322,7 @@ def _run_bake_body(spacing_m=None):
             and seg.get("sig") == sig
             and seg.get("spacing") == spacing
             and len(qs) >= 2
+            and i not in out_segs
         )
         if not good:
             hole = i
@@ -1283,6 +1336,13 @@ def _run_bake_body(spacing_m=None):
             baked += 1
             continue
         if failed_at is not None:
+            break
+        if i in out_segs:
+            # Sample frames outside the span: it fails (red on the timeline).
+            seg["status"] = "fail"
+            seg["fail_index"] = next(k for j, k, _t in out if j == i)
+            failed_at = i
+            print("bake fail seg", i, "sample frames outside the span")
             break
         ok = True
         if _seg_force_fk(i) or seg.get("force_fk"):
@@ -1421,6 +1481,7 @@ def _run_bake_body(spacing_m=None):
         "total": len(segments),
         "failed_at": failed_at,
         "spacing": spacing,
+        "error": out_of_span_text(out) if failed_at is not None and failed_at in out_segs else None,
     }
 
 
@@ -2701,6 +2762,8 @@ def is_runnable():
     if not segments:
         return False
     if not is_ik_playable():
+        return False
+    if out_of_span():
         return False
     if any(s.get("timing") == "too_fast" for s in segments):
         return False
