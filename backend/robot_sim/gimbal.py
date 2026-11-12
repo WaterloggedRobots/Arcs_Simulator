@@ -1507,6 +1507,40 @@ J3_MAX_DPS = 180.0
 J3_SETTLE_S = 0.15  # after a step, before the next reading counts (reads come at 10 Hz)
 
 
+def _keys_move(keys):
+    """Do J1 or J3 change anywhere in these frames?"""
+    return any(abs(b["yaw"] - a["yaw"]) > 0.5 or abs(b["pitch"] - a["pitch"]) > 0.5
+               for a, b in zip(keys, keys[1:]))
+
+
+def _track_j3_ff(rt, keys, t):
+    """J3 during a run in joint drive: steps of the track's own change only
+    (no correction from the reading, which the RS 4's stabilising moves)."""
+    if "track" not in rt:
+        return
+    ff = rt.get("j3_ff")
+    if ff is None or t < ff["t"] - 0.5:
+        # A run (or a Repeat) starts with the gimbal on the first frame (the start check).
+        ff = rt["j3_ff"] = {"t": t, "sent": angles_at(keys, 0.0)[2]}
+    ff["t"] = t
+    now = time.time()
+    if now < rt.get("j3_busy", 0.0):
+        return
+    goal = angles_at(keys, t + J3_STEP_S)[2]
+    d = goal - ff["sent"]
+    if abs(d) < J3_MIN_DEG:
+        return
+    d = max(-STEP_MAX_DEG, min(STEP_MAX_DEG, d))
+    dur = max(J3_STEP_S, abs(d) / J3_MAX_DPS)
+    try:
+        rt["mod"].track_j3(d, dur)
+        ff["sent"] += d
+        rt["j3_busy"] = now + dur
+    except Exception as e:
+        rt["cmd_err"] = "J3 step failed: %s" % e
+        rt["j3_busy"] = now + 0.5
+
+
 def _track_j3(rt, keys, t):
     """J3 during a run in joint mode: a step from the J3 reading to the track
     J3_STEP_S ahead, sent when the last one is done (closed loop on the reading)."""
@@ -1540,9 +1574,12 @@ def _track_end(rt):
         rt["cmd_err"] = "run end failed: %s" % e
 
 
-def _track_j1(rt, keys, t):
+def _track_j1(rt, keys, t, follow=True):
     """J1 during a run: follow the track (any number of turns) with speed
-    commands, resent every tick and closing on the unwrapped J1 reading."""
+    commands, resent every tick and closing on the unwrapped J1 reading.
+    follow=False (a run in joint drive): only the track's own rate, no
+    correction from the reading (the RS 4 stabilises J1 against the arm
+    turning the handle; correcting fought it and spun J1)."""
     mod = rt["mod"]
     j1 = rt["read"][0] if rt["read_ok"] and rt["read"] else None
     want_now = angles_at(keys, t)[0]
@@ -1567,7 +1604,7 @@ def _track_j1(rt, keys, t):
         tk["moved"] += d
         # J1 turning against the command: the command is the other way round
         # (learnt once, not from readings older than the last change).
-        if (not tk["learnt"] and time.time() >= tk["settle"] and abs(tk["moved"]) > 6
+        if (not tk["learnt"] and time.time() >= tk["settle"] and abs(tk["moved"]) > 6 and _mount_still(rt)
                 and abs(tk["cmd"]) > 5 and (tk["moved"] > 0) != (tk["cmd"] > 0)):
             tk["sign"] = -tk["sign"]
             tk["learnt"] = True
@@ -1576,6 +1613,17 @@ def _track_j1(rt, keys, t):
     if j1 is not None:
         tk["last"] = j1
     want = angles_at(keys, t + TRACK_LOOKAHEAD_S)[0]
+    if not follow:
+        rate = (want - angles_at(keys, t)[0]) / TRACK_LOOKAHEAD_S
+        rate = max(-TRACK_MAX_DPS, min(TRACK_MAX_DPS, rate))
+        if abs(rate) < 0.2:
+            rate = 0.0
+        try:
+            mod.track_speed(rate * tk["sign"])
+            tk["cmd"] = rate
+        except Exception as e:
+            rt["cmd_err"] = "J1 speed failed: %s" % e
+        return
     # Runaway guard: J1 getting further and further from where it should be
     # (the command's direction learnt the wrong way round, e.g. while the RS 4
     # stabilised against the arm turning the handle): stop, forget the
@@ -1606,7 +1654,7 @@ def _track_j1(rt, keys, t):
         rt["cmd_err"] = "J1 speed failed: %s" % e
 
 
-def _drive_run(oid, rt, keys, t):
+def _drive_run(oid, rt, keys, t, follow=True):
     """During a real run: J1 follows the track with speed commands (the
     driver's track_begin / track_speed / track_end; any number of turns), and
     J2 / J3 get the next frame, timed to arrive on it. A driver without them:
@@ -1615,6 +1663,16 @@ def _drive_run(oid, rt, keys, t):
         return
     if _joint_mode(_find(oid), rt):
         # Handle tilted: J1 by speed, J3 by steps, nothing absolute (J2 holds).
+        if not follow:
+            # A run: only the frames' own changes, on top of the RS 4's
+            # stabilising (which holds the camera while the arm moves the
+            # handle); frames that never change send nothing at all.
+            if _keys_move(keys):
+                _track_j1(rt, keys, t, follow=False)
+                _track_j3_ff(rt, keys, t)
+            elif "track" in rt:
+                _track_end(rt)  # nothing to turn: the gimbal's own mode, as with Move to pose
+            return
         _track_j1(rt, keys, t)
         _track_j3(rt, keys, t)
         return
@@ -1708,6 +1766,7 @@ def _tick_one(obj, clock):
         rt["live_read"] = list(rt["read"])
     elif not real_on and not rt["running"]:
         rt.pop("live_read", None)
+        rt.pop("j3_ff", None)
     keys = keys_for(oid)
     # Simulate: the Sim gimbal's pose before it is put back when it ends, as the
     # arm's is (the playhead's jump back used to set it from the track there).
@@ -1803,7 +1862,7 @@ def _tick_one(obj, clock):
             if real_on and aiming:
                 _drive_look(oid, rt, g["target"])
             elif real_on:
-                _drive_run(oid, rt, keys, t)
+                _drive_run(oid, rt, keys, t, follow=False)
         _read(oid, rt)
         # A new gimbal starts where the real one is (first good reading), unless
         # its pose was set by hand, frames were added or Look At aims it.

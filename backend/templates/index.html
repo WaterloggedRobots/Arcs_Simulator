@@ -3292,6 +3292,7 @@
         const kfColor = {
           unbaked: "#f2f2f2", empty: "#f2f2f2", pending: "#f2f2f2",
           fail: "#e25b5b",
+          out: "#ff3b3b",  // a sample outside its span (its waypoint dragged past it)
           uncalc: "#8d8e96", baked: "#8d8e96",
           too_fast: "#f08a3a",
           ok: "#6ee08a",
@@ -4599,6 +4600,11 @@
     });
 
     scrollEl.addEventListener("pointerdown", (e) => {
+      // A click on the timeline takes the keys back from a field (Properties,
+      // a select...): the canvas can't take focus, so Delete / Ctrl+C / V
+      // went on to the last field typed in and never reached the frames.
+      const ae = document.activeElement;
+      if (ae && ae !== document.body && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || "")) ae.blur();
       if (e.button === 2) return;
       const otherArm = hitArmRow(e.clientY);
       if (otherArm) {

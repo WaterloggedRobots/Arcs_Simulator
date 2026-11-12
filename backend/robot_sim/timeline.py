@@ -950,6 +950,11 @@ def _timeline_payload_body():
                     st = "uncalc"
                 else:
                     st = "unbaked"
+            # Out of its span (a waypoint dragged past it): red until it is put back or rebaked.
+            if i + 1 < len(wp.waypoints):
+                ta, tb = wp.waypoints[i].get("t"), wp.waypoints[i + 1].get("t")
+                if ta is not None and tb is not None and not (float(ta) - 1e-6 <= t <= float(tb) + 1e-6):
+                    st = "out"
             samples.append({
                 "seg": i,
                 "index": k,
