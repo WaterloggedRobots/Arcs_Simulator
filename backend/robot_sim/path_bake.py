@@ -1168,20 +1168,35 @@ def bake_seed_q():
     return np.deg2rad(np.array(BAKE_SEED_DEG, dtype=float))
 
 
-def _unwrap_toward(q, ref):
+def _joint_ranges():
+    try:
+        return rr._joint_ranges()
+    except Exception:
+        return [(-3.05, 3.05)] * 6
+
+
+def _unwrap_toward(q, ref, limits=True):
+    """q with each joint turned by whole turns to the value nearest ref that
+    is inside the joint's limits (limits=False: nearest ref, any value).
+    Nearest alone took J6 out of range: the path's first sample was turned
+    toward wherever the sim arm was (-91 became +268), and the joint blend
+    between two waypoints went the short way past -175 (+111 as -249)."""
     q = np.asarray(q, dtype=float).reshape(-1)[:6]
     if ref is None:
         return q
     ref = np.asarray(ref, dtype=float).reshape(-1)[:6]
     out = q.copy()
-    for j in range(6):
+    ranges = _joint_ranges() if limits else None
+    for j in range(min(out.size, ref.size)):
         d = out[j] - ref[j]
-        while d > np.pi:
-            out[j] -= 2.0 * np.pi
-            d = out[j] - ref[j]
-        while d < -np.pi:
-            out[j] += 2.0 * np.pi
-            d = out[j] - ref[j]
+        near = out[j] - 2.0 * np.pi * np.round(d / (2.0 * np.pi))
+        if ranges is None:
+            out[j] = near
+            continue
+        lo, hi = ranges[j]
+        cands = [near + k * 2.0 * np.pi for k in (-2, -1, 0, 1, 2)]
+        inside = [v for v in cands if lo - 1e-9 <= v <= hi + 1e-9]
+        out[j] = min(inside or [near], key=lambda v: abs(v - ref[j]))
     return out
 
 
@@ -1236,7 +1251,7 @@ def _q_same(a, b, tol=0.012):
         return False
     a = np.asarray(a, dtype=float).reshape(-1)[:6]
     b = np.asarray(b, dtype=float).reshape(-1)[:6]
-    return float(np.max(np.abs(_unwrap_toward(a, b) - b))) <= tol
+    return float(np.max(np.abs(_unwrap_toward(a, b, limits=False) - b))) <= tol
 
 
 def _ik_try(sm, seed=None):
