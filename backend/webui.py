@@ -606,7 +606,7 @@ def api_status():
         "gimbal_speed": wp.gimbal.speed_status(),
         "real_side": real_mirror.view(),
         "gimbal_speed_note": wp.gimbal.speed_summary(),
-        "out_of_span_note": bake.out_of_span_text() if hasattr(bake, "out_of_span_text") else "",
+        "out_of_span_note": bake.bake_note() if hasattr(bake, "bake_note") else "",
         "arms": heavy.get("arms") or [],
         "active_arm": arms.active(),
         "arm_rows": heavy.get("arm_rows") or [],

@@ -1328,13 +1328,109 @@ def is_baking():
     return bool(_baking)
 
 
+def _limit_text(i):
+    """Why span i failed on a joint limit, for the status line; None otherwise."""
+    if i is None or not (0 <= i < len(segments)):
+        return None
+    lf = segments[i].get("limit_fail")
+    if not lf:
+        return None
+    lo, hi = _joint_ranges()[lf["joint"]]
+    t = lf.get("t")
+    return ("bake failed: span %d-%d needs J%d at %.0f deg%s, past its limit (%.0f to %.0f deg), in either "
+            "arm configuration: move a waypoint or turn its rotation so the joint stays in range" % (
+                i + 1, i + 2, lf["joint"] + 1, np.degrees(lf["value"]),
+                "" if t is None else " at %.2f s" % float(t), np.degrees(lo), np.degrees(hi)))
+
+
+def bake_note():
+    """The status line's bake hint: frames out of their span, or a span past a joint limit."""
+    txt = out_of_span_text()
+    if txt:
+        return txt
+    for i, seg in enumerate(segments):
+        if seg.get("status") == "fail" and seg.get("limit_fail"):
+            return _limit_text(i) or ""
+    return ""
+
+
+def _over_limit(q, tol=1e-3):
+    """(joint index, value) of the first joint outside its limits, or None."""
+    for j, (lo, hi) in enumerate(_joint_ranges()[:len(q)]):
+        if not (lo - tol <= float(q[j]) <= hi + tol):
+            return j, float(q[j])
+    return None
+
+
+def _standard_config_q(w):
+    """The waypoint's joints solved from the arm's standard pose (home), the
+    configuration with the shoulder facing the target; None if IK fails."""
+    if w.get("pos") is None or w.get("wxyz") is None:
+        return None
+    try:
+        home = np.deg2rad(np.array(rr.HOME_Q_DEG, dtype=float))
+        ee_pos, ee_wxyz = rr._ee_from_cursor(w["pos"], w["wxyz"], "sim")
+        q = rr._ik_to_pose(ee_pos, ee_wxyz, seed=home)
+        return None if q is None else np.asarray(q, dtype=float).reshape(-1)[:6]
+    except Exception as e:
+        print("standard configuration IK failed:", e)
+        return None
+
+
+def _retry_in_standard_config(res):
+    """A span that failed on a joint limit: its waypoints' joints solved again
+    from the standard pose (a waypoint with the shoulder turned back over the
+    base made J1 pass 180 deg on a move that fits the other way round), and
+    the bake run again. Kept only if it then bakes; else put back."""
+    i = res.get("failed_at")
+    if i is None or not (0 <= i < len(segments)) or not segments[i].get("limit_fail"):
+        return None
+    saved, changed = {}, False
+    for idx in (i, i + 1):
+        if idx >= len(wp.waypoints):
+            continue
+        w = wp.waypoints[idx]
+        q_new = _standard_config_q(w)
+        q_old = w.get("q")
+        saved[idx] = (None if q_old is None else np.array(q_old, dtype=float), w.get("q_dirty"))
+        if q_new is None or _over_limit(q_new) is not None:
+            continue
+        if q_old is not None and float(np.max(np.abs(np.asarray(q_old, dtype=float)[:6] - q_new))) < 0.5:
+            continue  # the same configuration
+        w["q"], w["q_dirty"], changed = q_new, False, True
+    if not changed:
+        return None
+
+    def _rebake():
+        for j in range(max(0, i - 1), len(segments)):
+            segments[j]["status"] = "pending"
+            segments[j].pop("limit_fail", None)
+        return _run_bake_body(None)
+
+    print("bake: span %d-%d hit a joint limit; trying the waypoints in the standard arm configuration" % (i + 1, i + 2))
+    again = _rebake()
+    if again.get("ok"):
+        again["note"] = ("span %d-%d hit a joint limit, so its waypoints were given the other arm "
+                         "configuration (shoulder facing the target)" % (i + 1, i + 2))
+        print("bake:", again["note"])
+        return again
+    for idx, (q_old, dirty) in saved.items():
+        wp.waypoints[idx]["q"], wp.waypoints[idx]["q_dirty"] = q_old, dirty
+    back = _rebake()
+    back["error"] = back.get("error") or res.get("error")
+    return back
+
+
 def run_bake(spacing_m=None):
     global _speed_valid, _baking
     if _baking:
         return {"ok": False, "error": "bake in progress", "baked": 0, "total": len(segments)}
     _baking = True
     try:
-        return _run_bake_body(spacing_m)
+        res = _run_bake_body(spacing_m)
+        if not res.get("ok"):
+            res = _retry_in_standard_config(res) or res
+        return res
     finally:
         _baking = False
 
@@ -1388,6 +1484,8 @@ def _run_bake_body(spacing_m=None):
             continue
         if failed_at is not None:
             break
+        seg.pop("limit_fail", None)
+        seg["fail_index"] = None
         if i in out_segs:
             # Sample frames outside the span: it fails (red on the timeline).
             seg["status"] = "fail"
@@ -1466,6 +1564,15 @@ def _run_bake_body(spacing_m=None):
                 ok = False
                 seg["fail_index"] = k
                 break
+            over = _over_limit(q)
+            if over is not None:
+                # Past a joint limit (the sim arm stops there and the real arm
+                # refuses it): this arm configuration can't make the move.
+                print("bake fail joint limit seg", i, "sample", k, "J%d %.1f deg" % (over[0] + 1, np.degrees(over[1])))
+                seg["limit_fail"] = {"joint": over[0], "value": float(over[1]), "t": sm.get("t")}
+                ok = False
+                seg["fail_index"] = k
+                break
             if k > 0:
                 prev_sm = sms[k - 1]
                 try:
@@ -1532,7 +1639,8 @@ def _run_bake_body(spacing_m=None):
         "total": len(segments),
         "failed_at": failed_at,
         "spacing": spacing,
-        "error": out_of_span_text(out) if failed_at is not None and failed_at in out_segs else None,
+        "error": (out_of_span_text(out) if failed_at is not None and failed_at in out_segs
+                  else _limit_text(failed_at)),
     }
 
 
