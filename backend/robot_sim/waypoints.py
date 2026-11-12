@@ -289,11 +289,22 @@ def _bind_waypoint_gizmo(idx):
     return gizmo
 
 
+def _selected_ctrl_handle():
+    if selected_ctrl is None or not (0 <= selected_ctrl[0] < len(waypoints)):
+        return None
+    return waypoints[selected_ctrl[0]].get("%s_ctrl" % selected_ctrl[1])
+
+
 def _drop_ctrl_gizmo(ctrl):
     if ctrl is None:
         return
     if getattr(ctrl, "_drag_hold", False):
-        return
+        # Only the selected handle's gizmo is kept while it is dragged: the
+        # flag is cleared on drag end, which doesn't always come, and a stale
+        # one left a gizmo on every handle selected after a drag.
+        if ctrl is _selected_ctrl_handle():
+            return
+        ctrl._drag_hold = False
     old = getattr(ctrl, "_gizmo", None)
     if old is None:
         return
@@ -404,12 +415,11 @@ def _arm_drag_release(gizmo):
 
 
 def _recent_gizmo_drag(window=0.6):
+    """A gizmo moved in the last `window` s (a click then ends the drag, not
+    the selection). Not a handle's drag flag on its own: it is cleared on drag
+    end, which doesn't always come, and a stale one made every deselect click
+    after a handle drag only end the drag (the handle's gizmo stayed)."""
     import time as _t
-    if selected_ctrl is not None:
-        item = waypoints[selected_ctrl[0]] if 0 <= selected_ctrl[0] < len(waypoints) else None
-        ctrl = None if item is None else item.get("%s_ctrl" % selected_ctrl[1])
-        if ctrl is not None and getattr(ctrl, "_drag_hold", False):
-            return True
     return (_t.time() - float(_gizmo_last_move or 0)) < window
 
 
@@ -3086,6 +3096,7 @@ def select_control(idx, which):
         return
     if selected_idx != idx:
         select_waypoint(idx)
+    selected_ctrl = None  # every other handle's gizmo goes, dragged or not
     hide_all_ctrl_gizmos()
     ctrl = waypoints[idx].get(f"{which}_ctrl")
     if ctrl is None:
@@ -3105,6 +3116,7 @@ def deselect_all():
     selected_obj_ids = []
     selected_wp_idxs = []
     _selection = []
+    selected_ctrl = None  # before the gizmos go: a dragged handle's is kept only while selected
     # Also clears selection_kind, so the panel falls back to the actual robot.
     _sync_selection_globals()
     simulatorview._clear_measure_line()
