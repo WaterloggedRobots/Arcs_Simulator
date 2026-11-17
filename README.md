@@ -289,6 +289,10 @@ An OpenCV camera script can publish targets as module variables, read every fram
 
 By default each point is `[x_px, y_px, depth_m]` in the camera image, the same format as the older `tracked_cam_pos` (which is still read as `targets` when a script has no `targets`). Set `target_space = "camera"` for metres in the OpenCV camera frame (x right, y down, z forward), or `"world"` for world metres. All points are listed in the **Tracked Points** tab of the hierarchy, primary target first; its eye button hides the spheres.
 
+Clicking the live image of a camera pane calls the script's `set_target(u, v)` (image pixels). **Dragging a rectangle** over the live image calls `set_box(x0, y0, x1, y1)` once (a script without `set_box` gets the box's centre as a click). The pane fills its area by cropping the image's sides, so a target must be inside the visible part to be boxed.
+
+**Orbbec box tracking** (`docs/examples/cam_scripts/orbbec_box_track.py`): drag a box around the object in the camera view; an OpenCV tracker (CSRT with opencv-contrib-python, else KCF / MIL) follows it every frame, and its distance is the median depth of the box's middle, from the Orbbec depth stream aligned to colour. The primary target is published in camera metres (`target_space = "camera"`, from the colour intrinsics), so 🎯 **select primary target** in Look At aims at it in 3D. A click boxes a square of `CLICK_BOX_PX` around the point; when the tracker loses the object the box turns red and the primary target is cleared until a new box is dragged. It needs `pyorbbecsdk` (v1 or v2); without it, or with no Orbbec plugged in, it opens webcam `WEBCAM_INDEX` with no depth (pixel targets, `FALLBACK_DEPTH_M` if set). Run it on its own (`python orbbec_box_track.py`) to try it in an OpenCV window.
+
 ### Look At
 
 *(Formerly "Tracker" / "Track Object".)* Given a target, the Sim Arm Cursor keeps **looking at** a designated object — both while you drag it by hand and along the path segments it generates. Combined with an OpenCV camera, the arm can track and centre real targets as well as simulated ones *(in progress)*.
@@ -538,7 +542,7 @@ user_files/               ships with the app, editable by the user
   imported_meshes/        meshes added with Import mesh
 packaging/deck/           ArcsDeck.exe build: PyInstaller spec, build requirements, build_deck.bat
 docs/                     not needed at runtime
-  examples/cam_scripts/   example camera scripts (YOLO / RealSense), models/ holds yolov8n.pt
+  examples/cam_scripts/   example camera scripts (YOLO / RealSense / Orbbec box tracking), models/ holds yolov8n.pt
   examples/gimbal/        rs4_axis_probe.py: which RS4 command turns one joint only; rs4_spin_360.py: RS4 closed-loop camera roll (measured 360°, 3D ROLL 360); rs4_spin_test.py: diagnostics (wrap, direction, resend timing)
   CameraRemoteCommand-2.00.02/   Sony PTP SDK reference and examples
   archive/, demo/, export-format/, Function List, slides, SDK manual, bug log

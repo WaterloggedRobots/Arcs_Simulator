@@ -1831,7 +1831,11 @@ def api_cam_click():
     data = request.get_json(silent=True) or {}
     ok = False
     if hasattr(wp, "set_camera_click"):
-        ok = bool(wp.set_camera_click(data.get("id"), data.get("u"), data.get("v")))
+        box = data.get("box")
+        if isinstance(box, list) and len(box) >= 4:
+            ok = bool(wp.set_camera_click(data.get("id"), None, None, box=box))
+        else:
+            ok = bool(wp.set_camera_click(data.get("id"), data.get("u"), data.get("v")))
     return jsonify({"ok": ok})
 
 

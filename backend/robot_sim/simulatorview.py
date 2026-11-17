@@ -2038,6 +2038,13 @@ def _tick_cv_cameras():
                 continue
         frame = None
         try:
+            box = cam.pop("_box", None)
+            if box is not None:
+                # A dragged rectangle: once. A script without set_box gets its centre as a click.
+                if hasattr(mod, "set_box"):
+                    mod.set_box(*box)
+                else:
+                    cam["click"] = [(box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0]
             clk = cam.get("click")
             if clk and len(clk) >= 2:
                 if hasattr(mod, "set_target"):
@@ -2117,7 +2124,10 @@ def tick_cameras():
     _ensure_cv_thread()
 
 
-def set_camera_click(oid, u, v):
+def set_camera_click(oid, u, v, box=None):
+    """A click (u, v) or a dragged box [x0, y0, x1, y1] in a camera pane
+    (image pixels). The click is kept and passed to the script every frame;
+    a box is passed once (`set_box`), and replaces any click."""
     for obj in wp.scene_objects:
         if obj.get("id") != oid:
             continue
@@ -2125,6 +2135,13 @@ def set_camera_click(oid, u, v):
         if not isinstance(cam, dict):
             cam = {}
             obj["camera"] = cam
+        if box is not None:
+            b = [float(x) for x in list(box)[:4]]
+            if len(b) < 4:
+                return False
+            cam["_box"] = b
+            cam.pop("click", None)
+            return True
         cam["click"] = [float(u), float(v)]
         return True
     return False

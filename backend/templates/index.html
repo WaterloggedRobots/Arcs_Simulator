@@ -538,7 +538,16 @@
     }
     #camViewport.all-mode #camFrame { display: none !important; }
     #camViewport.all-mode #camSim,
-    #camViewport.all-mode #camClickDot { display: none !important; }
+    #camViewport.all-mode #camClickDot,
+    #camViewport.all-mode #camDragBox { display: none !important; }
+    #camDragBox {
+      position: absolute;
+      border: 2px dashed #ffe14d;
+      box-shadow: 0 0 0 1px #000;
+      pointer-events: none;
+      z-index: 8;
+      display: none;
+    }
     #camViewport.live-only #camIframe { z-index: 0; }
     #camViewport.live-only #camFrame { z-index: 2; }
     #camViewport.sim-only #camIframe { z-index: 2; }
@@ -2050,6 +2059,7 @@
           <div id="camSimRow"></div>
           <div id="camLiveRow"></div>
           <div id="camClickDot"></div>
+          <div id="camDragBox"></div>
         </div>
         <div id="camStack"></div>
       </div>
@@ -2908,35 +2918,86 @@
       const img = document.getElementById("camFrame");
       const dot = document.getElementById("camClickDot");
       if (!vp || !img) return;
+      const box = document.getElementById("camDragBox");
       vp.style.pointerEvents = "auto";
-      vp.addEventListener("click", (e) => {
+      // Image pixels of a client point, or null outside the live image.
+      function toImage(cx, cy) {
         const media = (!img.hidden && img.naturalWidth) ? img : null;
-        if (!media) return;
+        if (!media) return null;
         const r = media.getBoundingClientRect();
-        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+        if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return null;
         const nw = media.naturalWidth || 640;
         const nh = media.naturalHeight || 480;
         const scale = Math.max(r.width / nw, r.height / nh);
-        const dw = nw * scale, dh = nh * scale;
-        const ox = r.left + (r.width - dw) / 2;
-        const oy = r.top + (r.height - dh) / 2;
-        const u = (e.clientX - ox) / scale;
-        const v = (e.clientY - oy) / scale;
-        if (u < 0 || v < 0 || u >= nw || v >= nh) return;
-        const pr = vp.getBoundingClientRect();
-        if (dot) {
-          dot.style.display = "block";
-          dot.style.left = (e.clientX - pr.left) + "px";
-          dot.style.top = (e.clientY - pr.top) + "px";
-        }
+        const ox = r.left + (r.width - nw * scale) / 2;
+        const oy = r.top + (r.height - nh * scale) / 2;
+        const u = (cx - ox) / scale;
+        const v = (cy - oy) / scale;
+        if (u < 0 || v < 0 || u >= nw || v >= nh) return null;
+        return { u: u, v: v, nw: nw, nh: nh };
+      }
+      function camId() {
         const tab = window.__camTab;
-        const oid = (tab && tab !== "all") ? tab : (window.__lastCamId || "");
+        return (tab && tab !== "all") ? tab : (window.__lastCamId || "");
+      }
+      function send(body) {
         fetch("/api/cam_click", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: oid, u: u, v: v, w: nw, h: nh }),
+          body: JSON.stringify(Object.assign({ id: camId() }, body)),
         });
+      }
+      // Drag a rectangle around a target (a tracking script follows it, e.g.
+      // orbbec_box_track.py); a click without dragging sends a point.
+      let drag = null;
+      vp.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        const p = toImage(e.clientX, e.clientY);
+        if (!p) return;
+        drag = { x: e.clientX, y: e.clientY, p: p, moved: false };
+        try { vp.setPointerCapture(e.pointerId); } catch (err) {}
+        e.preventDefault();
       });
+      vp.addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+        if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+        drag.moved = true;
+        if (!box) return;
+        const pr = vp.getBoundingClientRect();
+        box.style.display = "block";
+        box.style.left = (Math.min(e.clientX, drag.x) - pr.left) + "px";
+        box.style.top = (Math.min(e.clientY, drag.y) - pr.top) + "px";
+        box.style.width = Math.abs(dx) + "px";
+        box.style.height = Math.abs(dy) + "px";
+      });
+      function finish(e) {
+        if (!drag) return;
+        const d = drag;
+        drag = null;
+        try { vp.releasePointerCapture(e.pointerId); } catch (err) {}
+        if (box) box.style.display = "none";
+        if (e.type === "pointercancel") return;
+        const pr = vp.getBoundingClientRect();
+        if (d.moved) {
+          // Clamp the far corner to the image, then send the box in image pixels.
+          const r = img.getBoundingClientRect();
+          const q = toImage(Math.min(Math.max(e.clientX, r.left), r.right - 0.5),
+                            Math.min(Math.max(e.clientY, r.top), r.bottom - 0.5));
+          if (!q) return;
+          if (dot) dot.style.display = "none";
+          send({ box: [d.p.u, d.p.v, q.u, q.v], w: q.nw, h: q.nh });
+          return;
+        }
+        if (dot) {
+          dot.style.display = "block";
+          dot.style.left = (d.x - pr.left) + "px";
+          dot.style.top = (d.y - pr.top) + "px";
+        }
+        send({ u: d.p.u, v: d.p.v, w: d.p.nw, h: d.p.nh });
+      }
+      vp.addEventListener("pointerup", finish);
+      vp.addEventListener("pointercancel", finish);
     })();
 
     function isGimbalTrack(tr) {

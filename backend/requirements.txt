@@ -21,6 +21,10 @@ scikit-robot>=0.0.44
 viser>=0.2.23
 trimesh>=4.0
 
+# Optional: Orbbec box tracking camera script (docs/examples/cam_scripts/orbbec_box_track.py)
+# opencv-contrib-python>=4.8   (CSRT tracker; plain opencv-python falls back to KCF / MIL)
+# pyorbbecsdk
+
 # Optional: production web server if you wrap Flask with gunicorn
 # gunicorn>=21.0
 
