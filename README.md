@@ -184,6 +184,8 @@ Both actions only become available after a clean bake.
 - Then run the path. As with Simulate, the run goes on to the last gimbal frame when the gimbal's frames end after the arm's path (Repeat waits for them too).
 - **Pause is not available** during a run, but the run can be interrupted.
 
+**Streamed run (test script, not in the GUI yet)**: `python backend/robot_sim/stream_run.py PATH.json` (an Export or a saved project with a baked path, or `--sandbox http://127.0.0.1:5000` for the open one) sends the baked path to the arm point by point with ARCS `trackJoint` (50 Hz) instead of uploading it, so its speed and direction can change while it runs: type `f` / `r` (forward / backwards along the path), Enter or `p` (hold), `+` / `-`, a rate such as `-0.5` (path seconds per second), `b` (turn round at the ends), `q` (stop smoothly), `x` (hard stop). Speed changes are ramped (`--acc`, `--smooth`), capped by `--max-dps`, and the arm brakes to rest at the path's ends; it lags the keys by about 0.1 s plus the ramp. `--dry` runs it with a stand-in arm, `--script "0:1,3:-1"` sets rates over time; each run writes a CSV log to `exports/`. The arm is moved to the first point first (after asking) if it is more than 1° away. Not yet tried on the arm.
+
 ---
 
 ## Timeline
@@ -530,6 +532,7 @@ backend/                  everything needed to run the app
     timeline.py           timeline control: keyframe drag/snap, sample times, transitions, copy/paste
     file_manage.py        save / open / export
     arcscontrol.py        AUBO SDK wrapper
+    stream_run.py         test script: stream a baked path with trackJoint, live speed / direction
     aubo-i5-full-master/  robot URDFs and meshes
 user_files/               ships with the app, editable by the user
   settings.json           settings, global saved points and paths
