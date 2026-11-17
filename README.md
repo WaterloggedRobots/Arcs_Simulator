@@ -28,6 +28,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
   - [Look At](#look-at)
   - [Offset](#offset)
   - [Collider](#collider)
+  - [Animate](#animate)
 - [Gimbal (DJI RS4)](#gimbal-dji-rs4)
 - [Miscellaneous features](#miscellaneous-features)
 - [Game controller (Xbox / PlayStation)](#game-controller-xbox--playstation)
@@ -332,6 +333,18 @@ Components in the properties panel are listed in the order they were added, newe
 
 ---
 
+### Animate
+
+The **Animate component** (**+** in Properties > Animate) can be added to any 3D object (Empty, Sphere, Cube, Camera, imported mesh, Gimbal), not the Aubo Arm or its cursors. It adds a timeline row named after the object, and the object can then be keyframed in position, rotation and scale, with the same path tools as the Sim Arm Cursor:
+
+- **Keys**: place the object (gizmo or Properties), then press the **+** on its timeline row (or **+ Key at playhead** in the component) to key its transform at the playhead; a key at the same time is replaced. Each key is a waypoint in the 3D view: a sphere with arrows (its rotation), joined to the next by a lavender curve.
+- **Bezier handles**: a new span gets two handles at its thirds, like a cursor path span. Click a key (in 3D or on the timeline) to select it: its gizmo moves and turns it (its handles move with it), and the handles of its two spans show with dotted lines; click a handle for its move gizmo. Properties shows the selected key's time, position, rotation and scale, editable.
+- **Sample frames**: each span has frames on the timeline (not in 3D), spread evenly along the curve when the span is made, so the object moves at a steady speed; hover one for its speed and acceleration. Hops and frames over the component's **v** (m/s) or **a** (m/s²) limits are orange. Drag a frame to retime it (between its neighbours); a moved key or handle makes its spans' frames again.
+- **Dragging a key on the timeline stretches its two spans' frames with it** (they keep their share of the span), unlike the cursor track, where frames keep their times and turn red outside their span (that rule is kept in the code, `animate._cursor_rule_times`, switched off by `STRETCH_SAMPLES`). Ctrl / Shift select several keys; Delete removes the selected keys.
+- **Playback**: when the playhead moves (scrubbing, Simulate, a run), every animated object takes its pose at that time. Moved by hand, an object stays put until the playhead moves again, so it can be placed and keyed. Keys of a parented object are in its parent's frame.
+- **Look At**: when an animated object is a Look At target, the bake aims each sample and waypoint at where the target is at that sample's time (only on bake, so editing stays quick); bake again after changing the animation. The live Look At (no bake) follows the object where it is.
+- Keys are saved with the object and are undo steps.
+
 ## Gimbal (DJI RS4)
 
 *Add > Gimbal* (or **+** in the Objects tab) adds a gimbal, named **Gimbal**, then **Gimbal 1**, **Gimbal 2** and so on. Like an Aubo Arm with its Sim and Real Arm Cursors, it has a mount and two twins, listed under it:
@@ -502,6 +515,7 @@ The following are known to be rough or incomplete at this stage:
 | Sony camera control | Noticeably laggy when driven through this program; for real shoots, use the dedicated Sony workflow. |
 | Automatic reconnection | Laggy. |
 | Gimbal | **Move real to sim**, the initial pose, J2 / J3 during Run and Look At send the target with the SDK's absolute move, which the RS4 tests showed is taken as the camera's *world* angles (against gravity, the gimbal holding its heading), not J1–J3. They only match with the handle upright: with the gimbal mounted sideways (handle horizontal, e.g. on the arm's flange) a J3-only frame made the RS 4 swing J1 to reach the tilt, and some poses (a camera roll past ±30°) can't be sent at all. So with the real gimbal's handle more than 20° from upright no absolute move is sent; instead the gimbal is turned as joints (*joint drive*, said in the Properties status line): in 3D ROLL 360 mode J1 by speed and J3 by short incremental pitch steps, each from the J3 reading (the axis probe, `docs/examples/gimbal/rs4_axis_probe.py --axes pitch`, showed both turn their joint only; the pitch speed command turned J1 too). Move real to sim and the move to the initial pose use it closing on the readings. A run only adds the frames' own changes (J1's speed follows the frames' slope, corrected against the speeds already sent so the turn adds up to the frames' own, not against the readings; J3's steps follow the frames) on top of the RS 4's own stabilising, which holds the camera while the arm moves the handle; correcting from the readings fought it and spun the gimbal. Frames that never change send nothing during the run, and the gimbal is left in its own mode, as with Move to pose. The move to the initial pose waits until the arm has stopped (the handle still for 0.6 s), so the gimbal isn't driven while the arm turns the handle and the RS 4 stabilises against it, and the choice of joint drive is made with the handle where the run has it (deciding while the arm was on its way once sent it as an absolute move, and with J2 near 180° the RS 4 took the other solution for the same camera angles: J1 180° off). Then J1 and J3 are held on the first frame until the run starts (paused while the handle moves); pressing Run or Upload again doesn't start the move over or change the gimbal's mode. If J1 goes more than 45° further from its target instead of closing in (its speed command's direction learnt the wrong way round), the drive stops, says so in the status line, and learns the direction again on the next move. J2 has no command that turns it alone, so it holds where it is. Look At during a run still needs absolute moves and isn't sent then. Not yet tried on the gimbal in a run. J2's sign and J1's direction as seen on the twins are not yet checked against the hardware. |
+| Animate component | Simulate plays as far as the arm's baked path, so keys after its end are reached only by scrubbing; a timeline with animated objects but no arm path can't be simulated. Animating the scale of an imported mesh rebuilds the mesh on every frame (slow). A dwell span (two waypoints with one pose) aimed at an animated target only aims at its two ends. Keys of an object on the arm's cursor are in the cursor's frame, so they move with it. Gizmo drags of keys and handles are not yet tried in a browser with a GPU (tested with a stand-in server). |
 | Several Aubo Arms | Undo and redo belong to the active arm. Timeline extra tracks are shared by all arms; the Look At track shows the active arm only. |
 
 ---
@@ -530,6 +544,7 @@ backend/                  everything needed to run the app
     gimbal_model.py       gimbal model files: loading, kinematics, Look At aim, box models
     path_bake.py          path sampling, IK and speed checks, baking
     timeline.py           timeline control: keyframe drag/snap, sample times, transitions, copy/paste
+    animate.py            Animate component: object keys, Bezier spans, sample frames, playback, Look At at bake
     file_manage.py        save / open / export
     arcscontrol.py        AUBO SDK wrapper
     stream_run.py         test script: stream a baked path with trackJoint, live speed / direction

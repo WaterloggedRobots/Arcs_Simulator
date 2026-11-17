@@ -453,7 +453,7 @@ def _reaim_waypoints():
         rec = w.get("track_object") or {}
         if not _track_on(rec) or w.get("pos") is None or w.get("wxyz") is None:
             continue
-        aim = rr.look_at_wxyz_offset(w["pos"], rec.get("name"), rec.get("offset"), rec.get("pos_offset"))
+        aim = rr.look_at_wxyz_offset(w["pos"], rec.get("name"), rec.get("offset"), rec.get("pos_offset"), t=w.get("t"))
         if aim is None or _quat_angle(aim, w["wxyz"]) < _REAIM_TOL:
             continue
         q = None
@@ -475,12 +475,82 @@ def _aim_samples_at_track(i, samples):
     spec = _track_spec_for_seg(i)
     if not spec or not hasattr(rr, "look_at_wxyz_offset"):
         return
+    animated = _seg_anim_name(i) is not None
+    t0 = t1 = None
+    if animated:
+        t0 = float(wp.waypoints[i].get("t") or 0.0)
+        t1 = float(wp.waypoints[i + 1].get("t") or t0)
     for sm in samples or []:
         if sm.get("pos") is None:
             continue
-        wxyz = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"), spec.get("pos_offset"))
+        t = None
+        if animated:
+            # An animated target: where it is at the sample's time (its frame's
+            # time, else its place along the span; _reaim_animated_spans puts
+            # it right once the times are set).
+            t = sm.get("t")
+            if t is None:
+                t = t0 + float(sm.get("u") or 0.0) * (t1 - t0)
+        wxyz = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"), spec.get("pos_offset"), t=t)
         if wxyz is not None:
             sm["wxyz"] = np.asarray(wxyz, dtype=float).reshape(4)
+
+
+def _animate():
+    try:
+        import animate
+        return animate
+    except Exception:
+        return None
+
+
+def _seg_anim_name(i):
+    """The Look At target of span i when it is an object with an animation, else None."""
+    spec = _track_spec_for_seg(i)
+    an = _animate()
+    if not spec or an is None:
+        return None
+    name = spec.get("name")
+    return name if an.is_animated_name(name) else None
+
+
+def _anim_sig(i):
+    name = _seg_anim_name(i)
+    an = _animate()
+    return None if name is None or an is None else an.signature_name(name)
+
+
+def _reaim_animated_spans():
+    """After the sample times are set: samples of a span aimed at an animated
+    target are aimed where the target is at their time (the times may differ
+    from the estimate the IK used), with new IK where the aim changed.
+    Returns the index of a span that then failed, else None."""
+    for i, seg in enumerate(segments):
+        if seg.get("status") != "ok" or _seg_anim_name(i) is None:
+            continue
+        spec = _track_spec_for_seg(i)
+        sms = seg.get("samples") or []
+        seed = None
+        for k, sm in enumerate(sms):
+            if sm.get("q") is None:
+                continue
+            if k == 0 or k == len(sms) - 1 or sm.get("pos") is None or sm.get("t") is None:
+                seed = sm["q"]
+                continue  # the waypoints: aimed at their own times by _reaim_waypoints
+            aim = rr.look_at_wxyz_offset(sm["pos"], spec.get("name"), spec.get("offset"), spec.get("pos_offset"), t=sm["t"])
+            if aim is None or _quat_angle(aim, sm.get("wxyz")) < np.radians(0.1):
+                seed = sm["q"]
+                continue
+            sm["wxyz"] = np.asarray(aim, dtype=float).reshape(4)
+            q = _ik_sample(sm, seed if seed is not None else sm["q"], allow_jump=False, fresh=False)
+            if q is None or _over_limit(q) is not None:
+                print("bake fail seg", i, "sample", k, "re-aimed at the animated target")
+                seg["status"] = "fail"
+                seg["fail_index"] = k
+                return i
+            sm["q"] = q
+            seed = q
+    return None
 
 
 def _look_bar(t0, t1, spec, single=False):
@@ -1472,6 +1542,7 @@ def _run_bake_body(spacing_m=None):
             and seg.get("spacing") == spacing
             and len(qs) >= 2
             and i not in out_segs
+            and seg.get("anim_sig") == _anim_sig(i)
         )
         if not good:
             hole = i
@@ -1527,6 +1598,8 @@ def _run_bake_body(spacing_m=None):
                 baked += 1
                 continue
         sms = seg.get("samples") or []
+        if _seg_anim_name(i) is not None:
+            _aim_samples_at_track(i, sms)  # the target's animation may have changed since
         qa_wp = wp.waypoints[i].get("q") if i < len(wp.waypoints) else None
         qb_wp = wp.waypoints[i + 1].get("q") if i + 1 < len(wp.waypoints) else None
         if qa_wp is not None and wp.waypoints[i].get("q_dirty"):
@@ -1599,6 +1672,7 @@ def _run_bake_body(spacing_m=None):
         prev_force_fk = False
         if ok:
             seg["status"] = "ok"
+            seg["anim_sig"] = _anim_sig(i)
             baked += 1
             # Speed is scored once after every segment has IK.
         else:
@@ -1616,6 +1690,14 @@ def _run_bake_body(spacing_m=None):
     if hasattr(wp, "draw_path"):
         wp.draw_path()
     assign_sample_times()
+    late = _reaim_animated_spans()
+    if late is not None and (failed_at is None or late < failed_at):
+        failed_at = late
+        baked = min(baked, late)
+        for j in range(late + 1, len(segments)):
+            segments[j]["status"] = "pending"
+            segments[j]["timing"] = None
+            segments[j]["micro"] = []
     evaluate_timing(force=True)
     _speed_valid = True
     store_bake_motion()

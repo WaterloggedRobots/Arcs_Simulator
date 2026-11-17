@@ -444,6 +444,11 @@ def start_viewer():
         except Exception:
             pass
         try:
+            # Animated objects at their pose at the timeline time (when it changed).
+            wp.animate.tick(t_win)
+        except Exception as e:
+            _report_tick_error("animate", e)
+        try:
             if hasattr(wp, "tick_cameras"):
                 wp.tick_cameras()
         except Exception:

@@ -555,6 +555,7 @@ def _snapshot():
             "comp_order": list(o.get("comp_order") or []),
             "mesh_path": o.get("mesh_path"),
             "gimbal": gimbal.clean_gimbal(o.get("gimbal")) if o.get("kind") == "gimbal" else None,
+            "anim": animate.clean_anim(o.get("anim")),
         })
     try:
         import robot_runtime as rr
@@ -662,10 +663,16 @@ def _restore_objects_snapshot(doc):
             if o.get("kind") == "gimbal" and rec.get("gimbal"):
                 # Its Sim gimbal's collider (and settings) come back too.
                 o["gimbal"] = gimbal.clean_gimbal(rec.get("gimbal"))
+            o["anim"] = animate.clean_anim(rec.get("anim"))
         offsets.refresh_offset_viz()
         colliders.on_selection_changed()
         if "gimbal_tracks" in doc:
             gimbal.restore_track_keys(doc.get("gimbal_tracks") or {})
+        animate.refresh_all()
+        try:
+            simulatorview.sync_camera_tracks()
+        except Exception:
+            pass
         return
     try:
         simulatorview.clear_scene_objects()
@@ -700,6 +707,7 @@ def _restore_objects_snapshot(doc):
         pass
     if "gimbal_tracks" in doc:
         gimbal.restore_track_keys(doc.get("gimbal_tracks") or {})
+    animate.refresh_all()
 
 
 def _rebuild_from_snapshot(doc):
@@ -3617,6 +3625,7 @@ def _apply_selection_viz():
     simulatorview._update_measure_line()
     offsets.on_selection_changed()
     colliders.on_selection_changed()
+    animate.on_selection_changed(_selection)
 
 
 def wp_server_ready():
@@ -3782,6 +3791,7 @@ def set_item_visible(kind, oid, on=None):
                         h.visible = shown and obj.get("vis_src", True) is not False
                     except Exception:
                         pass
+                animate.refresh_visibility(oid)  # its keys and path hide with it
     elif kind == "pose":
         h = _pose_markers.get(str(oid))
         if h is not None:
@@ -3798,3 +3808,4 @@ import simulatorview  # noqa: E402,F401
 import offsets  # noqa: E402
 import colliders  # noqa: E402
 import gimbal  # noqa: E402
+import animate  # noqa: E402

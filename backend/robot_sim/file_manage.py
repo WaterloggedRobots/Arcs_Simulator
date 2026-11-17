@@ -229,6 +229,7 @@ def _dump_scene_objects():
             "comp_order": list(obj.get("comp_order") or []),
             "mesh_path": obj.get("mesh_path") or None,
             "gimbal": wp.gimbal.clean_gimbal(obj.get("gimbal")) if obj.get("kind") == "gimbal" else None,
+            "anim": wp.animate.clean_anim(obj.get("anim")),
         })
     return out
 
@@ -249,6 +250,10 @@ def _load_scene_objects(raw):
             wp.update_scene_object(obj.get("id"), name=rec.get("name"), pos=rec.get("pos"), wxyz=rec.get("wxyz"), scale=rec.get("scale"))
         if obj:
             loaded.append(obj)
+    try:
+        wp.animate.refresh_all()  # keys are drawn through their parents: after every object is back
+    except Exception as e:
+        print("animate refresh failed", e)
     return loaded
 
 

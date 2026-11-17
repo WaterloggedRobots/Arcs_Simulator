@@ -1438,8 +1438,9 @@ def _aim_wxyz(pos, tgt, offset=None, pos_offset=None):
     return wxyz / (float(np.linalg.norm(wxyz)) or 1.0)
 
 
-def look_at_wxyz_offset(pos, name, offset=None, pos_offset=None):
-    tgt = _track_target_pos(name)
+def look_at_wxyz_offset(pos, name, offset=None, pos_offset=None, t=None):
+    """t: timeline time (the bake): an animated target is where its animation has it then."""
+    tgt = _track_target_pos(name, t)
     if tgt is None or pos is None:
         return None
     return _aim_wxyz(pos, tgt, offset, pos_offset)
@@ -1469,10 +1470,19 @@ def _offset_state(rec):
 PRIMARY_TARGET_NAME = "Primary target"
 
 
-def _track_target_pos(name):
+def _track_target_pos(name, t=None):
     key = str(name or "").strip().lower()
     if not key:
         return None
+    if t is not None:
+        # An object with the Animate component: its position at timeline time t (bake only).
+        try:
+            import animate
+            p = animate.pos_at_name(name, t)
+            if p is not None:
+                return np.asarray(p, dtype=float).reshape(3)
+        except Exception as e:
+            print("look at: animated target failed", e)
     if key == PRIMARY_TARGET_NAME.lower() and hasattr(wp, "primary_target_pos"):
         return wp.primary_target_pos()
     for obj in getattr(wp, "scene_objects", None) or []:

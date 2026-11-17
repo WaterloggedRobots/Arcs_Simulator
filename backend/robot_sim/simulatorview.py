@@ -319,6 +319,11 @@ def sim_bot_props():
     }
 
 
+def _animate():
+    import animate
+    return animate
+
+
 def _obj_parent(obj):
     pid = (obj or {}).get("parent_id")
     if not pid:
@@ -903,6 +908,7 @@ def _spawn_object_mesh(obj):
 
 
 def clear_scene_objects():
+    _animate().forget_all()
     for obj in list(wp.scene_objects):
         delete_scene_object(obj.get("id"))
     wp.scene_objects[:] = []
@@ -963,6 +969,8 @@ def sync_camera_tracks():
         kept.append({"id": LOOK_TRACK_ID, "name": "Look At", "keys": []})
     # One track per gimbal (gimbal_<oid>), frames of yaw / roll / pitch.
     kept = _gimbal().sync_tracks(kept)
+    # One track per object with the Animate component (anim_<oid>).
+    kept = _animate().sync_tracks(kept)
     wp.extra_tracks = kept
     return wp.extra_tracks
 
@@ -1015,6 +1023,7 @@ def restore_scene_object(rec):
         "mesh_path": str((rec or {}).get("mesh_path") or "") if _is_mesh_kind(kind) else None,
         "mesh_error": None,
         "gimbal": _gimbal().clean_gimbal((rec or {}).get("gimbal")) if kind == "gimbal" else None,
+        "anim": _animate().clean_anim((rec or {}).get("anim")),
     }
     wp.scene_objects.append(obj)
     if wp.server is not None:
@@ -1148,7 +1157,7 @@ def update_scene_object(oid, name=None, pos=None, wxyz=None, scale=None, space=N
         return False
     if name is not None:
         obj["name"] = str(name)
-        if obj.get("kind") in ("camera", "gimbal"):
+        if obj.get("kind") in ("camera", "gimbal") or obj.get("anim"):
             sync_camera_tracks()
     if space is not None:
         obj["space"] = "local" if str(space).lower().startswith("loc") else "world"
@@ -1203,6 +1212,7 @@ def delete_scene_object(oid):
     if obj is None:
         return False
     try:
+        _animate().forget(oid)
         _colliders().forget_owner(oid)
         if obj.get("kind") == "gimbal":
             _colliders().forget_owner(_gimbal().part_id(oid, "sim"))
@@ -1331,6 +1341,7 @@ def selected_object_props():
         "parent_offset": _parent_offset(obj) is not None,
         "comp_order": list(obj.get("comp_order") or []),
         "gimbal": _gimbal().status(obj.get("id")) if obj.get("kind") == "gimbal" else None,
+        "anim": _animate().status(obj.get("id")) if not part else {"added": False},
     }
 
 

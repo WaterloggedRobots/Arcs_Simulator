@@ -139,6 +139,9 @@ def _display_tracks():
         tid = str((tr or {}).get("id") or "") if isinstance(tr, dict) else ""
         if tid.startswith(wp.gimbal.TRACK_PREFIX):
             tr = dict(tr, keys=wp.gimbal.keys_for(tid[len(wp.gimbal.TRACK_PREFIX):]))
+        elif tid.startswith(wp.animate.TRACK_PREFIX):
+            # Keys, sample frames and speeds from the object's Animate component.
+            tr = wp.animate.display_track(tr)
         out.append(tr)
     return out
 
@@ -1630,6 +1633,43 @@ def _collider_act(owner, data):
             ignore_parent=data.get("ignore_parent"),
         )
     return st
+
+
+@app.route("/api/anim", methods=["POST"])
+def api_anim():
+    """Animate component of a scene object: add / remove, keys (insert at the
+    playhead from the object's transform, move, delete, edit), sample frames,
+    selection, limits. The timeline and Properties use it."""
+    data = request.get_json(silent=True) or {}
+    an = wp.animate
+    oid = str(data.get("id") or getattr(wp, "selected_obj_id", None) or "")
+    act = str(data.get("action") or "")
+    if rr.edits_locked() and act not in ("select",):
+        return jsonify({"ok": False, "error": "edits are locked while the robot runs"})
+    ok, err = False, "unknown action"
+    if act == "add":
+        ok, err = an.add_component(oid)
+    elif act == "remove":
+        ok, err = an.remove_component(oid)
+    elif act == "insert_key":
+        t = data.get("t")
+        ok, err = an.insert_key(oid, sv._playhead_t() if t is None else t)
+    elif act == "delete_keys":
+        ok, err = an.delete_keys(oid, indices=data.get("indices"), ts=data.get("ts"))
+    elif act == "move_keys":
+        ok, err = an.move_keys(oid, data.get("moves") or [])
+    elif act == "move_sample":
+        ok, err = an.move_sample(oid, data.get("seg"), data.get("k"), data.get("t"))
+    elif act == "edit_key":
+        ok, err = an.edit_key(oid, data.get("index"), t=data.get("t"), pos=data.get("pos"),
+                              wxyz=data.get("wxyz"), scale=data.get("scale"))
+    elif act == "select":
+        ok, err = an.select_key(oid, index=data.get("index"), which=data.get("which")), ""
+    elif act == "limits":
+        ok, err = an.set_limits(oid, data.get("max_speed"), data.get("max_acc"))
+    _status_dirty.set()
+    return jsonify({"ok": bool(ok), "error": "" if ok else err, "anim": an.status(oid),
+                    "tracks": _display_tracks()})
 
 
 @app.route("/api/collider", methods=["POST"])

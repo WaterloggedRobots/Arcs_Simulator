@@ -2454,12 +2454,53 @@
               <button type="button" id="colAddItem" class="use-offset-btn" title="Add a collider box">+</button>
             </div>
           </div>
+          <hr id="animSep" hidden>
+          <div id="animComp" class="track-comp" hidden>
+            <div class="track-head">
+              <span>Animate</span>
+              <div class="track-head-right">
+                <button type="button" id="animTrash" class="track-trash" title="Remove component (and its keys)">🗑</button>
+              </div>
+            </div>
+            <div class="col-note" id="animInfo"></div>
+            <div class="row triple">
+              <label title="Max speed, m/s: frames faster than this are orange on the timeline">v</label><input id="animVmax" type="number" step="0.1" min="0.001" value="1">
+              <label title="Max acceleration, m/s²: frames with more than this are orange">a</label><input id="animAmax" type="number" step="0.1" min="0.001" value="2">
+            </div>
+            <button type="button" id="animAddKey" class="use-offset-btn" title="Add a key with the object's transform at the playhead">+ Key at playhead</button>
+            <div id="animKey" hidden>
+              <label class="field tight" id="animKeyTitle">Key</label>
+              <div class="row triple">
+                <label>t</label><input id="animKt" type="number" step="0.01" min="0" value="0">
+              </div>
+              <label class="field tight" id="animPosLabel">Position</label>
+              <div class="row triple">
+                <label>x</label><input id="animKx" type="number" step="0.001" value="0">
+                <label>y</label><input id="animKy" type="number" step="0.001" value="0">
+                <label>z</label><input id="animKz" type="number" step="0.001" value="0">
+              </div>
+              <label class="field tight">Rotation (deg)</label>
+              <div class="row triple">
+                <label>rx</label><input id="animKrx" type="number" step="0.1" value="0">
+                <label>ry</label><input id="animKry" type="number" step="0.1" value="0">
+                <label>rz</label><input id="animKrz" type="number" step="0.1" value="0">
+              </div>
+              <label class="field tight">Scale</label>
+              <div class="row triple">
+                <label>x</label><input id="animKsx" type="number" step="0.01" value="1">
+                <label>y</label><input id="animKsy" type="number" step="0.01" value="1">
+                <label>z</label><input id="animKsz" type="number" step="0.01" value="1">
+              </div>
+              <button type="button" id="animDelKey" class="use-offset-btn" title="Delete this key">Delete key</button>
+            </div>
+          </div>
           <button type="button" id="simExtraAdd" class="sim-extra-add" title="Add">+</button>
           <div id="compMenu" class="kf-menu" hidden>
             <button type="button" data-comp="track">Look At</button>
             <button type="button" data-comp="camera">Camera</button>
             <button type="button" data-comp="offset">Offset</button>
             <button type="button" data-comp="collider">Collider</button>
+            <button type="button" data-comp="anim">Animate</button>
           </div>
       </aside>
     </div>
@@ -2624,6 +2665,10 @@
     // ({tid, ts}) and the drag in progress.
     let gimSel = null;
     let gimDrag = null;
+    // Animate component tracks (anim_<oid>): selected keys / frame ({tid, idx: Set, sm})
+    // and the drag in progress. A key drag stretches its two spans' frames in proportion.
+    let animSel = null;
+    let animDrag = null;
     const nearT = (a, b) => Math.abs(Number(a) - Number(b)) < 1e-4;
     function gimSelHas(tid, t) {
       return !!(gimSel && gimSel.tid === tid && gimSel.ts.some((x) => nearT(x, t)));
@@ -3003,12 +3048,143 @@
     function isGimbalTrack(tr) {
       return !!(tr && String(tr.id || "").indexOf("gimbal_") === 0);
     }
+    function isAnimTrack(tr) {
+      return !!(tr && String(tr.id || "").indexOf("anim_") === 0);
+    }
+    function animOid(tid) { return String(tid).slice("anim_".length); }
+    // Keys and frames of an Animate track as drawn: during a drag, the dragged
+    // keys at their new times and the frames of their spans stretched with them.
+    function animView(tr) {
+      const a = (tr && tr.anim) || {};
+      const keys = (a.keys || []).map((k) => Object.assign({}, k));
+      const samples = (a.samples || []).map((m) => Object.assign({}, m));
+      const g = animDrag;
+      if (g && g.tid === tr.id && g.moved) {
+        if (g.kind === "key") {
+          const t0s = keys.map((k) => Number(k.t));
+          keys.forEach((k, i) => { if (g.moving.has(i)) k.t = Math.max(0, t0s[i] + g.dt); });
+          samples.forEach((m) => {
+            const i = m.seg;
+            const a0 = t0s[i], b0 = t0s[i + 1];
+            if (a0 == null || b0 == null || b0 - a0 < 1e-9) return;
+            const u = (Number(m.t) - a0) / (b0 - a0);
+            m.t = Number(keys[i].t) + u * (Number(keys[i + 1].t) - Number(keys[i].t));
+          });
+        } else if (g.kind === "sample") {
+          samples.forEach((m) => { if (m.seg === g.seg && m.k === g.k) m.t = g.t; });
+        }
+      }
+      return { keys: keys, samples: samples, hops: a.hops || [] };
+    }
+    function hitAnim(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const vis = visibleTracks();
+      const row = Math.floor((y - RULER_H) / TRACK_H);
+      const tr = vis[row];
+      if (!isAnimTrack(tr) || !tr.anim) return null;
+      const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+      if (Math.abs(y - cy) > 14) return null;
+      const v = animView(tr);
+      let best = null, bestD = 12;
+      v.keys.forEach((k) => {
+        const d = Math.abs(timeToX(Number(k.t)) - x);
+        if (d < bestD) { bestD = d; best = { tid: tr.id, tr: tr, kind: "key", index: k.index, t: Number(k.t), rec: k }; }
+      });
+      if (best) return best;
+      if (!showTlSamples) return null;
+      bestD = 8;
+      v.samples.forEach((m) => {
+        const d = Math.abs(timeToX(Number(m.t)) - x);
+        if (d < bestD) { bestD = d; best = { tid: tr.id, tr: tr, kind: "sample", seg: m.seg, k: m.k, t: Number(m.t), rec: m }; }
+      });
+      return best;
+    }
+    function animRowAt(clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const row = Math.floor((clientY - rect.top - RULER_H) / TRACK_H);
+      const tr = visibleTracks()[row];
+      return isAnimTrack(tr) ? tr : null;
+    }
+    function animHint(h) {
+      const m = h.rec || {};
+      const head = h.kind === "key" ? "Key " + (Number(h.index) + 1) : "Frame";
+      return head + "  t " + Number(h.t).toFixed(2) + " s\n" +
+        "speed " + Number(m.v || 0).toFixed(3) + " m/s\n" +
+        "accel " + Number(m.a || 0).toFixed(2) + " m/s²" +
+        (m.status === "too_fast" ? "\nover the Animate limits" : "") +
+        (m.status === "out" ? "\noutside its span" : "");
+    }
+    function animPost(oid, body) {
+      tracksSyncing += 1;
+      return fetch("/api/anim", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ id: oid }, body)) })
+        .then((r) => r.json()).then((d) => {
+          if (d && !d.ok && statusEl) statusEl.textContent = d.error || "Animate edit failed";
+          if (d && Array.isArray(d.tracks)) applyExtraTracks(d.tracks);
+          return d;
+        }).catch(() => null).finally(() => {
+          tracksSyncing = Math.max(0, tracksSyncing - 1);
+          renderTimeline();
+          setTimeout(refresh, 80);
+        });
+    }
+    function animDeleteSel() {
+      if (!animSel || !animSel.idx.size || lockEdits) return false;
+      const sel = animSel;
+      animSel = null;
+      animPost(animOid(sel.tid), { action: "delete_keys", indices: Array.from(sel.idx) });
+      return true;
+    }
+    // Drag: keys move together by dt, kept 0.02 s off the keys that stay; a
+    // frame stays between its neighbours.
+    function animDragApply(t) {
+      const g = animDrag;
+      const v = (g.tr && g.tr.anim) || {};
+      if (g.kind === "key") {
+        const ks = (v.keys || []).map((k) => Number(k.t));
+        let dt = t - g.t0, lo = -1e9, hi = 1e9;
+        ks.forEach((kt, i) => {
+          if (!g.moving.has(i)) return;
+          lo = Math.max(lo, -kt);
+          ks.forEach((ot, j) => {
+            if (g.moving.has(j)) return;
+            if (ot <= kt) lo = Math.max(lo, ot + 0.02 - kt);
+            else hi = Math.min(hi, ot - 0.02 - kt);
+          });
+        });
+        g.dt = hi < lo ? 0 : Math.min(Math.max(dt, lo), hi);
+      } else {
+        const sm = (v.samples || []).filter((m) => m.seg === g.seg).sort((a, b) => a.k - b.k);
+        const ks = v.keys || [];
+        const i = sm.findIndex((m) => m.k === g.k);
+        const lo = i > 0 ? Number(sm[i - 1].t) : Number((ks[g.seg] || {}).t || 0);
+        const hi = i + 1 < sm.length ? Number(sm[i + 1].t) : Number((ks[g.seg + 1] || {}).t || 0);
+        g.t = Math.min(Math.max(t, lo + 0.002), hi - 0.002);
+      }
+    }
+    function animDragEnd() {
+      const g = animDrag;
+      animDrag = null;
+      if (!g || !g.moved) { renderTimeline(); return; }
+      const oid = animOid(g.tid);
+      if (g.kind === "key") {
+        if (Math.abs(g.dt) < 1e-6) { renderTimeline(); return; }
+        const ks = (g.tr.anim && g.tr.anim.keys) || [];
+        const moves = Array.from(g.moving).map((i) => ({ index: i, t: Math.round((Number(ks[i].t) + g.dt) * 1e4) / 1e4 }));
+        animPost(oid, { action: "move_keys", moves: moves });
+      } else {
+        animPost(oid, { action: "move_sample", seg: g.seg, k: g.k, t: g.t });
+      }
+    }
     function applyExtraTracks(rows) {
       const src = Array.isArray(rows) ? rows : [];
       extraTracks = src.map((tr, i) => ({
         id: (tr && tr.id) || ("custom_" + (i + 1)),
         name: (tr && tr.name) || ("Track " + (i + 1)),
         keys: Array.isArray(tr && tr.keys) ? tr.keys : [],
+        anim: (tr && tr.anim) || null,
       }));
       extraTrackSeq = Math.max(extraTrackSeq, extraTracks.length);
       window.extraTracks = extraTracks;
@@ -3037,6 +3213,7 @@
         simple: true,
         custom: true,
         keys: tr.keys || [],
+        anim: tr.anim || null,
       }));
       return armTracks().concat(CORE_TRACKS.slice(1), extras);
     }
@@ -3156,6 +3333,8 @@
         } else if (isGimbalTrack(tr)) {
           plus("real", "Insert a frame with the real gimbal's angles at the playhead");
           plus("sim", "Insert a frame with the Sim gimbal's angles at the playhead");
+        } else if (isAnimTrack(tr)) {
+          plus("sim", "Add a key with the object's transform at the playhead");
         } else if (String(tr.id).indexOf("cam_") === 0) {
           plus("rec-on", "Start recording at the playhead (green key)", "▶");
           plus("rec-off", "Stop recording at the playhead (red key)", "❚❚");
@@ -3251,6 +3430,10 @@
       }
       if (String(trackId).indexOf("cam_") === 0) {
         camRecKeyOn(trackId, src === "rec-on");
+        return;
+      }
+      if (isAnimTrack({ id: trackId })) {
+        animPost(animOid(trackId), { action: "insert_key", t: snapToTick(playhead) });
         return;
       }
       if (isGimbalTrack({ id: trackId })) {
@@ -3665,7 +3848,63 @@
       });
 
       vis.forEach((tr, row) => {
-        if (!tr.custom || isGimbalTrack(tr) || !tr.keys || !tr.keys.length) return;
+        if (!isAnimTrack(tr) || !tr.anim) return;
+        // Animate track: the hops between keys and frames coloured by speed,
+        // the frames (speed / acceleration on hover) and the keys.
+        const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+        const v = animView(tr);
+        const col = { ok: "#6ee08a", too_fast: "#f08a3a", out: "#ff3b3b" };
+        const nodes = v.keys.map((k) => ({ t: Number(k.t), st: k.status }))
+          .concat(v.samples.map((m) => ({ t: Number(m.t), st: m.status }))).sort((a, b) => a.t - b.t);
+        const hopSt = (t0, t1) => {
+          const h = (v.hops || []).find((x) => Math.abs(0.5 * (Number(x.t0) + Number(x.t1)) - 0.5 * (t0 + t1)) < Math.max(0.01, 0.5 * (t1 - t0)));
+          return h ? h.status : "ok";
+        };
+        ctx.lineWidth = 5;
+        for (let i = 0; i < nodes.length - 1; i++) {
+          if (!(nodes[i + 1].t > nodes[i].t + 1e-6)) continue;
+          ctx.strokeStyle = lockEdits ? "#555" : (col[hopSt(nodes[i].t, nodes[i + 1].t)] || col.ok);
+          ctx.beginPath();
+          ctx.moveTo(timeToX(nodes[i].t), cy);
+          ctx.lineTo(timeToX(nodes[i + 1].t), cy);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+        if (showTlSamples) v.samples.forEach((m) => {
+          ctx.fillStyle = lockEdits ? "#555" : (col[m.status] || "#888");
+          ctx.beginPath();
+          ctx.arc(timeToX(Number(m.t)), cy, 7, 0, Math.PI * 2);
+          ctx.fill();
+          if (animSel && animSel.tid === tr.id && animSel.sm === m.seg + ":" + m.k) {
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          }
+        });
+        v.keys.forEach((k) => {
+          const x = timeToX(Number(k.t));
+          ctx.fillStyle = lockEdits ? "#666" : (k.status === "too_fast" ? col.too_fast : "#f2f2f2");
+          ctx.beginPath();
+          ctx.moveTo(x, cy - 12);
+          ctx.lineTo(x + 11, cy);
+          ctx.lineTo(x, cy + 12);
+          ctx.lineTo(x - 11, cy);
+          ctx.closePath();
+          ctx.fill();
+          // Selected here, or picked in the 3D view (its sphere): yellow outline.
+          const picked = animSel && animSel.tid === tr.id ? animSel.idx.has(k.index) : (!animSel && tr.anim.sel === k.index);
+          if (picked) {
+            ctx.strokeStyle = "#ffd84a";
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          }
+        });
+      });
+
+      vis.forEach((tr, row) => {
+        if (!tr.custom || isGimbalTrack(tr) || isAnimTrack(tr) || !tr.keys || !tr.keys.length) return;
         const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
         const ks = tr.keys.slice().sort((a, b) => Number(a.t) - Number(b.t));
         for (let i = 0; i < ks.length - 1; i++) {
@@ -4680,6 +4919,49 @@
         }).then(refresh, refresh);
         return;
       }
+      const aHit = hitAnim(e.clientX, e.clientY);
+      if (aHit) {
+        // An Animate key (Ctrl toggles, Shift adds the keys between) or frame:
+        // select it, drag retimes. A single key is selected in 3D too (its gizmo).
+        e.preventDefault();
+        if (lockEdits) return;
+        if (!animSel || animSel.tid !== aHit.tid) animSel = { tid: aHit.tid, idx: new Set(), sm: null, anchor: null };
+        if (aHit.kind === "key") {
+          animSel.sm = null;
+          if (e.ctrlKey || e.metaKey) {
+            if (animSel.idx.has(aHit.index)) animSel.idx.delete(aHit.index); else animSel.idx.add(aHit.index);
+          } else if (e.shiftKey && animSel.anchor != null) {
+            const a0 = Math.min(animSel.anchor, aHit.index), b0 = Math.max(animSel.anchor, aHit.index);
+            animSel.idx = new Set();
+            for (let i = a0; i <= b0; i++) animSel.idx.add(i);
+          } else if (!animSel.idx.has(aHit.index)) {
+            animSel.idx = new Set([aHit.index]);
+          }
+          animSel.anchor = aHit.index;
+          if (animSel.idx.size === 1) {
+            fetch("/api/anim", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: animOid(aHit.tid), action: "select", index: Array.from(animSel.idx)[0] }) })
+              .then(() => setTimeout(refresh, 60));
+          }
+          if (animSel.idx.has(aHit.index)) {
+            animDrag = { tid: aHit.tid, tr: aHit.tr, kind: "key", t0: aHit.t, x0: e.clientX, tStart: Date.now(),
+              moved: false, dt: 0, moving: new Set(animSel.idx) };
+          }
+        } else {
+          animSel.idx = new Set();
+          animSel.sm = aHit.seg + ":" + aHit.k;
+          animDrag = { tid: aHit.tid, tr: aHit.tr, kind: "sample", seg: aHit.seg, k: aHit.k, t0: aHit.t, t: aHit.t,
+            x0: e.clientX, tStart: Date.now(), moved: false };
+        }
+        if (animDrag) scrollEl.setPointerCapture(e.pointerId);
+        gimSel = null;
+        selectedKf = null;
+        selectedKfs = new Set();
+        selectedSms = new Set();
+        renderTimeline();
+        return;
+      }
+      if (animSel) { animSel = null; renderTimeline(); }
       const gHit = hitGimFrame(e.clientX, e.clientY);
       if (gHit) {
         // A gimbal frame: select it (Ctrl toggles, Shift adds the frames between), drag retimes.
@@ -4857,6 +5139,36 @@
       tip.style.top = (clientY + 14) + "px";
     }
     function onTlPointerMove(e) {
+      if (animDrag) {
+        if (!animDrag.moved) {
+          const dtMs = Date.now() - animDrag.tStart;
+          const dx = Math.abs(e.clientX - animDrag.x0);
+          if (dtMs < 140 && dx < 6) return;
+          if (dx < 4 && dtMs < 280) return;
+          animDrag.moved = true;
+          const tip0 = document.getElementById("hopTip");
+          if (tip0) tip0.hidden = true;
+        }
+        const rect = canvas.getBoundingClientRect();
+        const t = Math.max(0, xToTime(e.clientX - rect.left));
+        animDragApply(animDrag.kind === "key" ? snapToTick(t) : t);
+        renderTimeline();
+        return;
+      }
+      if (!dragSm && !dragKf) {
+        const ah = hitAnim(e.clientX, e.clientY);
+        if (ah) {
+          const tip = document.getElementById("hopTip");
+          if (tip) {
+            tip.textContent = animHint(ah);
+            tip.style.whiteSpace = "pre";
+            tip.hidden = false;
+            tip.style.left = (e.clientX + 12) + "px";
+            tip.style.top = (e.clientY + 14) + "px";
+          }
+          return;
+        }
+      }
       if (gimDrag) {
         if (!gimDrag.moved) {
           const dtMs = Date.now() - gimDrag.tStart;
@@ -4979,9 +5291,10 @@
       }
     });
     window.addEventListener("pointermove", (e) => {
-      if (dragKf || dragSm || gimDrag) onTlPointerMove(e);
+      if (dragKf || dragSm || gimDrag || animDrag) onTlPointerMove(e);
     });
     function onTlPointerUp(e) {
+      if (animDrag) { animDragEnd(); return; }
       if (gimDrag) { gimDragEnd(); return; }
       if (dragSm) {
         if (!dragSm._armed) {
@@ -5021,7 +5334,7 @@
       if (g) { e.preventDefault(); openGimEdit(g.tid, g.t); }
     });
     window.addEventListener("pointerup", (e) => {
-      if (dragKf || dragSm || gimDrag) onTlPointerUp(e);
+      if (dragKf || dragSm || gimDrag || animDrag) onTlPointerUp(e);
     });
     function hitClipAt(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
@@ -5153,6 +5466,12 @@
         return;
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (animSel && animSel.idx.size) {
+        // Selected Animate keys on the timeline.
+        e.preventDefault();
+        animDeleteSel();
+        return;
+      }
       if (gimSel && gimSel.ts.length) {
         // Selected gimbal frames on the timeline.
         e.preventDefault();
@@ -5759,9 +6078,10 @@
         track: ["trackSep", "trackComp"],
         offset: ["offsetSep", "offsetComp"],
         collider: ["colliderSep", "colliderComp"],
+        anim: ["animSep", "animComp"],
       };
       const seen = [];
-      ((obj && obj.comp_order) || []).concat(["camera", "track", "offset", "collider"]).forEach((k) => {
+      ((obj && obj.comp_order) || []).concat(["camera", "track", "offset", "collider", "anim"]).forEach((k) => {
         if (groups[k] && seen.indexOf(k) < 0) seen.push(k);
       });
       const want = [];
@@ -5771,9 +6091,65 @@
       if (have.length === want.length && have.every((el, i) => el === want[i])) return;
       want.forEach((el) => anchor.parentNode.insertBefore(el, anchor));
     }
+    const ANIM_KINDS = ["empty", "sphere", "cube", "camera", "mesh", "import", "gimbal"];
+    function renderAnimComp(obj) {
+      const box = document.getElementById("animComp");
+      const sep = document.getElementById("animSep");
+      const an = (obj && obj.anim) || {};
+      const show = !!(obj && ANIM_KINDS.indexOf(obj.kind) >= 0 && !obj.gimbal_part && an.added);
+      if (box) box.hidden = !show;
+      if (sep) sep.hidden = !show;
+      if (!show) return;
+      const set = (id, v, dp) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el) el.value = Number(v || 0).toFixed(dp);
+      };
+      const info = document.getElementById("animInfo");
+      if (info) info.textContent = an.count
+        ? an.count + " key" + (an.count === 1 ? "" : "s") + " · " + Number(an.t0).toFixed(2) + "–" + Number(an.t1).toFixed(2) + " s" +
+          (an.parented ? " · in the parent's frame" : "")
+        : "No keys yet: place the object, then + on its timeline row (or below) adds a key at the playhead.";
+      set("animVmax", an.max_speed, 2);
+      set("animAmax", an.max_acc, 2);
+      const kb = document.getElementById("animKey");
+      const k = an.sel;
+      if (kb) kb.hidden = !k;
+      if (!k) return;
+      const title = document.getElementById("animKeyTitle");
+      if (title) title.textContent = "Key " + (k.index + 1) + (k.kind === "ctrl" ? " (its " + k.which + " handle is selected)" : "");
+      set("animKt", k.t, 2);
+      ["animKx", "animKy", "animKz"].forEach((id, i) => set(id, k.pos[i], 4));
+      const eu = quatToEuler(Number(k.wxyz[0]), Number(k.wxyz[1]), Number(k.wxyz[2]), Number(k.wxyz[3]));
+      ["animKrx", "animKry", "animKrz"].forEach((id, i) => set(id, eu[i] * 180 / Math.PI, 2));
+      ["animKsx", "animKsy", "animKsz"].forEach((id, i) => set(id, k.scale[i], 3));
+    }
+    (function setupAnimComp() {
+      const oidNow = () => ((window.__lastObject || {}).id);
+      const selIdx = () => (((window.__lastObject || {}).anim || {}).sel || {}).index;
+      const num = (id) => Number(document.getElementById(id).value);
+      const post = (body) => { const oid = oidNow(); if (oid) animPost(oid, body); };
+      const on = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
+      on("animTrash", "click", () => post({ action: "remove" }));
+      on("animAddKey", "click", () => post({ action: "insert_key", t: snapToTick(playhead) }));
+      on("animDelKey", "click", () => { const i = selIdx(); if (i != null) post({ action: "delete_keys", indices: [i] }); });
+      ["animVmax", "animAmax"].forEach((id) => on(id, "change", () => post({ action: "limits", max_speed: num("animVmax"), max_acc: num("animAmax") })));
+      on("animKt", "change", () => { const i = selIdx(); if (i != null) post({ action: "edit_key", index: i, t: num("animKt") }); });
+      ["animKx", "animKy", "animKz"].forEach((id) => on(id, "change", () => {
+        const i = selIdx(); if (i != null) post({ action: "edit_key", index: i, pos: [num("animKx"), num("animKy"), num("animKz")] });
+      }));
+      ["animKrx", "animKry", "animKrz"].forEach((id) => on(id, "change", () => {
+        const i = selIdx();
+        const d = Math.PI / 180;
+        if (i != null) post({ action: "edit_key", index: i, wxyz: eulerToQuat(num("animKrx") * d, num("animKry") * d, num("animKrz") * d) });
+      }));
+      ["animKsx", "animKsy", "animKsz"].forEach((id) => on(id, "change", () => {
+        const i = selIdx(); if (i != null) post({ action: "edit_key", index: i, scale: [num("animKsx"), num("animKsy"), num("animKsz")] });
+      }));
+    })();
     function renderOffsetComp(obj) {
       orderComps(obj);
       renderColliderComp(obj);
+      renderAnimComp(obj);
       const box = document.getElementById("offsetComp");
       const sep = document.getElementById("offsetSep");
       const off = (obj && obj.offset) || {};
@@ -6283,13 +6659,15 @@
         const hasTrack = !!(obj.track && obj.track.added);
         const hasOffset = !!(obj.offset && obj.offset.added);
         const hasCollider = !!(obj.collider && obj.collider.added);
+        const hasAnim = !!(obj.anim && obj.anim.added);
         compMenu.querySelectorAll("[data-comp]").forEach((b) => {
           const k = b.getAttribute("data-comp");
           // Offset component is switched off for now (offsets.OFFSETS_ENABLED).
           const isBot = obj.kind === "bot";
           b.hidden = k === "offset" || (k === "track" && !isSim && obj.kind !== "waypoint") || ((k === "offset" || k === "collider") && obj.kind === "waypoint") ||
             (k === "collider" && isSim) || (isBot && k !== "collider");
-          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset) || (k === "collider" && hasCollider);
+          if (k === "anim") b.hidden = ANIM_KINDS.indexOf(obj.kind) < 0 || !!obj.gimbal_part;
+          const taken = (k === "camera" && hasCam) || (k === "track" && hasTrack) || (k === "offset" && hasOffset) || (k === "collider" && hasCollider) || (k === "anim" && hasAnim);
           b.disabled = !!taken;
           b.style.opacity = taken ? "0.4" : "";
           b.style.pointerEvents = taken ? "none" : "";
@@ -6328,6 +6706,10 @@
         }
         if (btn.getAttribute("data-comp") === "collider") {
           postCollider({ act: "add" }).catch(() => {});
+        }
+        if (btn.getAttribute("data-comp") === "anim") {
+          const obj = window.__lastObject || {};
+          if (obj.id) animPost(obj.id, { action: "add" });
         }
         if (btn.getAttribute("data-comp") === "camera") {
           const obj = window.__lastObject || {};
@@ -7472,6 +7854,10 @@
       });
       samples.forEach((sm) => {
         if (sm && sm.t != null) maxT = Math.max(maxT, Number(sm.t) + 2);
+      });
+      (extraTracks || []).forEach((tr) => {
+        // Gimbal frames and Animate keys go on past the arm's path too.
+        (tr.keys || []).forEach((k) => { if (k && k.t != null) maxT = Math.max(maxT, Number(k.t) + 2); });
       });
       duration = Math.max(
         maxT,
