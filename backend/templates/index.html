@@ -8472,6 +8472,7 @@
         }
         if (!window.__camPumpStarted) {
           window.__camPumpStarted = true;
+          window.CAM_STREAMS = 3;
           window.__camMissUntil = window.__camMissUntil || {};
           window.__camBusy = window.__camBusy || {};
           (function pumpLive() {
@@ -8484,6 +8485,30 @@
               let el = document.querySelector("img.cam-live[data-id='" + id + "']");
               if (!el && !multi) el = document.getElementById("camFrame");
               if (!el) return;
+              // A stream (/api/cam_stream, MJPEG) per pane while it works: the server pushes
+              // each frame. At most CAM_STREAMS at once (the browser allows ~6 connections to
+              // the page's server); others, and a camera whose stream failed, poll as before.
+              const sFail = window.__camStreamFail || (window.__camStreamFail = {});
+              if (el.dataset.streamId === id) return;  // streaming
+              const hasNow = window.__camHasFrame && window.__camHasFrame[id];
+              if (hasNow && !sFail[id] && document.querySelectorAll("img[data-stream-id]").length < CAM_STREAMS) {
+                el.dataset.streamId = id;
+                el.dataset.camId = id;  // which camera the pane shows (clicks and boxes go to it)
+                el.onload = function () {
+                  if (el.dataset.streamId !== id) return;
+                  if (window.__camHasFrame) window.__camHasFrame[id] = true;
+                  missMap[id] = 0;
+                };
+                el.onerror = function () {
+                  if (el.dataset.streamId !== id) return;
+                  delete el.dataset.streamId;
+                  sFail[id] = Date.now() + 5000;  // poll for a while, then try the stream again
+                  if (window.__camHasFrame) window.__camHasFrame[id] = false;
+                };
+                el.src = "/api/cam_stream?id=" + encodeURIComponent(id) + "&t=" + Date.now();
+                return;
+              }
+              if (sFail[id] && Date.now() > sFail[id]) delete sFail[id];
               if (busy[id]) return;
               const has = window.__camHasFrame && window.__camHasFrame[id];
               const missUntil = Number(missMap[id] || 0);
@@ -8494,6 +8519,8 @@
               const nxt = new Image();
               nxt.onload = function () {
                 if (nxt.naturalWidth) {
+                  if (el.dataset.streamId) delete el.dataset.streamId;
+                  el.onload = el.onerror = null;
                   el.src = url;
                   el.dataset.camId = id;  // which camera the pane shows (clicks and boxes go to it)
                   if (window.__camHasFrame) window.__camHasFrame[id] = true;

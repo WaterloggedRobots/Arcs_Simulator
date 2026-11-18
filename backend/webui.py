@@ -64,7 +64,7 @@ app = Flask(__name__, template_folder=str(ROOT / "templates"), static_folder=Non
 
 # Every request runs as the active Aubo Arm, one at a time with the viewer
 # loop and the viewer's click / gizmo callbacks (see arms.py).
-_LOCK_FREE = {"/api/cam_frame", "/api/console"}
+_LOCK_FREE = {"/api/cam_frame", "/api/cam_stream", "/api/console"}
 _lock_held = threading.local()
 
 
@@ -1942,6 +1942,49 @@ def api_cam_frame():
     if not blob:
         return Response(status=204)
     return Response(blob, mimetype="image/jpeg")
+
+
+CAM_STREAM_FPS = 30        # most frames a camera stream sends per second
+CAM_STREAM_KEEP_S = 2.0    # no new frame this long: the last one again (finds a closed page)
+CAM_STREAM_GONE_S = 10.0   # the camera has had no frame at all this long: the stream ends
+
+
+@app.route("/api/cam_stream")
+def api_cam_stream():
+    """A camera's frames as an MJPEG stream (multipart/x-mixed-replace): one
+    connection, each new JPEG pushed as soon as the camera thread makes it.
+    The page used to ask for each frame and wait for it before asking again,
+    which slowed to a crawl while a run kept the browser and the server busy."""
+    oid = request.args.get("id") or ""
+    boundary = "arcsframe"
+
+    def frames():
+        last = None
+        sent_at = 0.0
+        seen_at = time.time()
+        while True:
+            store = getattr(sv, "_cam_frame_jpeg", None) or {}
+            blob = store.get(oid) if oid else (next(iter(store.values())) if store else None)
+            now = time.time()
+            if blob is not None:
+                seen_at = now
+            elif now - seen_at > CAM_STREAM_GONE_S:
+                return
+            fresh = blob is not None and blob is not last and now - sent_at >= 1.0 / CAM_STREAM_FPS
+            keep = last is not None and now - sent_at >= CAM_STREAM_KEEP_S
+            if fresh or keep:
+                part = blob if fresh else last
+                last, sent_at = part, now
+                # A write to a closed page raises here and ends the stream.
+                yield (b"--" + boundary.encode() + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                       + str(len(part)).encode() + b"\r\n\r\n" + part + b"\r\n")
+                continue
+            time.sleep(0.005)
+
+    resp = Response(frames(), mimetype="multipart/x-mixed-replace; boundary=" + boundary)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
 
 
 @app.route("/api/console")
