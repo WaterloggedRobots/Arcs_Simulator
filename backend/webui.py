@@ -1944,6 +1944,16 @@ def api_optomise():
     return jsonify({"ok": True})
 
 
+def _app_commit():
+    """The git commit the app runs from ("" outside a git checkout, e.g. the .exe)."""
+    try:
+        import subprocess
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(Path(__file__).resolve().parent),
+                              capture_output=True, text=True, timeout=3).stdout.strip()
+    except Exception:
+        return ""
+
+
 @app.route("/api/speed_export", methods=["GET", "POST"])
 def api_speed_export():
     """The Speed Graph's Export. POST {sim, real} (the graph's samples, [{t, v}]):
@@ -1992,6 +2002,13 @@ def api_speed_export():
         lv = live_aim.stream_log()
         if lv:
             doc["live_stream"] = lv  # Look At Live run: each point sent (joints in deg), rc, arm lag
+        # Which code and Live state made this export (a run without "live_stream" wasn't streamed).
+        doc["app"] = {"commit": _app_commit(), "live_on": bool(rr._track.get("live")),
+                      "last_run_live": bool(rr._rp.get("live")), "stream_ran": bool(lv),
+                      "turn_dps": rr._track.get("turn_dps", rr.TURN_DPS_DEFAULT),
+                      "turn_acc": rr._track.get("turn_acc", rr.TURN_ACC_DEFAULT),
+                      "smooth_s": rr._track.get("smooth_s", rr.SMOOTH_S_DEFAULT),
+                      "deadband_mm": rr._track.get("deadband_mm", rr.DEADBAND_MM_DEFAULT)}
     except Exception as e:
         print("speed export live stream failed", e)
     path.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")

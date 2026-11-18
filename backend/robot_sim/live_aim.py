@@ -41,6 +41,11 @@ AIM_EVERY = 2           # streamed run: IK every 2nd point; the filters run on e
 # carried on at its last rate (no steps for the filter to chatter on).
 AIM_DEADBAND_DEG = 0.4
 AIM_SETTLE_DEG = 0.05
+# Small corrections ease in: the turn's speed is also at most (what is left) /
+# AIM_RESPONSE_S, so a 1 deg correction starts at 2 deg/s and slows as it
+# closes (with only the speed / acceleration limits it was a quick
+# accelerate-and-brake step of ~10 deg/s for every small target movement).
+AIM_RESPONSE_S = 0.5
 JOINT_DPS = 45.0        # the aim's joint change on top of the baked path, deg/s
 JOINT_ACC = 180.0       # ... and its acceleration, deg/s^2
 JOINT_SMOOTH_S = 0.08
@@ -173,7 +178,7 @@ class Aimer:
             return
         # Speed along the error, braking in time; acceleration limited (vector).
         u = e / max(dist, 1e-12)
-        speed = min(vmax, math.sqrt(2.0 * amax * dist), dist / dt)
+        speed = min(vmax, math.sqrt(2.0 * amax * dist), dist / AIM_RESPONSE_S, dist / dt)
         dw = u * speed - self.w
         n = float(np.linalg.norm(dw))
         if n > amax * dt:
