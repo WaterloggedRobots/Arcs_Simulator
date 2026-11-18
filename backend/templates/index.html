@@ -2378,6 +2378,10 @@
               <label title="Time constant of the target's low-pass, s (0 = none): smooths small tracking jitter">smooth s</label><input id="trackSmooth" type="number" step="0.05" min="0" value="0.25">
               <label title="The target is held while it moves less than this, mm (0 = none)">dead mm</label><input id="trackDeadband" type="number" step="0.5" min="0" value="3">
             </div>
+            <div class="row triple" id="trackTurnRow" hidden>
+              <label title="Live: fastest turn of the aim, deg/s (lower = calmer, more lag)">turn °/s</label><input id="trackTurnDps" type="number" step="5" min="1" value="60">
+              <label title="Live: acceleration of the aim's turn, deg/s² (lower = softer starts and stops)">acc °/s²</label><input id="trackTurnAcc" type="number" step="10" min="1" value="180">
+            </div>
             <div class="row triple track-xyz">
               <label>x</label><input id="trackX" type="number" step="0.001" readonly>
               <label>y</label><input id="trackY" type="number" step="0.001" readonly>
@@ -6302,6 +6306,12 @@
         if (smEl && document.activeElement !== smEl && track.smooth_s != null) smEl.value = Number(track.smooth_s).toFixed(2);
         const dbEl = document.getElementById("trackDeadband");
         if (dbEl && document.activeElement !== dbEl && track.deadband_mm != null) dbEl.value = Number(track.deadband_mm).toFixed(1);
+        const tnRow = document.getElementById("trackTurnRow");
+        if (tnRow) tnRow.hidden = !isSim || !track.live;
+        const tdEl = document.getElementById("trackTurnDps");
+        if (tdEl && document.activeElement !== tdEl && track.turn_dps != null) tdEl.value = Number(track.turn_dps).toFixed(0);
+        const taEl = document.getElementById("trackTurnAcc");
+        if (taEl && document.activeElement !== taEl && track.turn_acc != null) taEl.value = Number(track.turn_acc).toFixed(0);
         if (liveCb && document.activeElement !== liveCb) liveCb.checked = !!track.live;
         const liveNote = document.getElementById("trackLiveNote");
         if (liveNote) {
@@ -6913,13 +6923,15 @@
       return ["trackPx", "trackPy", "trackPz"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
     }
     (function setupTrackLive() {
-      ["trackSmooth", "trackDeadband"].forEach((id) => {
+      ["trackSmooth", "trackDeadband", "trackTurnDps", "trackTurnAcc"].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener("change", () => {
           fetch("/api/track_object", { method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ smooth_s: Number(document.getElementById("trackSmooth").value) || 0,
-                                   deadband_mm: Number(document.getElementById("trackDeadband").value) || 0 }) })
+                                   deadband_mm: Number(document.getElementById("trackDeadband").value) || 0,
+                                   turn_dps: Number(document.getElementById("trackTurnDps").value) || 60,
+                                   turn_acc: Number(document.getElementById("trackTurnAcc").value) || 180 }) })
             .then(() => setTimeout(refresh, 80));
         });
       });

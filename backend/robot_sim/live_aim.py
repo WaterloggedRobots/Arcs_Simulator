@@ -7,9 +7,11 @@ Cursor where they put it, aims it at the span's Look At target as it is now
 and solves the joints for that aim with the local IK (`rr.solve_backup_ik`,
 its own model and lock, so any thread can call it). The aim change from the
 baked rotation is a world rotation `corr`, limited to `MAX_DEV_DEG` and moved
-toward its goal at most `MAX_DPS`; outside a Look At span it goes back to
-none at the same rate. An IK failure, a joint past its limit or a jump bigger
-than `JUMP_MAX_DEG` from the last answer keeps the last good correction.
+toward its goal with a speed and acceleration limit and a deadband; outside a
+Look At span it goes back to none the same way. The joints follow the IK
+answers through a speed / acceleration-limited filter. An IK failure, a joint
+past its limit or a jump bigger than `JUMP_MAX_DEG` from the last answer keeps
+the last good answer.
 
 Used by Simulate (`robot_runtime._apply_q_at_t`, on the viewer thread) and by
 the streamed real run (`Streamer` here: trackJoint at `STREAM_DT`, on the run's
@@ -24,11 +26,49 @@ import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-MAX_DPS = 90.0          # how fast the aim may turn away from / back to the baked aim
 MAX_DEV_DEG = 60.0      # largest turn away from the baked aim
-JUMP_MAX_DEG = 8.0      # a joint jump bigger than this between answers is refused
+JUMP_MAX_DEG = 8.0      # a joint jump bigger than this between IK answers is refused
 STREAM_DT = 0.02        # streamed run: 50 points/s
-AIM_EVERY = 2           # streamed run: aim every 2nd point (IK time), the delta is reused between
+AIM_EVERY = 2           # streamed run: IK every 2nd point; the filters run on every point
+# Smoothing (the aim used to step at a constant rate toward a goal re-made on
+# every tick, and each IK answer / hold went straight to the joints: target and
+# IK jitter shook the arm). The aim now turns with a speed and an acceleration
+# limit (`rr._track` turn_dps / turn_acc, set in the Look At panel), starts only
+# when the goal is more than AIM_DEADBAND_DEG away and settles below
+# AIM_SETTLE_DEG; the joints follow the IK answers through a critically damped per-joint filter
+# (time constant JOINT_SMOOTH_S, capped at JOINT_DPS / JOINT_ACC); IK answers
+# changing less than IK_DEADBAND_DEG are noise. Between IK answers the answer is
+# carried on at its last rate (no steps for the filter to chatter on).
+AIM_DEADBAND_DEG = 0.4
+AIM_SETTLE_DEG = 0.05
+JOINT_DPS = 120.0
+JOINT_ACC = 720.0
+JOINT_SMOOTH_S = 0.08
+IK_DEADBAND_DEG = 0.02
+
+
+def _limits():
+    rr = _rr()
+    try:
+        vmax = float(rr._track.get("turn_dps", rr.TURN_DPS_DEFAULT))
+        amax = float(rr._track.get("turn_acc", rr.TURN_ACC_DEFAULT))
+    except Exception:
+        vmax, amax = 60.0, 180.0
+    return math.radians(max(1.0, vmax)), math.radians(max(1.0, amax))
+
+
+def _follow(x, v, goal, vmax, amax, dt, tau):
+    """A critically damped follower (arrays, same units) with speed and
+    acceleration caps, in substeps of at most 5 ms: steps of the goal (IK every
+    other point, a held answer) come out as smooth curves, never as a stop-start
+    chatter."""
+    n = max(1, int(math.ceil(dt / 0.005)))
+    h = dt / n
+    for _ in range(n):
+        acc = np.clip((goal - x) / (tau * tau) - 2.0 * v / tau, -amax, amax)
+        v = np.clip(v + acc * h, -vmax, vmax)
+        x = x + v * h
+    return x, v
 
 
 def _rr():
@@ -75,17 +115,22 @@ def span_specs():
 class Aimer:
     def __init__(self, specs=None):
         self.specs = span_specs() if specs is None else specs
-        self.corr = R.identity()
-        self.delta = np.zeros(6)
-        self.q_prev = None
-        self.t_prev = None
+        self.reset()
         self.err = ""
         self.dev_deg = 0.0
         self.lag_deg = 0.0
 
     def reset(self):
-        self.corr = R.identity()
-        self.delta = np.zeros(6)
+        self.corr = R.identity()      # the aim's turn from the bake (world rotation)
+        self.corr_ok = R.identity()   # ... at the last IK answer taken
+        self.w = np.zeros(3)          # its angular velocity, rad/s (world rotvec)
+        self.moving = False           # the aim is turning (else it waits for the deadband)
+        self.delta_t = np.zeros(6)    # joints - baked joints, as the IK answered
+        self.delta = np.zeros(6)      # ... as sent (filtered)
+        self.dv = np.zeros(6)         # its rate, rad/s
+        self.ik_d = None              # last IK delta and its path time (for rate_t)
+        self.ik_t = None
+        self.rate_t = np.zeros(6)     # rate of the IK answers, rad/s
         self.q_prev = None
         self.t_prev = None
 
@@ -95,11 +140,48 @@ class Aimer:
                 return spec
         return None
 
-    def _hold(self, q_base, why):
-        self.err = why
-        return np.asarray(q_base, dtype=float) + self.delta
+    def _out(self, q_base, dt, why=""):
+        """Joints sent: the baked joints plus the filtered IK delta."""
+        if why:
+            # Held: the aim goes back to the last turn the joints took (else it
+            # ran on ahead and every later answer was a jump too), and stops.
+            self.err = why
+            self.rate_t = np.zeros(6)
+            self.corr = self.corr_ok
+            self.w = np.zeros(3)
+        self.delta, self.dv = _follow(self.delta, self.dv, self.delta_t,
+                                      math.radians(JOINT_DPS), math.radians(JOINT_ACC), dt, JOINT_SMOOTH_S)
+        q = np.asarray(q_base, dtype=float) + self.delta
+        self.q_prev = q
+        return q
 
-    def __call__(self, t, q_base):
+    def _turn(self, goal, dt):
+        """Move corr toward goal with the speed / acceleration limits and the deadband."""
+        vmax, amax = _limits()
+        e = (goal * self.corr.inv()).as_rotvec()
+        dist = float(np.linalg.norm(e))
+        if not self.moving:
+            if math.degrees(dist) < AIM_DEADBAND_DEG:
+                return
+            self.moving = True
+        if math.degrees(dist) < AIM_SETTLE_DEG and float(np.linalg.norm(self.w)) < math.radians(2.0):
+            self.corr = goal
+            self.w = np.zeros(3)
+            self.moving = False
+            return
+        if dt <= 0:
+            return
+        # Speed along the error, braking in time; acceleration limited (vector).
+        u = e / max(dist, 1e-12)
+        speed = min(vmax, math.sqrt(2.0 * amax * dist), dist / dt)
+        dw = u * speed - self.w
+        n = float(np.linalg.norm(dw))
+        if n > amax * dt:
+            dw *= amax * dt / n
+        self.w = self.w + dw
+        self.corr = R.from_rotvec(self.w * dt) * self.corr
+
+    def __call__(self, t, q_base, solve=True):
         rr = _rr()
         bake = _bake()
         q_base = np.asarray(q_base, dtype=float).reshape(-1)[:6]
@@ -109,10 +191,14 @@ class Aimer:
             self.reset()  # the clock went back (a loop, a seek)
             dt = 0.04
         self.t_prev = t
+        if not solve:
+            # Between IK answers: carry the answer on at its last rate.
+            self.delta_t = self.delta_t + self.rate_t * dt
+            return self._out(q_base, dt)
         spec = self._spec_at(t)
         model = getattr(rr, "robot_ik", None)
         if model is None:
-            return self._hold(q_base, "no IK model")
+            return self._out(q_base, dt, "no IK model")
         # The cursor where the baked joints put it.
         with rr._ik_lock:
             rr._set_q(model, q_base)
@@ -123,51 +209,48 @@ class Aimer:
         # Where the aim should be turned now.
         goal = R.identity()
         if spec is not None:
-            # Smoothed like the cursor's own Look At (deadband + low-pass: jitter doesn't shake the arm).
+            # Smoothed like the cursor's own Look At (deadband + low-pass on the target).
             tgt = rr.smooth_target("live:%s" % id(self), rr._track_target_pos(spec.get("name")))
             if tgt is None:
-                return self._hold(q_base, "target %r not found" % spec.get("name"))
+                return self._out(q_base, dt, "target %r not found" % spec.get("name"))
             aim = R.from_quat(_xyzw(rr._aim_wxyz(pos, tgt, spec.get("offset"), spec.get("pos_offset"))))
             goal = aim * r_base.inv()
             ang = np.degrees(goal.magnitude())
             if ang > MAX_DEV_DEG:
                 goal = R.from_rotvec(goal.as_rotvec() * (MAX_DEV_DEG / ang))
-        # Step toward it at the turn rate.
-        step = goal * self.corr.inv()
-        ang = step.magnitude()
-        lim = math.radians(MAX_DPS) * dt
-        if ang > lim:
-            step = R.from_rotvec(step.as_rotvec() * (lim / ang))
-        corr = step * self.corr
-        # How far the aim trails the target (turn-rate / deviation limits).
+        self._turn(goal, dt)
+        corr = self.corr
+        # How far the aim trails the target (deadband, speed / deviation limits).
         self.lag_deg = float(np.degrees((goal * corr.inv()).magnitude()))
-        if np.degrees(corr.magnitude()) < 1e-3 and spec is None:
-            self.corr = R.identity()
-            self.delta = np.zeros(6)
-            self.q_prev = q_base
+        self.dev_deg = float(np.degrees(corr.magnitude()))
+        if self.dev_deg < 1e-3 and not self.moving:
+            # No turn from the bake: the baked joints (the filter brings them back).
+            self.delta_t = np.zeros(6)
+            self.rate_t = np.zeros(6)
+            self.ik_d = None
+            self.corr_ok = self.corr
             self.err = ""
-            self.dev_deg = 0.0
-            return q_base
+            return self._out(q_base, dt)
         ee_pos, ee_wxyz = rr._ee_from_cursor(pos, _wxyz(corr * r_base), "sim")
-        # Seed and jump check from the last correction on today's base joints
-        # (the last answer was for an earlier point of the path: once held, it
-        # fell behind and every later answer looked like a jump).
-        seed = q_base + self.delta
-        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=seed, quiet=True)
+        # Seed and jump check from the last answer's delta on today's base joints.
+        ref = q_base + self.delta_t
+        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True)
         if q is None:
-            return self._hold(q_base, "IK failed")
+            return self._out(q_base, dt, "IK failed")
         q = bake._unwrap_toward(np.asarray(q, dtype=float), q_base)
         if bake._over_limit(q) is not None:
-            return self._hold(q_base, "joint limit")
-        ref = q_base + self.delta
+            return self._out(q_base, dt, "joint limit")
         if float(np.degrees(np.max(np.abs(q - ref)))) > JUMP_MAX_DEG:
-            return self._hold(q_base, "joint jump")
-        self.corr = corr
-        self.delta = q - q_base
-        self.q_prev = q
+            return self._out(q_base, dt, "joint jump")
+        d = q - q_base
+        if self.ik_d is not None and t > self.ik_t + 1e-6:
+            self.rate_t = np.clip((d - self.ik_d) / (t - self.ik_t), -math.radians(JOINT_DPS), math.radians(JOINT_DPS))
+        self.ik_d, self.ik_t = d, t
+        if float(np.degrees(np.max(np.abs(d - self.delta_t)))) >= IK_DEADBAND_DEG:
+            self.delta_t = d  # smaller changes are IK noise
+        self.corr_ok = corr
         self.err = ""
-        self.dev_deg = float(np.degrees(corr.magnitude()))
-        return q
+        return self._out(q_base, dt)
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +344,9 @@ class Streamer:
                     self.stats["cleared"] += 1
                     clear = False
                 q_base = _interp(self.samples, s)
-                if k % AIM_EVERY == 1 or AIM_EVERY <= 1:
-                    q = self.aimer(s, q_base)
-                    self.stats["aim_err"] = self.aimer.err
-                else:
-                    q = q_base + self.aimer.delta
+                # IK every AIM_EVERY points; the aim / joint filters step on every one.
+                q = self.aimer(s, q_base, solve=(AIM_EVERY <= 1 or k % AIM_EVERY == 1))
+                self.stats["aim_err"] = self.aimer.err
                 if self.q_last is not None:
                     # Never more than 5 deg per joint in one point (the controller trips on steps).
                     lim = math.radians(5.0)

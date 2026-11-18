@@ -1723,6 +1723,8 @@ def track_status():
         "live": bool(_track.get("live")),
         "smooth_s": float(_track.get("smooth_s", SMOOTH_S_DEFAULT)),
         "deadband_mm": float(_track.get("deadband_mm", DEADBAND_MM_DEFAULT)),
+        "turn_dps": float(_track.get("turn_dps", TURN_DPS_DEFAULT)),
+        "turn_acc": float(_track.get("turn_acc", TURN_ACC_DEFAULT)),
         "tools": [{"id": str(o.get("id")), "name": str(o.get("name") or o.get("id"))} for o in _cursor_children()],
     }
 
@@ -1733,6 +1735,9 @@ def track_status():
 # target (a camera script's primary target) doesn't shake the arm.
 SMOOTH_S_DEFAULT = 0.25
 DEADBAND_MM_DEFAULT = 3.0
+# Live Look At (live_aim): how fast the aim may turn, deg/s, and its acceleration, deg/s^2.
+TURN_DPS_DEFAULT = 60.0
+TURN_ACC_DEFAULT = 180.0
 _smooth = {}
 
 
