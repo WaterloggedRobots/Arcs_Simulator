@@ -3293,6 +3293,7 @@ def _abort_real_motion(name=None):
     try:
         import live_aim
         live_aim.stream_stop()  # a streamed (Live Look At) run: stop sending first
+        live_aim.drop_process()  # and a stream process waiting for a run
     except Exception as e:
         print("live stream stop failed:", e)
     if robot is None:
@@ -3512,17 +3513,34 @@ def upload_real_path(loops=0, delay=0.0):
         _rp["live"] = False
     if _rp["live"]:
         # Streamed run: nothing to upload (the points go out as the run plays).
-        try:
-            live_aim.own_model()  # its private IK model, loaded now (~1 s) rather than at Run
-        except Exception as e:
-            print("live run: private IK model failed:", e)
         if int(_rp.get("loops_left") or 0) != 0:
             print("live run: Repeat is not supported, playing once")
             _rp["loops_left"] = 0
-        _rp["uploading"] = False
-        _rp["uploaded"] = True
-        _rp["phase"] = "uploaded"
-        print("real path ready to stream (Live Look At), n", len(qs))
+        _rp["uploading"] = True
+        _rp["phase"] = "starting the stream"
+        gen_live = _rp_gen
+
+        def _prepare_live():
+            # Off the request thread (it holds the app's lock): the private IK model
+            # (~1 s) and the stream process with its own controller connection
+            # (a few seconds) are ready before Run.
+            try:
+                live_aim.own_model()
+            except Exception as e:
+                print("live run: private IK model failed:", e)
+            proc = False
+            try:
+                proc = live_aim.prepare_process(robot)
+            except Exception as e:
+                print("live run: stream process failed:", e)
+            if _halt or gen_live != _rp_gen:
+                live_aim.drop_process()
+                return
+            _rp["uploading"] = False
+            _rp["uploaded"] = True
+            _rp["phase"] = "uploaded"
+            print("real path ready to stream (Live Look At), n", len(qs), "sender:", "process" if proc else "app")
+        threading.Thread(target=_prepare_live, name="live_prepare", daemon=True).start()
         return True
 
     def _upload_only():

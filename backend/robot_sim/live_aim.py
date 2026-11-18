@@ -20,6 +20,7 @@ clock), both only while the Look At component's **Live** switch is on.
 from __future__ import annotations
 
 import math
+import sys
 import threading
 import time
 
@@ -48,6 +49,8 @@ IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
 #   joint_dps / joint_acc    the aim's joint change on top of the baked path, limits
 #   ik_every                 (unused since the streamed run aims on its own thread)
 #   aim_hz                   streamed run: aim answers per second of path, evenly spaced
+#   stream_process           streamed run: 1 = send from a process of its own (stream_proc.py,
+#                            its own controller connection), 0 = from a thread in the app
 #   track_smooth / track_delay  trackJoint's smooth and delay scales
 TUNE_DEFAULTS = {
     "smooth_s": 0.1, "deadband_mm": 1.0, "predict_s": 0.1,
@@ -55,6 +58,7 @@ TUNE_DEFAULTS = {
     "turn_dps": 30.0, "turn_acc": 90.0,
     "joint_smooth_s": 0.03, "joint_dps": 45.0, "joint_acc": 180.0,
     "ik_every": 1, "aim_hz": 10.0, "track_smooth": 0.5, "track_delay": 1.0,
+    "stream_process": 1.0,
 }
 TUNE_RANGES = {
     "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0), "predict_s": (0.0, 0.5),
@@ -62,6 +66,7 @@ TUNE_RANGES = {
     "turn_dps": (1.0, 180.0), "turn_acc": (1.0, 2000.0),
     "joint_smooth_s": (0.0, 1.0), "joint_dps": (1.0, 180.0), "joint_acc": (1.0, 2000.0),
     "ik_every": (1, 10), "aim_hz": (2.0, 50.0), "track_smooth": (0.0, 1.0), "track_delay": (0.0, 2.0),
+    "stream_process": (0.0, 1.0),
 }
 TUNE = dict(TUNE_DEFAULTS)
 
@@ -433,16 +438,23 @@ class Streamer:
     sent again); the run stops (stopJoint) when the aim asks for more than the
     limits allow or the arm falls behind. stop() ends it."""
 
-    def __init__(self, bot, samples):
+    def __init__(self, bot, samples, external=False):
+        """external: the aim answers come from outside (`feed_answer`; the
+        stream process, stream_proc.py), so no aimer of its own runs here."""
         self.bot = bot
         self.samples = list(samples)
         self.t_end = float(self.samples[-1]["t"]) if self.samples else 0.0
-        try:
-            model, lock = own_model()
-        except Exception as e:
-            print("live stream: no private IK model, sharing the viewer's:", e)
-            model, lock = None, None
-        self.aimer = Aimer(model=model, lock=lock)
+        self.external = bool(external)
+        self.on_sent = None           # hook: on_sent(s, q) for every point taken
+        if self.external:
+            self.aimer = Aimer(specs=[])  # status only
+        else:
+            try:
+                model, lock = own_model()
+            except Exception as e:
+                print("live stream: no private IK model, sharing the viewer's:", e)
+                model, lock = None, None
+            self.aimer = Aimer(model=model, lock=lock)
         self.stop_ev = threading.Event()
         self.thread = None
         self.aim_thread = None
@@ -469,10 +481,21 @@ class Streamer:
                 fn()
             except Exception:
                 pass
-        self.aim_thread = threading.Thread(target=self._aim_loop, name="live_aim", daemon=True)
-        self.aim_thread.start()
+        if not self.external:
+            self.aim_thread = threading.Thread(target=self._aim_loop, name="live_aim", daemon=True)
+            self.aim_thread.start()
         self.thread = threading.Thread(target=self._run, name="live_stream", daemon=True)
         self.thread.start()
+
+    def feed_answer(self, s, d):
+        """An aim answer from outside (external mode)."""
+        d = np.asarray(d, dtype=float).reshape(6)
+        self.answers = (self.answers + [(float(s), d)])[-ANSWERS_KEPT:]
+        self.aim_d = d
+        self.aim_at = time.perf_counter()
+
+    def _on_answer(self, s, d):
+        """Hook: each new aim answer (ProcStreamer passes it to the stream process)."""
 
     def stop(self):
         self.stop_ev.set()
@@ -520,6 +543,7 @@ class Streamer:
                 self.aim_gap = 0.8 * self.aim_gap + 0.2 * min(1.0, now - self.aim_at)
             # A new list each time (the sender reads it without a lock).
             self.answers = (self.answers + [(s, d)])[-ANSWERS_KEPT:]
+            self._on_answer(s, d)
             self.aim_d, self.aim_at, last = d, now, s
             self.stats["aims"] += 1
             self.stats["max_aim_ms"] = max(self.stats["max_aim_ms"], (now - t0) * 1000.0)
@@ -632,6 +656,8 @@ class Streamer:
                     self.q_last = q
                     s, qb_prev = s_new, q_base
                     self.s_sent = s
+                    if self.on_sent is not None:
+                        self.on_sent(s, q)
                     self.stats["sent"] += 1
                     full_since = None
                     if last_sent is not None:
@@ -697,15 +723,206 @@ class Streamer:
         print("live stream done", self.stats)
 
 
-_stream = {"s": None}
+class ProcStreamer(Streamer):
+    """The streamed run with the sender in a process of its own (stream_proc.py,
+    its own RPC connection): here only the aimer runs (on the app's private IK
+    model) and its answers go to the process, which sends the points. A thread
+    here (`thread`) reads what the process reports: the points it sent (the sim
+    arm shows them, the aimer aims ahead of them) and, at the end, its stats and
+    log. A heartbeat every HEARTBEAT_S lets the process stop the arm itself if
+    the app goes quiet."""
+
+    HEARTBEAT_S = 0.1
+
+    def __init__(self, bot, samples, child):
+        super().__init__(bot, samples)
+        self.child = child            # a ready _Child (connected to the controller)
+        self.hb_thread = None
+
+    def start(self):
+        samples = [{"t": float(x["t"]), "q": [float(v) for v in np.asarray(x["q"], dtype=float).reshape(-1)[:6]]}
+                   for x in self.samples]
+        self.child.send("start", {"samples": samples, "tune": dict(TUNE)})
+        self.aim_thread = threading.Thread(target=self._aim_loop, name="live_aim", daemon=True)
+        self.aim_thread.start()
+        self.hb_thread = threading.Thread(target=self._heartbeat, name="live_hb", daemon=True)
+        self.hb_thread.start()
+        self.thread = threading.Thread(target=self._read, name="live_stream_rx", daemon=True)
+        self.thread.start()
+
+    def _on_answer(self, s, d):
+        self.child.send("aim", float(s), [float(v) for v in d])
+
+    def _heartbeat(self):
+        sent_tune = dict(TUNE)
+        while not self.stop_ev.is_set():
+            self.child.send("hb")
+            if TUNE != sent_tune:
+                sent_tune = dict(TUNE)
+                self.child.send("tune", sent_tune)  # Real Time Motion edits during the run
+            time.sleep(self.HEARTBEAT_S)
+
+    def _read(self):
+        try:
+            while True:
+                m = self.child.recv(timeout=2.0)
+                if m is None:
+                    if self.child.proc.poll() is not None:
+                        raise RuntimeError("the stream process ended")
+                    continue
+                kind = m[0]
+                if kind == "sent":
+                    self.s_sent = float(m[1])
+                    self.q_last = np.asarray(m[2], dtype=float)
+                    self.stats["sent"] += 1
+                elif kind == "log":
+                    print("stream process:", m[1])
+                elif kind == "done":
+                    stats, err, log = m[1], m[2], m[3]
+                    self.stats.update({k: v for k, v in stats.items() if k not in ("aims", "max_aim_ms", "aim_err")})
+                    self.log = log
+                    self.error = err or ""
+                    break
+        except Exception as e:
+            self.error = str(e)
+            print("live stream (process) stopped:", e)
+        self.stop_ev.set()
+        self.child.close()
+        print("live stream (process) done", self.stats)
+
+    def stop(self):
+        self.stop_ev.set()
+        self.child.send("stop")
+        for th in (self.thread, self.aim_thread, self.hb_thread):
+            if th is not None and th is not threading.current_thread():
+                th.join(1.5)
+        self.child.close()
+
+
+class _Child:
+    """The stream process: started and connected to the controller at Upload, so
+    Run only has to hand it the path."""
+
+    def __init__(self, ip, port, user, pwd, timeout_s=15.0):
+        import os
+        import secrets
+        import subprocess
+        from multiprocessing.connection import Listener
+        self.lock = threading.Lock()
+        key = secrets.token_bytes(16)
+        self.listener = Listener(("127.0.0.1", 0), authkey=key)
+        here = os.path.dirname(os.path.abspath(__file__))
+        args = [sys.executable, os.path.join(here, "stream_proc.py"), str(self.listener.address[1]), key.hex(),
+                str(ip), str(int(port)), str(user), str(pwd)]
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        self.proc = subprocess.Popen(args, cwd=here, creationflags=flags)
+        self.conn = None
+        box = {}
+
+        def accept():
+            try:
+                box["c"] = self.listener.accept()
+            except Exception as e:
+                box["e"] = e
+        th = threading.Thread(target=accept, daemon=True)
+        th.start()
+        th.join(timeout_s)
+        if "c" not in box:
+            self.close()
+            raise RuntimeError("the stream process did not start (%s)" % box.get("e", "timeout"))
+        self.conn = box["c"]
+        m = self.recv(timeout=timeout_s)
+        while m is not None and m[0] == "log":
+            print("stream process:", m[1])
+            m = self.recv(timeout=timeout_s)
+        if m is None or m[0] != "ready" or not m[1]:
+            why = (m[2] if m is not None and m[0] == "ready" else "no answer")
+            self.close()
+            raise RuntimeError(why)
+
+    def send(self, *msg):
+        if self.conn is None:
+            return
+        try:
+            with self.lock:
+                self.conn.send(msg)
+        except Exception:
+            pass
+
+    def recv(self, timeout=1.0):
+        try:
+            if self.conn is not None and self.conn.poll(timeout):
+                return self.conn.recv()
+        except (EOFError, OSError):
+            raise RuntimeError("the stream process closed the connection")
+        return None
+
+    def alive(self):
+        return self.conn is not None and self.proc.poll() is None
+
+    def close(self):
+        for fn in (lambda: self.conn.close() if self.conn is not None else None,
+                   lambda: self.listener.close()):
+            try:
+                fn()
+            except Exception:
+                pass
+        self.conn = None
+        try:
+            self.proc.wait(1.0)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+
+
+_stream = {"s": None, "child": None}
+
+
+def prepare_process(bot):
+    """At Upload: start the stream process and let it connect (a few seconds)
+    so Run doesn't wait for it. False (and the in-app sender at Run) when it
+    is switched off or can't start / connect."""
+    drop_process()
+    if float(tune("stream_process")) < 0.5 or bot is None:
+        return False
+    try:
+        _stream["child"] = _Child(getattr(bot, "ip", ""), getattr(bot, "port", 30004),
+                                  getattr(bot, "user", "aubo"), getattr(bot, "pwd", "123456"))
+        print("live stream: stream process ready (own controller connection)")
+        return True
+    except Exception as e:
+        print("live stream: stream process unavailable, the app will send:", e)
+        return False
+
+
+def drop_process():
+    ch = _stream.get("child")
+    _stream["child"] = None
+    if ch is not None:
+        ch.send("stop")
+        ch.close()
 
 
 def stream_start(bot, samples):
     stream_stop()
-    st = Streamer(bot, samples)
+    ch = _stream.get("child")
+    _stream["child"] = None
+    st = None
+    if ch is not None and ch.alive():
+        try:
+            st = ProcStreamer(bot, samples, ch)
+            st.start()
+        except Exception as e:
+            print("live stream: stream process failed, the app sends:", e)
+            ch.close()
+            st = None
+    if st is None:
+        st = Streamer(bot, samples)
+        st.start()
     _stream["s"] = st
     _stream["last"] = st
-    st.start()
     return st
 
 
@@ -738,7 +955,8 @@ def stream_log():
     st = _stream.get("last") or _stream.get("s")
     if st is None:
         return None
-    return {"stats": dict(st.stats), "error": st.error, "dt": STREAM_DT, "points": list(st.log)}
+    return {"stats": dict(st.stats), "error": st.error, "dt": STREAM_DT, "points": list(st.log),
+            "sender": "process" if isinstance(st, ProcStreamer) else "app"}
 
 
 def stream_status():
