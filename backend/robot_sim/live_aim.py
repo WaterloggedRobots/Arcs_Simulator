@@ -20,7 +20,6 @@ clock), both only while the Look At component's **Live** switch is on.
 from __future__ import annotations
 
 import math
-import sys
 import threading
 import time
 
@@ -350,19 +349,12 @@ def _interp(samples, t):
 STEP_MARGIN_DPS = 20.0   # a point may move this much faster than the path + aim limits ...
 STOP_BEHIND_DEG = 3.0    # ... and the stream stops if it falls this far behind what it should send
 FOLLOW_STOP_DEG = 10.0   # the arm this far from the last point sent -> stop
-READ_EVERY = 10          # read the arm's joints every N points (each read is a network call)
-QUEUE_EVERY = 3          # ask the controller's queue size every N points
+READ_EVERY = 5           # read the arm's joints every N points
 FULL_STOP_S = 1.0        # the controller refusing points (queue full) this long -> stop
 SETTLE_MAX_S = 0.5       # at the end, keep sending the last point while the aim settles
-LEAD_POINTS = 5          # points kept queued ahead on the controller (100 ms): a late send doesn't starve it
-QUEUE_MAX = 10           # with getTrajectoryQueueSize: don't send while this many are queued
-RESYNC_S = 0.5           # a stall longer than this restarts the schedule (else late points go out back to back)
-CATCHUP_MAX = 4          # behind the clock: up to this many points back to back in one go (each one tick)
-COARSE_AFTER_S = 0.3     # only further behind than this does a point cover 2 ticks
-SWITCH_S = 0.0005        # Python thread switch interval during a stream (default 5 ms): the sender
-                         # waited up to 5 ms for the interpreter after each network call while the
-                         # aimer / viewer / camera threads computed: ~13 points/s, 80 ms segments
-AIM_DUTY = 0.5           # the aimer computes at most this share of the time (sleeps the rest)
+LEAD_POINTS = 3          # points kept queued ahead on the controller (60 ms): a late tick doesn't starve it
+QUEUE_MAX = 8            # with getTrajectoryQueueSize: don't send while this many are queued
+RESYNC_S = 0.25          # a stall longer than this restarts the schedule (else late points go out back to back)
 
 
 def _fine_timer(on):
@@ -375,19 +367,6 @@ def _fine_timer(on):
     try:
         import ctypes
         (ctypes.windll.winmm.timeBeginPeriod if on else ctypes.windll.winmm.timeEndPeriod)(1)
-    except Exception:
-        pass
-
-
-def _thread_priority_high():
-    """Windows: the sending thread above normal priority (it only waits and sends)."""
-    import os
-    if os.name != "nt":
-        return
-    try:
-        import ctypes
-        k = ctypes.windll.kernel32
-        k.SetThreadPriority(k.GetCurrentThread(), 2)  # THREAD_PRIORITY_HIGHEST
     except Exception:
         pass
 
@@ -528,10 +507,8 @@ class Streamer:
             self.stats["aims"] += 1
             self.stats["max_aim_ms"] = max(self.stats["max_aim_ms"], (now - t0) * 1000.0)
             self.stats["aim_err"] = self.aimer.err
-            # Not faster than the points go out, and sleeping at least as long as it
-            # computed (AIM_DUTY): a busy aimer kept the sender waiting for the interpreter.
-            took = time.perf_counter() - t0
-            left = max(STREAM_DT - took, took * (1.0 - AIM_DUTY) / AIM_DUTY)
+            # Not faster than the points go out.
+            left = STREAM_DT - (time.perf_counter() - t0)
             if left > 0:
                 time.sleep(left)
 
@@ -576,9 +553,6 @@ class Streamer:
     def _run(self):
         mc = self.bot.mc
         _fine_timer(True)
-        old_switch = sys.getswitchinterval()
-        sys.setswitchinterval(SWITCH_S)
-        _thread_priority_high()
         self._qfn = None
         t_wall0 = time.perf_counter()
         due = t_wall0 - LEAD_POINTS * STREAM_DT  # the first LEAD_POINTS go out at once
@@ -588,23 +562,19 @@ class Streamer:
         n = 0
         settle = None                # wall time the end's settling began
         last_sent = None
-        burst = 0                    # points sent back to back so far (catching up)
-        qn = None
         try:
             while not self.stop_ev.is_set():
-                if n % QUEUE_EVERY == 0 or (qn is not None and qn >= QUEUE_MAX):
-                    qn = self._queue(mc)
+                qn = self._queue(mc)
                 if qn is not None and qn >= QUEUE_MAX:
                     _sleep_until(time.perf_counter() + 0.004)  # plenty queued: wait
                     continue
                 n += 1
                 due += STREAM_DT
                 if settle is None:
-                    # One tick of path per point. Behind the clock, the next points go out back
-                    # to back (still one tick each: even segments); only far behind does a
-                    # point cover 2 ticks (80 ms points were the coarse segments on the arm).
+                    # One tick of path per point; behind the wall clock (a stall) a point
+                    # covers the missed time, up to 4 ticks, with a matching duration.
                     behind = time.perf_counter() - t_wall0 - LEAD_POINTS * STREAM_DT - s
-                    step = 2 * STREAM_DT if behind > COARSE_AFTER_S else STREAM_DT
+                    step = min(4 * STREAM_DT, max(STREAM_DT, behind)) if behind > 2 * STREAM_DT else STREAM_DT
                     s_new = min(s + step, self.t_end)
                     dur = max(STREAM_DT, s_new - s)
                     q_base = _interp(self.samples, s_new)
@@ -666,21 +636,13 @@ class Streamer:
                 if settle is not None and (now - settle > SETTLE_MAX_S
                                            or float(np.max(np.abs(self.dv))) < math.radians(0.5)):
                     break  # the last point is sent and the aim has come to rest
-                if qn is not None and rc == 0:
-                    qn += 1  # our own point, until the next read
                 if now - due > RESYNC_S:
                     self.stats["late"] += 1
                     due = now  # a long stall: start the schedule again (no burst)
-                    burst = 0
-                elif due < now and burst < CATCHUP_MAX:
-                    burst += 1  # behind: the next point now
-                    self.stats["catchup"] = self.stats.get("catchup", 0) + 1
                 elif qn is not None and qn <= 1:
-                    burst = 0
                     due = min(due, now)  # the controller is about to run dry: send the next one now
                 else:
-                    burst = 0
-                    _sleep_until(max(due, now + 0.001) if due < now else due)
+                    _sleep_until(due)
         except Exception as e:
             self.error = str(e)
             print("live stream stopped:", e)
@@ -690,7 +652,6 @@ class Streamer:
                 pass
         finally:
             _fine_timer(False)
-            sys.setswitchinterval(old_switch)
             self.stop_ev.set()  # the aimer too
         self.stats["wall_s"] = round(time.perf_counter() - t_wall0, 3)
         self.stats["path_s"] = round(s, 3)
