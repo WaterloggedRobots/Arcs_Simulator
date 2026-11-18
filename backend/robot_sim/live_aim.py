@@ -355,6 +355,9 @@ SETTLE_MAX_S = 0.5       # at the end, keep sending the last point while the aim
 LEAD_POINTS = 3          # points kept queued ahead on the controller (60 ms): a late tick doesn't starve it
 QUEUE_MAX = 8            # with getTrajectoryQueueSize: don't send while this many are queued
 RESYNC_S = 0.25          # a stall longer than this restarts the schedule (else late points go out back to back)
+AIM_LEAD_MIN_S = 0.08    # the aimer solves this far ahead of the sender at least ...
+AIM_LEAD_MAX_S = 0.5     # ... and at most (2 x the sender's path time between answers + the queued points)
+ANSWERS_KEPT = 12        # the aimer's recent answers the sender blends between
 
 
 def _fine_timer(on):
@@ -422,10 +425,10 @@ class Streamer:
       so the points go out evenly (with the aim solved in the same loop, IK and
       the viewer's IK lock made the points 80-360 ms apart: jitter, and the
       path ran at ~0.7 x speed).
-    - the aimer (`_aim_loop`): as often as it can, the Aimer at the path time
-      just ahead of the sender, on its own IK model; its answer (`aim_d`) and
-      rate (`aim_v`) are what the sender's filter follows, carried on at that
-      rate between answers.
+    - the aimer (`_aim_loop`): as often as it can, the Aimer at a path time
+      ahead of the sender (`_aim_lead`: ~2 x the path time the sender covers between answers), on its own IK model;
+      the sender blends between the two answers either side of each point
+      (`_delta_goal`), and its filter smooths what is left.
 
     The path time moves on only when a point is taken (a refused point is
     sent again); the run stops (stopJoint) when the aim asks for more than the
@@ -451,8 +454,10 @@ class Streamer:
         self.log = []
         self.s_sent = 0.0
         self.aim_d = np.zeros(6)      # the aimer's latest joint change (rad)
-        self.aim_v = np.zeros(6)      # its rate (rad/s)
-        self.aim_at = None            # perf_counter of that answer
+        self.answers = []             # [(path time, joint change)] of the aimer's recent answers
+        self.aim_gap = 0.1            # its time between answers (s), averaged
+        self.aim_ds = 0.1             # path time the sender covers between answers (s), averaged
+        self.aim_at = None            # perf_counter of the latest answer
         self.delta = np.zeros(6)      # joint change as sent (filtered)
         self.dv = np.zeros(6)
         # The arm stands on the first point (checked before the run).
@@ -478,17 +483,25 @@ class Streamer:
                 th.join(1.0)
 
     # -- aimer thread -------------------------------------------------------
+    def _aim_lead(self):
+        """How far ahead of the sender the aimer solves: twice the path time the
+        sender covers between answers (rising at once when that grows), plus the
+        queued points, so the sender's point always has an answer either side of
+        it to blend."""
+        return min(AIM_LEAD_MAX_S, max(AIM_LEAD_MIN_S, 2.0 * self.aim_ds + LEAD_POINTS * STREAM_DT))
+
     def _aim_loop(self):
         last = None
+        s_at_last = None
         while not self.stop_ev.is_set():
             t0 = time.perf_counter()
-            # Aim where the sender will be by the time this answer is used.
-            s = min(self.t_end, self.s_sent + (LEAD_POINTS + 1) * STREAM_DT)
+            s_sent = self.s_sent
+            s = min(self.t_end, s_sent + self._aim_lead())
             if last is not None and s <= last + 1e-6:
-                if s >= self.t_end - 1e-9:
+                if s >= self.t_end - 1e-9 or last >= self.t_end - 1e-9:
                     time.sleep(0.005)
                     continue
-                s = last + 0.002
+                s = min(self.t_end, last + 0.002)
             try:
                 q_base = _interp(self.samples, s)
                 self.aimer(s, q_base)
@@ -498,30 +511,61 @@ class Streamer:
                 time.sleep(0.02)
                 continue
             now = time.perf_counter()
-            if self.aim_at is not None and last is not None and s > last:
-                cap = math.radians(tune("joint_dps"))
-                self.aim_v = np.clip((d - self.aim_d) / (s - last), -cap, cap)
-            if self.aimer.err:
-                self.aim_v = np.zeros(6)  # held: don't carry it on
+            if self.aim_at is not None:
+                self.aim_gap = 0.8 * self.aim_gap + 0.2 * min(0.5, now - self.aim_at)
+            s_now = self.s_sent
+            if s_at_last is not None:
+                # Path time, not wall time: a sender catching up covers more path per second.
+                ds = max(s_now - s_at_last, s_now - s_sent)
+                self.aim_ds = max(0.6 * self.aim_ds + 0.4 * min(0.4, ds), min(0.4, ds))
+            s_at_last = s_now
+            # A new list each time (the sender reads it without a lock).
+            self.answers = (self.answers + [(s, d)])[-ANSWERS_KEPT:]
             self.aim_d, self.aim_at, last = d, now, s
             self.stats["aims"] += 1
             self.stats["max_aim_ms"] = max(self.stats["max_aim_ms"], (now - t0) * 1000.0)
             self.stats["aim_err"] = self.aimer.err
+            self.stats["aim_gap_ms"] = round(self.aim_gap * 1000.0, 1)
+            self.stats["aim_lead_ms"] = round(self._aim_lead() * 1000.0, 1)
             # Not faster than the points go out.
             left = STREAM_DT - (time.perf_counter() - t0)
             if left > 0:
                 time.sleep(left)
 
-    def _delta_goal(self):
-        """The aim's joint change for the next point: its last answer carried on
-        at its rate (up to 0.15 s past it)."""
-        if self.aim_at is None:
+    def _delta_goal(self, s):
+        """The aim's joint change at path time s: a smooth curve through the
+        answers either side of it. (Carrying the latest answer on
+        at its rate and then holding it made a sawtooth: the commanded speed
+        jumped ~5 deg/s at each answer and ~2.5 deg/s between.) Before the first
+        answer: the change as sent; past the latest: the latest."""
+        ans = self.answers
+        if not ans:
             return self.delta
-        age = min(0.15, max(0.0, time.perf_counter() - self.aim_at))
-        return self.aim_d + self.aim_v * age
+        if s <= ans[0][0]:
+            # Before the oldest answer kept (the run's start): blend toward it from
+            # the change as sent at the last point.
+            s_prev = min(self.s_sent, s)
+            u = 1.0 if ans[0][0] - s_prev < 1e-9 else (s - s_prev) / (ans[0][0] - s_prev)
+            return (1.0 - u) * self.delta + u * ans[0][1]
+        for i in range(len(ans) - 1):
+            (s0, d0), (s1, d1) = ans[i], ans[i + 1]
+            if s0 <= s <= s1:
+                # A smooth curve through the answers (Catmull-Rom): straight blends
+                # between them changed the speed suddenly at every answer.
+                h = max(1e-9, s1 - s0)
+                u = (s - s0) / h
+                sa, da = ans[i - 1] if i > 0 else (s0, d0)
+                sb, db = ans[i + 2] if i + 2 < len(ans) else (s1, d1)
+                m0 = (d1 - da) / max(1e-9, s1 - sa)
+                m1 = (db - d0) / max(1e-9, sb - s0)
+                u2, u3 = u * u, u * u * u
+                return ((2 * u3 - 3 * u2 + 1) * d0 + (u3 - 2 * u2 + u) * h * m0
+                        + (-2 * u3 + 3 * u2) * d1 + (u3 - u2) * h * m1)
+        self.stats["past_aim"] = self.stats.get("past_aim", 0) + 1
+        return ans[-1][1]
 
-    def _step_delta(self, dur, goal=None):
-        self.delta, self.dv = _follow(self.delta, self.dv, self._delta_goal() if goal is None else goal,
+    def _step_delta(self, dur, goal=None, s=None):
+        self.delta, self.dv = _follow(self.delta, self.dv, self._delta_goal(s) if goal is None else goal,
                                       math.radians(tune("joint_dps")), math.radians(tune("joint_acc")),
                                       dur, tune("joint_smooth_s"))
         return self.delta
@@ -578,7 +622,7 @@ class Streamer:
                     s_new = min(s + step, self.t_end)
                     dur = max(STREAM_DT, s_new - s)
                     q_base = _interp(self.samples, s_new)
-                    q = q_base + self._step_delta(dur)
+                    q = q_base + self._step_delta(dur, s=s_new)
                 else:
                     # Past the end: the last point, the aim's joints coming to rest on its last answer.
                     s_new, dur, q_base = self.t_end, STREAM_DT, qb_prev
