@@ -14,7 +14,9 @@
 # object's hfov / vfov to the camera's). The Camera object must sit where the
 # Orbbec's colour lens is: the target is placed from its pose.
 #
-# Needs: pip install pyorbbecsdk opencv-contrib-python
+# Needs: pip install pyorbbecsdk2 opencv-contrib-python
+# (Orbbec SDK v2 on PyPI is "pyorbbecsdk2", imported as pyorbbecsdk; the old
+#  "pyorbbecsdk" 1.x on PyPI has no wheels past Python 3.11.)
 # (opencv-python works too, with the weaker MIL tracker only.)
 # Without pyorbbecsdk it opens the camera's colour stream as a plain webcam
 # (WEBCAM_INDEX): the box is tracked and drawn, but there is no depth, so no
@@ -307,7 +309,7 @@ def _ensure():
         except ImportError:
             _open_webcam()
             last_error = ""
-            print("orbbec: pyorbbecsdk missing, colour only (webcam %d)" % WEBCAM_INDEX)
+            print("orbbec: pyorbbecsdk missing (pip install pyorbbecsdk2), colour only (webcam %d)" % WEBCAM_INDEX)
         else:
             _open_orbbec()
         _fail_n = 0

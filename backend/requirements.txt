@@ -23,7 +23,7 @@ trimesh>=4.0
 
 # Optional: Orbbec box tracking camera script (docs/examples/cam_scripts/orbbec_box_track.py)
 # opencv-contrib-python>=4.8   (CSRT tracker; plain opencv-python falls back to KCF / MIL)
-# pyorbbecsdk
+# pyorbbecsdk2   (Orbbec SDK v2, imported as pyorbbecsdk; "pyorbbecsdk" on PyPI is 1.x, no Python 3.12 wheels)
 
 # Optional: production web server if you wrap Flask with gunicorn
 # gunicorn>=21.0
