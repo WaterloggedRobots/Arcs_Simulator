@@ -123,7 +123,8 @@ class Aimer:
         # Where the aim should be turned now.
         goal = R.identity()
         if spec is not None:
-            tgt = rr._track_target_pos(spec.get("name"))
+            # Smoothed like the cursor's own Look At (deadband + low-pass: jitter doesn't shake the arm).
+            tgt = rr.smooth_target("live:%s" % id(self), rr._track_target_pos(spec.get("name")))
             if tgt is None:
                 return self._hold(q_base, "target %r not found" % spec.get("name"))
             aim = R.from_quat(_xyzw(rr._aim_wxyz(pos, tgt, spec.get("offset"), spec.get("pos_offset"))))

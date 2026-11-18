@@ -310,7 +310,7 @@ def set_arm_base(pos=None, wxyz=None):
                 _cursor_sim.position = pin
             if _sim_gizmo is not None:
                 _sim_gizmo.position = pin
-                _sim_gizmo.wxyz = tuple(float(v) for v in q)
+                _sim_gizmo.wxyz = tuple(float(v) for v in wp._gizmo_display_wxyz(q))
             if _track.get("pin_pos") is not None:
                 _track["pin_pos"] = np.asarray(p, dtype=float).reshape(3).copy()
             _track["_ik_key"] = None
@@ -1721,8 +1721,44 @@ def track_status():
         "tool": _track.get("tool") or "",
         "tool_pick": bool(_track.get("tool_pick")),
         "live": bool(_track.get("live")),
+        "smooth_s": float(_track.get("smooth_s", SMOOTH_S_DEFAULT)),
+        "deadband_mm": float(_track.get("deadband_mm", DEADBAND_MM_DEFAULT)),
         "tools": [{"id": str(o.get("id")), "name": str(o.get("name") or o.get("id"))} for o in _cursor_children()],
     }
+
+
+# Look At smoothing (live tracking only; the bake aims at exact positions):
+# the target is held still while it moves less than the deadband, and then
+# followed with a low-pass of that time constant, so small jitter of a tracked
+# target (a camera script's primary target) doesn't shake the arm.
+SMOOTH_S_DEFAULT = 0.25
+DEADBAND_MM_DEFAULT = 3.0
+_smooth = {}
+
+
+def smooth_target(key, pos):
+    """The Look At target as followed by the live aim (key: one filter per user)."""
+    if pos is None:
+        _smooth.pop(key, None)
+        return None
+    raw = np.asarray(pos, dtype=float).reshape(3)
+    tau = max(0.0, float(_track.get("smooth_s", SMOOTH_S_DEFAULT) or 0.0))
+    band = max(0.0, float(_track.get("deadband_mm", DEADBAND_MM_DEFAULT) or 0.0)) / 1000.0
+    now = time.monotonic()
+    st = _smooth.get(key)
+    if st is None or float(np.linalg.norm(raw - st["p"])) > 0.5:
+        _smooth[key] = {"p": raw.copy(), "t": now}  # first time, or a jump to another target
+        return raw
+    dt = max(0.0, min(0.5, now - st["t"]))
+    st["t"] = now
+    d = raw - st["p"]
+    dist = float(np.linalg.norm(d))
+    if dist <= band:
+        return st["p"].copy()  # inside the deadband: hold
+    goal = raw - d / dist * band  # follow up to the deadband's edge
+    k = 1.0 if tau <= 1e-6 else 1.0 - math.exp(-dt / tau)
+    st["p"] = st["p"] + (goal - st["p"]) * k
+    return st["p"].copy()
 
 
 def tick_track_object():
@@ -1731,6 +1767,7 @@ def tick_track_object():
     refresh_tool_offsets()
     tgt = _track_target_pos(_track.get("name"))
     _track["valid"] = tgt is not None
+    tgt = smooth_target("cursor", tgt)
     if tgt is None:
         return
     if _sim_gizmo is not None:
@@ -1764,7 +1801,9 @@ def tick_track_object():
             _cursor_sim.position = pin
         if _sim_gizmo is not None:
             _sim_gizmo.position = pin
-            _sim_gizmo.wxyz = tuple(float(v) for v in _sim_wxyz)
+            # Axes as the axes mode says: the aimed heading in Local, world axes in
+            # World (setting the heading always turned World axes into local ones).
+            _sim_gizmo.wxyz = tuple(float(v) for v in wp._gizmo_display_wxyz(_sim_wxyz))
         _ik_sim_cursor()
         if _cursor_sim is not None:
             _cursor_sim.position = pin

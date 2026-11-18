@@ -2374,6 +2374,10 @@
             <div id="trackErr" class="track-err" hidden>no valid tracking target.</div>
             <label class="col-stop" id="trackLiveRow" hidden title="The path stays as baked; the aim follows the target where it is during Simulate and Run (a Run then streams the path point by point)"><input id="trackLive" type="checkbox"> Live: follow the moving target during Simulate / Run</label>
             <div class="col-note" id="trackLiveNote" hidden></div>
+            <div class="row triple" id="trackSmoothRow" hidden>
+              <label title="Time constant of the target's low-pass, s (0 = none): smooths small tracking jitter">smooth s</label><input id="trackSmooth" type="number" step="0.05" min="0" value="0.25">
+              <label title="The target is held while it moves less than this, mm (0 = none)">dead mm</label><input id="trackDeadband" type="number" step="0.5" min="0" value="3">
+            </div>
             <div class="row triple track-xyz">
               <label>x</label><input id="trackX" type="number" step="0.001" readonly>
               <label>y</label><input id="trackY" type="number" step="0.001" readonly>
@@ -6292,6 +6296,12 @@
         const liveRow = document.getElementById("trackLiveRow");
         const liveCb = document.getElementById("trackLive");
         if (liveRow) liveRow.hidden = !isSim;
+        const smRow = document.getElementById("trackSmoothRow");
+        if (smRow) smRow.hidden = !isSim;
+        const smEl = document.getElementById("trackSmooth");
+        if (smEl && document.activeElement !== smEl && track.smooth_s != null) smEl.value = Number(track.smooth_s).toFixed(2);
+        const dbEl = document.getElementById("trackDeadband");
+        if (dbEl && document.activeElement !== dbEl && track.deadband_mm != null) dbEl.value = Number(track.deadband_mm).toFixed(1);
         if (liveCb && document.activeElement !== liveCb) liveCb.checked = !!track.live;
         const liveNote = document.getElementById("trackLiveNote");
         if (liveNote) {
@@ -6903,6 +6913,16 @@
       return ["trackPx", "trackPy", "trackPz"].map((id) => parseFloat((document.getElementById(id) || {}).value || "0"));
     }
     (function setupTrackLive() {
+      ["trackSmooth", "trackDeadband"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("change", () => {
+          fetch("/api/track_object", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ smooth_s: Number(document.getElementById("trackSmooth").value) || 0,
+                                   deadband_mm: Number(document.getElementById("trackDeadband").value) || 0 }) })
+            .then(() => setTimeout(refresh, 80));
+        });
+      });
       const cb = document.getElementById("trackLive");
       if (!cb) return;
       cb.addEventListener("change", () => {

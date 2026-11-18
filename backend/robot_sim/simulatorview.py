@@ -1027,6 +1027,18 @@ def restore_scene_object(rec):
     return obj
 
 
+def _euler_deg_wxyz(rx, ry, rz):
+    """Euler angles in degrees, as Properties shows them (x, then y, then z, about
+    the world axes), as a w, x, y, z quaternion."""
+    from scipy.spatial.transform import Rotation as _R
+    q = _R.from_euler("xyz", [rx, ry, rz], degrees=True).as_quat()
+    return np.array([q[3], q[0], q[1], q[2]], dtype=float)
+
+
+# A new Camera object: rx 90, ry 0, rz -90 (it looks along +x, the world's front, level).
+CAMERA_DEFAULT_WXYZ = _euler_deg_wxyz(90.0, 0.0, -90.0)
+
+
 def add_scene_object(kind="empty", mesh_path=None, name=None):
     kind = str(kind or "empty").lower()
     if kind == "import":
@@ -1041,6 +1053,8 @@ def add_scene_object(kind="empty", mesh_path=None, name=None):
     oid = "o%d" % wp._obj_seq
     pos = np.array([1.0, 0.0, 0.2], dtype=float)
     wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    if add_cam:
+        wxyz = CAMERA_DEFAULT_WXYZ.copy()
     names = {"empty": "Empty", "sphere": "Sphere", "cube": "Cube", "camera": "Camera", "mesh": "Import", "gimbal": "Gimbal"}
     label = name
     if not label:

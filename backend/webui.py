@@ -1571,8 +1571,15 @@ def api_track_object():
     if "live" in data:
         # Live Look At (live_aim): the aim follows the target during Simulate / Run.
         rr._track["live"] = bool(data.get("live"))
-        if len(data) == 1:
-            return jsonify({"ok": True, "track": rr.track_status()})
+    for key in ("smooth_s", "deadband_mm"):
+        # Look At smoothing of the followed target (rr.smooth_target).
+        if key in data:
+            try:
+                rr._track[key] = max(0.0, float(data.get(key)))
+            except (TypeError, ValueError):
+                pass
+    if data and set(data) <= {"live", "smooth_s", "deadband_mm"}:
+        return jsonify({"ok": True, "track": rr.track_status()})
     if hasattr(rr, "set_track_object"):
         st = rr.set_track_object(
             on=data.get("on"),
