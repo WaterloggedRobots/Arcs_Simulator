@@ -1568,6 +1568,11 @@ def api_sim_poses():
 def api_track_object():
     data = request.get_json(silent=True) or {}
     st = {}
+    if "live" in data:
+        # Live Look At (live_aim): the aim follows the target during Simulate / Run.
+        rr._track["live"] = bool(data.get("live"))
+        if len(data) == 1:
+            return jsonify({"ok": True, "track": rr.track_status()})
     if hasattr(rr, "set_track_object"):
         st = rr.set_track_object(
             on=data.get("on"),

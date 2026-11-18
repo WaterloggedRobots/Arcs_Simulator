@@ -1720,6 +1720,7 @@ def track_status():
         "offset_state": _offset_state(getattr(wp, "sim_offset", None)),
         "tool": _track.get("tool") or "",
         "tool_pick": bool(_track.get("tool_pick")),
+        "live": bool(_track.get("live")),
         "tools": [{"id": str(o.get("id")), "name": str(o.get("name") or o.get("id"))} for o in _cursor_children()],
     }
 
@@ -2331,8 +2332,14 @@ def _ik_sim_cursor():
     _last_good_q = q
 
 
-def solve_backup_ik(target_pos, target_wxyz, seed_q=None):
-    """Offline 6-DOF IK. Current q first, then home. No position-only fallback."""
+def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False):
+    """Offline 6-DOF IK. Current q first, then home. No position-only fallback.
+    quiet: no prints (live Look At calls it every frame)."""
+    import builtins
+
+    def print(*a, **k):  # noqa: A001  (silenced when quiet)
+        if not quiet:
+            builtins.print(*a, **k)
     model = robot_ik
     if model is None:
         return None
@@ -2910,6 +2917,12 @@ def _apply_q_at_t(t):
                     u = (t - a["t"]) / span
                     q = (1 - u) * qa + u * qb
                 break
+    try:
+        # Look At "Live": the baked joints re-aimed at the target where it is now.
+        import live_aim
+        q = live_aim.sim_q(t, q, id(samples))
+    except Exception as e:
+        print("live aim failed:", e)
     robot_sim.angle_vector(np.asarray(q, dtype=float).reshape(-1)[:6])
 
 
@@ -3179,7 +3192,18 @@ def sim_status():
         "t_end": float(_pb["t_end"]),
         "lin_mps": float(_pb.get("lin_mps") or 0.0),
         "playhead_restore": _pb.get("playhead_restore"),
+        "live": _live_status("sim"),
     }
+
+
+def _live_status(kind):
+    try:
+        import live_aim
+        if not live_aim.enabled():
+            return None
+        return live_aim.sim_status() if kind == "sim" else live_aim.stream_status()
+    except Exception:
+        return None
 
 
 _rp = {
@@ -3201,6 +3225,11 @@ _rp_gen = 0
 
 def _abort_real_motion(name=None):
     """Talk to the controller on this thread. stopMove alone does not abort movePathBuffer."""
+    try:
+        import live_aim
+        live_aim.stream_stop()  # a streamed (Live Look At) run: stop sending first
+    except Exception as e:
+        print("live stream stop failed:", e)
     if robot is None:
         return
     buf = str(name or _rp.get("name") or "rec")
@@ -3411,6 +3440,21 @@ def upload_real_path(loops=0, delay=0.0):
     except Exception:
         _rp["loop_delay"] = 0.0
     _rp["_loop_pending"] = False
+    try:
+        import live_aim
+        _rp["live"] = bool(live_aim.enabled())
+    except Exception:
+        _rp["live"] = False
+    if _rp["live"]:
+        # Streamed run: nothing to upload (the points go out as the run plays).
+        if int(_rp.get("loops_left") or 0) != 0:
+            print("live run: Repeat is not supported, playing once")
+            _rp["loops_left"] = 0
+        _rp["uploading"] = False
+        _rp["uploaded"] = True
+        _rp["phase"] = "uploaded"
+        print("real path ready to stream (Live Look At), n", len(qs))
+        return True
 
     def _upload_only():
         if _halt or gen != _rp_gen:
@@ -3457,6 +3501,22 @@ def plan_joint_path(loops=0, delay=0.0):
 def _start_path_buffer():
     if robot is None:
         return None
+    if _rp.get("live"):
+        # Look At "Live": the baked path streamed point by point (trackJoint),
+        # each point re-aimed at the target where it is now.
+        import live_aim
+        samples = _rp.get("samples") or []
+        try:
+            cur = robot.GetJoints()
+            q0 = np.asarray(samples[0]["q"], dtype=float).reshape(-1)[:6]
+            if cur is not None and float(np.degrees(np.max(np.abs(np.asarray(cur, dtype=float)[:6] - q0)))) > 2.0:
+                print("live run: the arm is not on the path's first point, not streaming")
+                _rp["phase"] = "live run: arm not at the start"
+                return None
+        except Exception:
+            pass
+        live_aim.stream_start(robot, samples)
+        return 0
     try:
         robot.mc.setSpeedFraction(1.0)
     except Exception:
@@ -3731,6 +3791,15 @@ def _apply_real_q_at_t(t):
                     u = (t - a["t"]) / span
                     q = (1 - u) * qa + u * qb
                 break
+    if _rp.get("live"):
+        try:
+            # A streamed Live Look At run: the sim arm shows the aimed point sent last.
+            import live_aim
+            qs = live_aim.stream_q()
+            if qs is not None:
+                q = qs
+        except Exception:
+            pass
     if robot_sim is not None:
         robot_sim.angle_vector(np.asarray(q, dtype=float).reshape(-1)[:6])
         pos = None
@@ -3799,6 +3868,7 @@ def real_path_status():
         "connected": robot_connected(),
         "ik_pref": IK_PREF,
         "ik_ok": ik_allowed(),
+        "live": _live_status("real") if _rp.get("live") else None,
     }
 
 
