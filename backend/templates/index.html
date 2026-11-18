@@ -4014,7 +4014,8 @@
         // the frames (speed / acceleration on hover) and the keys.
         const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
         const v = animView(tr);
-        const col = { ok: "#6ee08a", too_fast: "#f08a3a", out: "#ff3b3b" };
+        // Unbaked spans (new or moved since the last Bake) are white with no frames, like the arm's.
+        const col = { ok: "#6ee08a", too_fast: "#f08a3a", out: "#ff3b3b", unbaked: "#c8c8ce" };
         const nodes = v.keys.map((k) => ({ t: Number(k.t), st: k.status }))
           .concat(v.samples.map((m) => ({ t: Number(m.t), st: m.status }))).sort((a, b) => a.t - b.t);
         const hopSt = (t0, t1) => {

@@ -337,7 +337,7 @@ def _solo_playable():
     try:
         # Like an arm's path: only once baked (the bake runs the gimbal speed check).
         return ((not any(r for _aid, r in _each_arm(_arm_has_path))) and wp.gimbal.solo_playable()
-                and wp.gimbal.tracks_baked())
+                and wp.gimbal.tracks_baked() and wp.animate.tracks_baked())
     except Exception:
         return False
 

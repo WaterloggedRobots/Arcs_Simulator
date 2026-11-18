@@ -197,6 +197,7 @@ def clean_anim(raw):
             "curve": s.get("curve"),
             "samples": [{"u": _f(m.get("u")), "t": _f(m.get("t"))} for m in (s.get("samples") or [])
                         if isinstance(m, dict) and m.get("t") is not None],
+            "baked": bool(s.get("baked", bool(s.get("samples")))),
         })
     out = {
         "added": True,
@@ -308,9 +309,43 @@ def _resync_spans(anim, old_times=None):
             old["samples"].sort(key=lambda m: m["u"])
             spans.append(old)
         else:
-            spans.append({"a": a["id"], "b": b["id"], "curve": sig, "samples": _new_samples(a, b)})
+            # A new span (or one whose curve changed) is unbaked: no frames until Bake.
+            spans.append({"a": a["id"], "b": b["id"], "curve": sig, "samples": [], "baked": False})
     anim["spans"] = spans
     return spans
+
+
+def bake_all():
+    """Bake: every unbaked span of every animated object gets its sample frames
+    (even along the curve, steady speed). Returns how many spans were baked."""
+    n = 0
+    with _lock:
+        for o in animated_objects():
+            anim = anim_of(o)
+            keys = anim["keys"]
+            for i, span in enumerate(anim.get("spans") or []):
+                if span.get("baked") or i + 1 >= len(keys):
+                    continue
+                span["samples"] = _new_samples(keys[i], keys[i + 1])
+                span["baked"] = True
+                n += 1
+            _dirty.add(str(o.get("id")))
+    return n
+
+
+def has_track():
+    """Some animated object has 2 keys or more (Bake has something to do)."""
+    return any(len(anim_of(o)["keys"]) >= 2 for o in animated_objects())
+
+
+def tracks_baked():
+    return all(s.get("baked") for o in animated_objects() for s in (anim_of(o).get("spans") or []))
+
+
+def t_end():
+    """The last key of the animations with 2 keys or more (they play to it), or None."""
+    ends = [anim_of(o)["keys"][-1]["t"] for o in animated_objects() if len(anim_of(o)["keys"]) >= 2]
+    return max(ends) if ends else None
 
 
 def _place_ctrls(anim, i):
@@ -543,6 +578,13 @@ def track_rows(obj):
         h0, h1 = hops[j - 1], hops[j]
         dt = 0.5 * ((h0["t1"] - h0["t0"]) + (h1["t1"] - h1["t0"]))
         acc[j] = (h1["v"] - h0["v"]) / dt if dt > 1e-9 else 0.0
+    # Hops of an unbaked span show as unbaked (white), its keys too.
+    span_t = [(anim["keys"][i]["t"], anim["keys"][i + 1]["t"], bool(sp.get("baked")))
+              for i, sp in enumerate(anim.get("spans") or []) if i + 1 < len(anim["keys"])]
+    for hp in hops:
+        mid = 0.5 * (hp["t0"] + hp["t1"])
+        if any(a - 1e-9 <= mid <= b + 1e-9 and not bk for a, b, bk in span_t):
+            hp["status"] = "unbaked"
     keys, samples = [], []
     for j, (t, s, _q, kind, ref) in enumerate(nodes):
         vin = hops[j - 1]["v"] if j > 0 else 0.0
@@ -552,6 +594,8 @@ def track_rows(obj):
                "a": acc[j], "status": "too_fast" if over else "ok"}
         if kind == "key":
             rec["index"] = ref
+            if any(not bk and (abs(a - t) < 1e-9 or abs(b - t) < 1e-9) for a, b, bk in span_t):
+                rec["status"] = "unbaked"
             keys.append(rec)
         else:
             rec["seg"], rec["k"] = ref
@@ -566,8 +610,13 @@ def track_rows(obj):
         i = _key_index(anim, _sel.get("id"))
         if i is not None:
             sel = i
-    return {"keys": keys, "samples": samples, "hops": hops, "sel": sel,
+    return {"keys": keys, "samples": samples, "hops": hops, "sel": sel, "baked": tracks_baked_obj(obj),
             "max_speed": vmax, "max_acc": amax}
+
+
+def tracks_baked_obj(obj):
+    anim = anim_of(obj)
+    return bool(anim) and all(s.get("baked") for s in (anim.get("spans") or []))
 
 
 def sync_tracks(tracks):
@@ -736,7 +785,11 @@ def insert_key(oid, t):
         i = _key_index(anim, kid)
         _unfold_ctrls(anim, i)
         _resync_spans(anim)
-        _select(o, {"oid": str(oid), "kind": "key", "id": kid})
+        # The object stays selected (its own gizmo), not the new key: the key's
+        # gizmo sat on the object, so moving "the object" to the next pose moved
+        # the key just made. Click a key to edit it.
+        if _sel and str(_sel.get("oid")) == str(oid):
+            deselect()
         _edited(o)
     _sync_tracks_now()
     return True, ""
@@ -939,7 +992,6 @@ def paste_keys(oid, t):
             keys[0]["in"] = None
             keys[-1]["out"] = None
         _resync_spans(anim)
-        _select(o, {"oid": str(o.get("id")), "kind": "key", "id": new_ids[0]})
         _edited(o)
     return True, ""
 
@@ -1064,7 +1116,7 @@ def _rebuild_viz(obj, gizmo=True):
             _rm(v.get("path"))
             v["path"] = None
         v["parent"] = tuple(np.round(np.concatenate(_parent_pose(obj)), 6))
-        if _sel and _sel.get("oid") == oid:
+        if _handles_oid() == oid:
             _show_sel_handles(obj, gizmo=gizmo)
 
 
@@ -1149,14 +1201,37 @@ def deselect():
                 _rebuild_viz(o)
 
 
+def _handles_oid():
+    """The object whose Bezier handles show: the one with a selected key, else
+    the selected object (alone) when it is animated."""
+    if _sel:
+        return str(_sel.get("oid"))
+    try:
+        wp = _wp()
+        ids = [str(v) for k, v in (getattr(wp, "_selection", None) or []) if k == "obj"]
+        if len(ids) == 1 and anim_of(_find(ids[0])):
+            return ids[0]
+    except Exception:
+        pass
+    return None
+
+
 def on_selection_changed(selection):
-    """waypoints._apply_selection_viz: a key stays selected only while its object is."""
-    if not _sel:
-        return
-    if ("obj", _sel.get("oid")) not in [(k, str(v)) for k, v in (selection or [])]:
-        deselect()
-    else:
-        _hide_object_gizmo(_find(_sel.get("oid")))
+    """waypoints._apply_selection_viz: a key stays selected only while its
+    object is; an animated object shows its handles while it is selected."""
+    if _sel:
+        if ("obj", _sel.get("oid")) not in [(k, str(v)) for k, v in (selection or [])]:
+            deselect()
+        else:
+            _hide_object_gizmo(_find(_sel.get("oid")))
+    want = _handles_oid()
+    if _sel_h.get("oid") != want:
+        _clear_sel_handles()
+        _sel_h["oid"] = want
+    if want:
+        o = _find(want)
+        if o is not None:
+            _rebuild_viz(o)
 
 
 def _hide_object_gizmo(obj):
@@ -1209,31 +1284,26 @@ def _show_sel_handles(obj, gizmo=True):
         for h in _sel_h["ctrls"] + _sel_h["dots"]:
             _rm(h)
         _sel_h["ctrls"], _sel_h["dots"] = [], []
-    if srv is None or not _sel:
-        return
+    _sel_h["oid"] = str(obj.get("id"))
     anim = anim_of(obj)
-    i = _key_index(anim, _sel.get("id")) if anim else None
-    if i is None:
+    if srv is None or not anim:
         return
     keys = anim["keys"]
-    k = keys[i]
     wp = _wp()
     oid = str(obj.get("id"))
+    # Every span's two handles (orange; the selected one yellow) with dotted lines to their keys.
     handles = []
-    if i + 1 < len(keys) and k.get("out") is not None:
-        handles.append((i, "out"))
-    if i > 0 and k.get("in") is not None:
-        handles.append((i, "in"))
-    if i > 0 and keys[i - 1].get("out") is not None:
-        handles.append((i - 1, "out"))
-    if i + 1 < len(keys) and keys[i + 1].get("in") is not None:
-        handles.append((i + 1, "in"))
+    for j in range(len(keys)):
+        if j + 1 < len(keys) and keys[j].get("out") is not None:
+            handles.append((j, "out"))
+        if j > 0 and keys[j].get("in") is not None:
+            handles.append((j, "in"))
     for j, which in handles:
         kk = keys[j]
         wpos = _to_world(obj, kk[which])
         kpos = _to_world(obj, kk["pos"])
         h = srv.scene.add_icosphere(name="%s/ctrl_%s_%d" % (_node(oid), which, j), radius=0.014,
-                                    color=KEY_SEL_COLOR if (_sel.get("kind") == "ctrl" and _sel.get("which") == which
+                                    color=KEY_SEL_COLOR if (_sel and _sel.get("kind") == "ctrl" and _sel.get("which") == which
                                                             and _sel.get("id") == kk["id"]) else CTRL_COLOR,
                                     position=tuple(float(x) for x in wpos))
 
@@ -1246,8 +1316,12 @@ def _show_sel_handles(obj, gizmo=True):
             _sel_h["dots"].append(srv.scene.add_line_segments(
                 name="%s/dot_%s_%d" % (_node(oid), which, j), points=pts, colors=(200, 200, 200), line_width=2.0))
     # Gizmo on the selected key (move + rotate) or handle (move only).
-    if not gizmo:
+    if not gizmo or not _sel or str(_sel.get("oid")) != oid:
         return
+    i = _key_index(anim, _sel.get("id"))
+    if i is None:
+        return
+    k = keys[i]
     if _sel.get("kind") == "ctrl":
         kk = next((x for x in keys if x["id"] == _sel.get("id")), None)
         if kk is None or kk.get(_sel.get("which")) is None:

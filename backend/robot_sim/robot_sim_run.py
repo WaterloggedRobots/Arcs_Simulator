@@ -197,6 +197,24 @@ def start_viewer():
 
     def _bake(_spacing=None):
         try:
+            # Object animations bake first (their sample frames); the arm's
+            # Look At aims at them while it bakes.
+            import animate
+            n = animate.bake_all()
+            if n:
+                print("bake: %d animation span(s)" % n)
+        except Exception as e:
+            print("animation bake failed:", e)
+        if len(getattr(wp, "waypoints", None) or []) < 2:
+            # Nothing on the arm's track: the other tracks (animations, gimbals) still bake.
+            print("bake: arm track has fewer than 2 waypoints, skipped")
+            try:
+                import gimbal
+                gimbal.speed_check()
+            except Exception as e:
+                print("gimbal speed check failed:", e)
+            return
+        try:
             import path_bake as pb
             fn = getattr(pb, "run_bake", None) or getattr(pb, "bake", None)
             if not callable(fn):
@@ -434,6 +452,14 @@ def start_viewer():
             wp.colliders.tick_colliders()
         except Exception as e:
             _report_tick_error("tick_colliders", e)
+        if t_play is None:
+            try:
+                # A gimbal / animation-only Simulate: its own clock.
+                so = wp.gimbal.solo_status("sim")
+                if so and so.get("active"):
+                    t_play = float(so.get("t") or 0.0)
+            except Exception:
+                pass
         try:
             t_win = playhead_t if t_play is None else t_play
             playhead_t = t_win

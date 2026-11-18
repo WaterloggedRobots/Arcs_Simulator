@@ -1997,24 +1997,24 @@ def _drop_cv_script(oid):
 
 
 def _resolve_cv_script(cam):
-    import os
+    """The camera's script file, or "" when none is attached. No default
+    script any more: an OpenCV camera used to fall back to d435i_track.py,
+    which (without a RealSense) took over the camera whatever script was chosen."""
     if cam.get("no_script"):
-        return ""  # removed by hand: no fallback to the default script
+        return ""  # removed by hand
     path = str(cam.get("script") or "").strip()
-    if path and os.path.isfile(path):
+    if not path:
+        return ""
+    if os.path.isfile(path):
         return path
+    # A saved project from another folder / machine: the same file name in
+    # user_files/cam_scripts/ or the examples.
     moved = app_paths.relocate(path, app_paths.CAM_SCRIPTS_DIR, app_paths.EXAMPLE_CAM_SCRIPTS_DIR)
-    if path and os.path.isfile(moved):
+    if os.path.isfile(moved):
         cam["script"] = moved
         return moved
-    here = os.path.dirname(os.path.abspath(__file__))
-    for name in (os.path.join(str(app_paths.CAM_SCRIPTS_DIR), "d435i_track.py"), "d435i_track.py", os.path.join("templates", "d435i_track.py")):
-        cand = os.path.join(here, name)
-        if os.path.isfile(cand):
-            if not path:
-                cam["script"] = cand
-            return cand
-    return path
+    cam["error"] = "script not found: %s" % path
+    return ""
 
 
 def _tick_cv_cameras():
@@ -2039,7 +2039,8 @@ def _tick_cv_cameras():
             continue
         path = _resolve_cv_script(cam)
         if not path:
-            cam["error"] = "No OpenCV script attached"
+            if not str(cam.get("error") or "").startswith("script not found"):
+                cam["error"] = "No OpenCV script attached"
             _drop_cv_script(obj["id"])
             continue
         mod = _cam_cv_mod.get(obj["id"])

@@ -1303,6 +1303,13 @@ def solo_t_end():
         keys = keys_for(obj.get("id"))
         if len(keys) >= 2:
             ends.append(max(k["t"] for k in keys))
+    try:
+        # Baked object animations (Animate component) play on this clock too.
+        import animate
+        if animate.tracks_baked() and animate.t_end() is not None:
+            ends.append(float(animate.t_end()))
+    except Exception as e:
+        print("animate end failed:", e)
     return max(ends) if ends and max(ends) > 0 else None
 
 
