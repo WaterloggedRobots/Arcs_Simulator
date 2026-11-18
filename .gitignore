@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+~$*
+user_files/paths/
+user_files/exports/
+# Deck .exe build (packaging/deck)
+/build/
+/dist/
+/.venv-deck-build/
+user_files/gimbal_models/*.bak
+user_files/gimbal_models/*.tmp
+user_files/gimbal_models/*.orig
+user_files/gimbal_models/calibrations/
+# Autosave (webui._autosave_loop)
+backend/state/temp.json

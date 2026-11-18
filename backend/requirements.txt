@@ -1,0 +1,33 @@
+# Aubo path editor / Viser simulator
+# Python 3.10–3.12 recommended
+
+numpy>=1.24
+scipy>=1.10
+flask>=3.0
+werkzeug>=3.0
+
+# Game controller (Xbox / PlayStation) jogging in the sandbox (gamepad.py);
+# without it only XInput (Xbox) pads work, unnamed.
+pygame>=2.5
+
+# Gimbal object (DJI RS4 over CAN, user_files/gimbal_scripts/rs4_can.py);
+# without them the gimbal works as a preview only.
+python-can>=4.0
+pyusb>=1.2
+libusb-package>=1.0
+
+# Viewer + URDF
+scikit-robot>=0.0.44
+viser>=0.2.23
+trimesh>=4.0
+
+# Optional: Orbbec box tracking camera script (docs/examples/cam_scripts/orbbec_box_track.py)
+# opencv-contrib-python>=4.8   (CSRT tracker; plain opencv-python falls back to KCF / MIL)
+# pyorbbecsdk2   (Orbbec SDK v2, imported as pyorbbecsdk; "pyorbbecsdk" on PyPI is 1.x, no Python 3.12 wheels)
+
+# Optional: production web server if you wrap Flask with gunicorn
+# gunicorn>=21.0
+
+# Local / vendor (not on PyPI)
+# arcscontrol
+# libpyauboi5  (Aubo ARCS SDK .pyd + DLLs)

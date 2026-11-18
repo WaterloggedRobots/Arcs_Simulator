@@ -1,0 +1,35 @@
+name: Build ArcsDeck.exe
+
+# Builds the Steam Deck edition as one Windows .exe and attaches it to the run
+# (Actions > this run > Artifacts > ArcsDeck).
+on:
+  workflow_dispatch:
+  push:
+    branches: ["steamdeck/**"]
+    paths:
+      - "backend/**"
+      - "user_files/settings.json"
+      - "packaging/deck/**"
+      - ".github/workflows/build-deck.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            packaging/deck/requirements-build.txt
+      - name: Install build requirements
+        run: python -m pip install -r packaging/deck/requirements-build.txt
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean --distpath dist --workpath build/deck packaging/deck/ArcsDeck.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ArcsDeck
+          path: dist/ArcsDeck.exe
+          if-no-files-found: error
