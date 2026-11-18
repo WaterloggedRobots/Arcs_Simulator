@@ -1089,14 +1089,11 @@ def cut_selection(sel_kf, sel_sm=None):
     info = copy_selection(sel_kf, sel_sm)
     if not info.get("ok") or not bake.clipboard:
         return info
+    # Every copied waypoint (a clip's included) in one step: deleting them one
+    # by one through the selection removed a whole clip first and then the
+    # waypoints that had moved into the later indexes.
     chain = _kf_chain(sel_kf)
-    for i in reversed(chain):
-        if 0 <= i < len(wp.waypoints):
-            try:
-                wp.selected_idx = i
-                wp.delete_selected()
-            except Exception:
-                pass
+    wp.delete_waypoints(chain)
     return info
 
 
@@ -1125,12 +1122,36 @@ def can_paste(t0):
     return not _occupied(t0, t1)
 
 
+def free_paste_t(t0):
+    """The first time from t0 where the clipboard fits without covering a
+    waypoint or a sample frame (the path's end when the playhead is inside it)."""
+    span = float(bake.clipboard["span"]) if bake.clipboard else 0.0
+    t = max(0.0, round(float(t0) / 0.01) * 0.01)
+    for _ in range(2000):
+        if not _occupied(t, t + span):
+            return t
+        last = t
+        for w in wp.waypoints:
+            tw = w.get("t")
+            if tw is not None and t - 1e-6 <= float(tw) <= t + span + 1e-6:
+                last = max(last, float(tw))
+        for seg in bake.segments:
+            for sm in seg.get("samples") or []:
+                tw = sm.get("t")
+                if tw is not None and t - 1e-6 <= float(tw) <= t + span + 1e-6:
+                    last = max(last, float(tw))
+        t = round((last + 0.5) / 0.01) * 0.01
+    return t
+
+
 def paste_clipboard(t0):
     if not bake.clipboard:
         return {"ok": False, "error": "clipboard empty"}
     t0 = max(0.0, round(float(t0) / 0.01) * 0.01)
+    moved = False
     if not can_paste(t0):
-        return {"ok": False, "error": "target range occupied"}
+        # The playhead's range is taken: paste at the first free room after it.
+        t0, moved = free_paste_t(t0), True
     keys = bake.clipboard["keys"]
     created_t = []
     for k in keys:
@@ -1178,14 +1199,15 @@ def paste_clipboard(t0):
     if hasattr(wp, "draw_path"):
         wp.draw_path()
     bake.invalidate_from(start)
-    return {"ok": True, "t": t0, "n": len(keys), "start": start}
+    return {"ok": True, "t": t0, "n": len(keys), "start": start, "moved": moved}
 
 
 def clipboard_info(t0=0.0):
     return {
         "has": bool(bake.clipboard),
         "span": None if not bake.clipboard else float(bake.clipboard["span"]),
-        "can_paste": can_paste(t0) if bake.clipboard else False,
+        # Paste always works: a taken range moves the paste to free room (paste_clipboard).
+        "can_paste": bool(bake.clipboard),
         "curve": None,
     }
 

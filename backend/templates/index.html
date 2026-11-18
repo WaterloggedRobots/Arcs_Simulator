@@ -2669,6 +2669,15 @@
     // and the drag in progress. A key drag stretches its two spans' frames in proportion.
     let animSel = null;
     let animDrag = null;
+    // Keys of camera record / custom tracks ({t, rec}, edited in the page and
+    // sent with /api/tracks): selection {tid, ts}, drag, clipboard.
+    let keySel = null;
+    let keyDrag = null;
+    let keyClip = null;
+    let animClipHas = false;
+    // The timeline has the keys (Delete / Ctrl+C / X / V act on its selection)
+    // from a click on it until a click elsewhere (the list, Properties, the 3D view).
+    let tlFocus = false;
     const nearT = (a, b) => Math.abs(Number(a) - Number(b)) < 1e-4;
     function gimSelHas(tid, t) {
       return !!(gimSel && gimSel.tid === tid && gimSel.ts.some((x) => nearT(x, t)));
@@ -3050,6 +3059,124 @@
     }
     function isAnimTrack(tr) {
       return !!(tr && String(tr.id || "").indexOf("anim_") === 0);
+    }
+    function isKeyTrack(tr) {
+      return !!(tr && tr.custom && !isGimbalTrack(tr) && !isAnimTrack(tr) && tr.id !== "look_sim");
+    }
+    function keySelHas(tid, t) {
+      return !!(keySel && keySel.tid === tid && keySel.ts.some((x) => nearT(x, t)));
+    }
+    function hitSimpleKey(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const row = Math.floor((y - RULER_H) / TRACK_H);
+      const tr = visibleTracks()[row];
+      if (!isKeyTrack(tr) || !tr.keys || !tr.keys.length) return null;
+      const cy = RULER_H + row * TRACK_H + TRACK_H / 2;
+      if (Math.abs(y - cy) > 14) return null;
+      let best = null, bestD = 13;
+      tr.keys.forEach((k) => {
+        if (k.t == null) return;
+        const d = Math.abs(timeToX(Number(k.t)) - x);
+        if (d < bestD) { bestD = d; best = k; }
+      });
+      return best ? { tid: tr.id, t: Number(best.t) } : null;
+    }
+    function keyTrack(tid) { return (extraTracks || []).find((t) => t.id === tid) || null; }
+    function keyDragApply(dt) {
+      const g = keyDrag;
+      let lo = -1e9, hi = 1e9;
+      g.rows.forEach((r) => {
+        if (!r.moving) return;
+        lo = Math.max(lo, -r.t0);
+        g.rows.forEach((o) => {
+          if (o.moving) return;
+          if (o.t0 <= r.t0) lo = Math.max(lo, o.t0 + 0.02 - r.t0);
+          else hi = Math.min(hi, o.t0 - 0.02 - r.t0);
+        });
+      });
+      dt = hi < lo ? 0 : Math.min(Math.max(dt, lo), hi);
+      g.rows.forEach((r) => { if (r.moving) r.k.t = Math.max(0, Math.round((r.t0 + dt) * 1e4) / 1e4); });
+    }
+    function keyDragEnd() {
+      const g = keyDrag;
+      keyDrag = null;
+      if (!g || !g.moved) { renderTimeline(); return; }
+      const tr = keyTrack(g.tid);
+      if (tr) tr.keys.sort((a, b) => Number(a.t) - Number(b.t));
+      if (keySel && keySel.tid === g.tid) keySel.ts = g.rows.filter((r) => r.moving).map((r) => Number(r.k.t));
+      renderTimeline();
+      syncTracks();
+    }
+    function keyDeleteSel() {
+      if (!keySel || !keySel.ts.length || lockEdits) return false;
+      const tr = keyTrack(keySel.tid);
+      if (tr) tr.keys = (tr.keys || []).filter((k) => !keySelHas(keySel.tid, k.t));
+      keySel = null;
+      renderTimeline();
+      syncTracks();
+      return true;
+    }
+    function keyCopy(cut) {
+      if (!keySel || !keySel.ts.length) return false;
+      const tr = keyTrack(keySel.tid);
+      const ks = ((tr && tr.keys) || []).filter((k) => keySelHas(keySel.tid, k.t)).sort((a, b) => Number(a.t) - Number(b.t));
+      if (!ks.length) return false;
+      const t0 = Number(ks[0].t);
+      keyClip = { tid: keySel.tid, frames: ks.map((k) => Object.assign({}, k, { dt: Number(k.t) - t0 })) };
+      window.__clipKind = "keys";
+      if (cut) keyDeleteSel();
+      return true;
+    }
+    function keyPaste(t) {
+      if (!keyClip || lockEdits) return;
+      const tid = (keySel && keySel.tid) || keyClip.tid;
+      const tr = keyTrack(tid);
+      if (!tr) return;
+      const t0 = Math.max(0, Number(t) || 0);
+      const add = keyClip.frames.map((f) => {
+        const k = Object.assign({}, f, { t: Math.round((t0 + f.dt) * 1e4) / 1e4 });
+        delete k.dt;
+        return k;
+      });
+      tr.keys = (tr.keys || []).filter((k) => !add.some((a) => Math.abs(Number(a.t) - Number(k.t)) < 1e-4)).concat(add);
+      tr.keys.sort((a, b) => Number(a.t) - Number(b.t));
+      keySel = { tid: tid, ts: add.map((k) => k.t) };
+      renderTimeline();
+      syncTracks();
+    }
+    function animCopy(cut) {
+      if (!animSel || !animSel.idx.size) return false;
+      animClipHas = true;
+      window.__clipKind = "anim";
+      const sel = animSel;
+      if (cut) animSel = null;
+      animPost(animOid(sel.tid), { action: cut ? "cut" : "copy", indices: Array.from(sel.idx) });
+      return true;
+    }
+    function animPaste(t) {
+      if (!animClipHas || lockEdits) return;
+      const tid = (animSel && animSel.tid) || null;
+      animPost(tid ? animOid(tid) : "", { action: "paste", t: t });
+    }
+    // Arm keyframes: the selected ones, a selected saved path (clip) whole.
+    function armDeleteSel() {
+      if (lockEdits) return false;
+      const idx = new Set(selectedKfs);
+      if (selectedKf != null && !idx.size) idx.add(selectedKf);
+      const cid = window.__selClipId;
+      if (cid) keyframes.forEach((k) => { if (k.clip_id === cid) idx.add(k.index); });
+      if (!idx.size) return false;
+      selectedKfs = new Set();
+      selectedKf = null;
+      window.__selClipId = null;
+      fetch("/api/delete_keyframes", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ indices: Array.from(idx) }) })
+        .then((r) => r.json()).then((d) => {
+          if (d && !d.ok && statusEl) statusEl.textContent = d.error || "Delete failed";
+        }).finally(() => setTimeout(refresh, 150));
+      return true;
     }
     function animOid(tid) { return String(tid).slice("anim_".length); }
     // Keys and frames of an Animate track as drawn: during a drag, the dragged
@@ -3929,6 +4056,12 @@
           ctx.lineTo(x - 13, cy);
           ctx.closePath();
           ctx.fill();
+          if (keySelHas(tr.id, k.t)) {
+            ctx.strokeStyle = "#ffd84a";
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          }
         });
       });
 
@@ -4511,6 +4644,9 @@
 
     function deselectGui() {
       gimSel = null;
+      animSel = null;
+      keySel = null;
+      window.__selClipId = null;
       selectedKf = null;
       selectedKfs = new Set();
       selectedSms = new Set();
@@ -4599,13 +4735,15 @@
       });
     }
     function doPaste() {
-      if (clipInfo && clipInfo.can_paste === false) return;
+      if (clipInfo && clipInfo.has === false) { statusEl.textContent = "Nothing copied"; return; }
       fetch("/api/paste", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ t: playhead }),
       }).then((r) => r.json()).then((d) => {
-        statusEl.textContent = d.ok ? "Pasted" : ("Paste failed: " + (d.error || ""));
+        statusEl.textContent = d.ok
+          ? (d.moved ? "Pasted at " + Number(d.t).toFixed(2) + " s (the playhead's range was taken)" : "Pasted")
+          : ("Paste failed: " + (d.error || ""));
         setTimeout(refresh, 200);
       });
     }
@@ -4831,6 +4969,10 @@
     function runKfAct(act) {
       if (!act) return;
       hideKfMenu();
+      if (act === "delete" && (selectedKfs.size > 1 || window.__selClipId)) {
+        armDeleteSel();
+        return;
+      }
       if (act === "delete") {
         const cid = window.__selClipId || (keyframes.find((k) => k.index === selectedKf) || {}).clip_id;
         const kf = cid ? keyframes.find((k) => k.clip_id === cid) : null;
@@ -4919,6 +5061,31 @@
         }).then(refresh, refresh);
         return;
       }
+      tlFocus = true;
+      const kHit = hitSimpleKey(e.clientX, e.clientY);
+      if (kHit) {
+        // A camera record / custom track key: select (Ctrl toggles), drag retimes.
+        e.preventDefault();
+        if (lockEdits) return;
+        if (!keySel || keySel.tid !== kHit.tid) keySel = { tid: kHit.tid, ts: [] };
+        if (e.ctrlKey || e.metaKey) {
+          if (keySelHas(kHit.tid, kHit.t)) keySel.ts = keySel.ts.filter((x) => !nearT(x, kHit.t));
+          else keySel.ts.push(kHit.t);
+        } else if (!keySelHas(kHit.tid, kHit.t)) {
+          keySel.ts = [kHit.t];
+        }
+        animSel = null;
+        gimSel = null;
+        if (keySelHas(kHit.tid, kHit.t)) {
+          const tr = keyTrack(kHit.tid);
+          keyDrag = { tid: kHit.tid, t0: kHit.t, x0: e.clientX, tStart: Date.now(), moved: false,
+            rows: ((tr && tr.keys) || []).map((k) => ({ k: k, t0: Number(k.t), moving: keySelHas(kHit.tid, k.t) })) };
+          scrollEl.setPointerCapture(e.pointerId);
+        }
+        renderTimeline();
+        return;
+      }
+      if (keySel) { keySel = null; renderTimeline(); }
       const aHit = hitAnim(e.clientX, e.clientY);
       if (aHit) {
         // An Animate key (Ctrl toggles, Shift adds the keys between) or frame:
@@ -5053,6 +5220,7 @@
           renderTimeline();
           return;
         }
+        if (!(kf && kf.clip_id)) window.__selClipId = null;
         if (e.ctrlKey || e.metaKey) {
           if (selectedKfs.has(hit)) selectedKfs.delete(hit); else selectedKfs.add(hit);
         } else if (e.shiftKey && selAnchor != null) {
@@ -5139,6 +5307,17 @@
       tip.style.top = (clientY + 14) + "px";
     }
     function onTlPointerMove(e) {
+      if (keyDrag) {
+        if (!keyDrag.moved) {
+          const dx = Math.abs(e.clientX - keyDrag.x0);
+          if (dx < 5 && Date.now() - keyDrag.tStart < 280) return;
+          keyDrag.moved = true;
+        }
+        const rect = canvas.getBoundingClientRect();
+        keyDragApply(snapToTick(Math.max(0, xToTime(e.clientX - rect.left))) - keyDrag.t0);
+        renderTimeline();
+        return;
+      }
       if (animDrag) {
         if (!animDrag.moved) {
           const dtMs = Date.now() - animDrag.tStart;
@@ -5291,9 +5470,10 @@
       }
     });
     window.addEventListener("pointermove", (e) => {
-      if (dragKf || dragSm || gimDrag || animDrag) onTlPointerMove(e);
+      if (dragKf || dragSm || gimDrag || animDrag || keyDrag) onTlPointerMove(e);
     });
     function onTlPointerUp(e) {
+      if (keyDrag) { keyDragEnd(); return; }
       if (animDrag) { animDragEnd(); return; }
       if (gimDrag) { gimDragEnd(); return; }
       if (dragSm) {
@@ -5334,7 +5514,7 @@
       if (g) { e.preventDefault(); openGimEdit(g.tid, g.t); }
     });
     window.addEventListener("pointerup", (e) => {
-      if (dragKf || dragSm || gimDrag || animDrag) onTlPointerUp(e);
+      if (dragKf || dragSm || gimDrag || animDrag || keyDrag) onTlPointerUp(e);
     });
     function hitClipAt(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
@@ -5448,24 +5628,40 @@
         fetch("/api/redo", { method: "POST" }).then(() => setTimeout(refresh, 150));
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "x" || e.key === "X")) {
         e.preventDefault();
-        if (!gimCopy(false)) doClip("copy");
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
-        e.preventDefault();
-        if (!lockEdits && !gimCopy(true)) doClip("cut");
+        const cut = e.key === "x" || e.key === "X";
+        if (cut && lockEdits) return;
+        // The timeline's selection: Animate keys, record / custom keys, gimbal frames, else waypoints.
+        if (tlFocus && animCopy(cut)) return;
+        if (tlFocus && keyCopy(cut)) return;
+        if (!gimCopy(cut)) doClip(cut ? "cut" : "copy");
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
-        // Gimbal frames paste at the playhead, on the selected gimbal track (or the one they came from).
-        if (window.__clipKind === "gimbal" && gimClip) gimPaste(snapToTick(playhead), gimSel ? gimSel.tid : null);
+        // Each kind pastes at the playhead: gimbal frames / keys on the selected track
+        // (or the one they came from), waypoints (a saved path whole) on the arm track.
+        const t = snapToTick(playhead);
+        if (window.__clipKind === "anim" && animClipHas) animPaste(t);
+        else if (window.__clipKind === "keys" && keyClip) keyPaste(t);
+        else if (window.__clipKind === "gimbal" && gimClip) gimPaste(t, gimSel ? gimSel.tid : null);
         else doPaste();
         return;
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (tlFocus && keySel && keySel.ts.length) {
+        e.preventDefault();
+        keyDeleteSel();
+        return;
+      }
+      if (tlFocus && (selectedKfs.size || window.__selClipId) && !(animSel && animSel.idx.size) && !(gimSel && gimSel.ts.length)) {
+        // Waypoints selected on the timeline (several, or a placed saved path):
+        // all of them in one step (delete_selected only took the 3D selection).
+        e.preventDefault();
+        armDeleteSel();
+        return;
+      }
       if (animSel && animSel.idx.size) {
         // Selected Animate keys on the timeline.
         e.preventDefault();
@@ -5482,6 +5678,11 @@
       setTimeout(refresh, 150);
     });
 
+    // Delete / Ctrl+C / X / V go to the timeline's selection only after a click on it.
+    document.addEventListener("pointerdown", (e) => {
+      if (!(e.target && e.target.closest && e.target.closest("#tlScroll"))) tlFocus = false;
+    }, true);
+    window.addEventListener("blur", () => { tlFocus = false; });  // a click into the 3D view (iframe)
     function postSelectMods(e) {
       fetch("/api/select_mods", {
         method: "POST",

@@ -826,6 +826,13 @@ def _clicker(oid, part=None):
         else:
             mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
             sv.select_scene_object(oid, mode=mode)
+    if not part:
+        # The mount takes Ctrl / Shift clicks too (gimbal_model._add_part registers them).
+        def _pick(mode):
+            import simulatorview as sv
+            sv.select_scene_object(oid, mode=mode)
+        _on_click.pick = _pick
+        _on_click.pick_modes = (("cmd/ctrl", "add"), ("shift", "range"), ("cmd/ctrl+shift", "add"))
     return _on_click
 
 

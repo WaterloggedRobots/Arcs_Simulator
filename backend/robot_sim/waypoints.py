@@ -103,6 +103,27 @@ def note_scene_pick():
     _last_pick_ts = time.time()
 
 
+def bind_pick(handle, pick):
+    """Click selection on a scene node: pick(mode), mode "replace" / "add" /
+    "range". A plain click takes the mode from the keys the page reports held
+    (`_select_ctrl` / `_select_shift`: older viser sends every click to a plain
+    handler). Viser 1.x sends a Ctrl / Shift click only to a handler registered
+    for that modifier (the page never sees keys pressed in the 3D view), so
+    those get their own: Ctrl+click adds to the selection (two objects show
+    their distance), Shift+click selects a range."""
+    def _plain(_e=None):
+        pick("add" if _select_ctrl else ("range" if _select_shift else "replace"))
+    handle.on_click(_plain)
+    for mod, mode in (("cmd/ctrl", "add"), ("shift", "range"), ("cmd/ctrl+shift", "add")):
+        try:
+            handle.on_click(modifier=mod)(lambda _e=None, _m=mode: pick(_m))
+        except TypeError:
+            return  # older viser: no modifier filter (the plain handler gets them)
+        except Exception as e:
+            print("modifier click bind failed:", e)
+            return
+
+
 def _bind_empty_click(srv):
     scene = getattr(srv, "scene", None)
     on_click = getattr(scene, "on_click", None)
@@ -2611,8 +2632,7 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
         wxyz=wxyz,
     )
 
-    @sphere.on_click
-    def _(_e=None, _idx_at_create=idx):
+    def _wp_pick(mode, _idx_at_create=idx):
         item = None
         if 0 <= _idx_at_create < len(waypoints):
             item = waypoints[_idx_at_create] if waypoints[_idx_at_create].get("sphere") is sphere else None
@@ -2624,12 +2644,13 @@ def add_waypoint(pos, mode=None, wxyz=None, t=None, q=None, replace=None, skip_c
         j = _index_of(item) if item is not None else _idx_at_create
         print("clicked wp", j)
         try:
-            mode = "add" if _select_ctrl else ("range" if _select_shift else "replace")
             select_waypoint(j, mode=mode)
         except Exception as e:
             print("select_waypoint failed:", e)
             import traceback
             traceback.print_exc()
+
+    bind_pick(sphere, _wp_pick)
 
     arrow = add_forward_arrow(name, pos=pos, wxyz=wxyz)
     side = add_side_arrow(name, pos=pos, wxyz=wxyz)
@@ -3336,6 +3357,33 @@ def delete_selected():
     # Unbaked, sample frames kept (as when a waypoint is added).
     _bake_call("invalidate_from", 0)
     print("Deleted waypoints", idxs)
+
+
+def delete_waypoints(idxs):
+    """Delete several waypoints in one undo step (the timeline's Delete / Cut):
+    a waypoint of a placed saved path takes its whole clip with it."""
+    global _drag_checkpointed
+    todo = set()
+    for i in idxs or []:
+        try:
+            i = int(i)
+        except Exception:
+            continue
+        todo.update(_clip_indexes(i))
+    todo = sorted(i for i in todo if 0 <= i < len(waypoints))
+    if not todo:
+        return []
+    _quit_sim()
+    _push_history()
+    _drag_checkpointed = False
+    for idx in reversed(todo):
+        _remove_wp_handles(waypoints[idx])
+        waypoints.pop(idx)
+    deselect_all()
+    draw_path()
+    _bake_call("invalidate_from", 0)
+    print("Deleted waypoints", todo)
+    return todo
 
 
 def _pose_from_q(q):

@@ -520,6 +520,12 @@ def _add_part(server, name, part, rgb, opacity, on_click, out=None):
             h.on_click(on_click)
         except Exception:
             pass
+        # Viser 1.x: Ctrl / Shift clicks go only to handlers for that modifier.
+        for mod, mode in getattr(on_click, "pick_modes", ()):
+            try:
+                h.on_click(modifier=mod)(lambda _e=None, _m=mode, _f=on_click: _f.pick(_m))
+            except Exception:
+                break
     if out is not None:
         out.append(h)
     return h

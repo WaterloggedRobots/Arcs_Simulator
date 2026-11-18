@@ -1276,6 +1276,17 @@ def api_delete_selected():
     return jsonify({"ok": True})
 
 
+@app.route("/api/delete_keyframes", methods=["POST"])
+def api_delete_keyframes():
+    """Timeline Delete: the selected waypoints (a placed saved path whole)."""
+    data = request.get_json(silent=True) or {}
+    if rr.edits_locked():
+        return jsonify({"ok": False, "error": "edits are locked while the robot runs"})
+    gone = wp.delete_waypoints(data.get("indices") or [])
+    _status_dirty.set()
+    return jsonify({"ok": bool(gone), "deleted": gone})
+
+
 @app.route("/api/copy", methods=["POST"])
 def api_copy():
     data = request.get_json(silent=True) or {}
@@ -1667,6 +1678,11 @@ def api_anim():
         ok, err = an.select_key(oid, index=data.get("index"), which=data.get("which")), ""
     elif act == "limits":
         ok, err = an.set_limits(oid, data.get("max_speed"), data.get("max_acc"))
+    elif act in ("copy", "cut"):
+        ok, err = an.copy_keys(oid, data.get("indices") or [], cut=(act == "cut"))
+    elif act == "paste":
+        t = data.get("t")
+        ok, err = an.paste_keys(oid, sv._playhead_t() if t is None else t)
     _status_dirty.set()
     return jsonify({"ok": bool(ok), "error": "" if ok else err, "anim": an.status(oid),
                     "tracks": _display_tracks()})

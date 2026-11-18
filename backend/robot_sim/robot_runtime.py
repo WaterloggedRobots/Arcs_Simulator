@@ -1933,6 +1933,12 @@ def init_cursors(server):
 
         if hasattr(_cursor_sim, "on_click"):
             _cursor_sim.on_click(_toggle_sim)
+            # Viser 1.x: Ctrl / Shift clicks reach only modifier handlers (add to the selection).
+            for _mod in ("cmd/ctrl", "shift", "cmd/ctrl+shift"):
+                try:
+                    _cursor_sim.on_click(modifier=_mod)(lambda _e=None: wp.select_item("sim", None, mode="add"))
+                except Exception:
+                    break
 
         _make_sim_gizmo(server, pos, _sim_wxyz)
         _cursors_ready = True

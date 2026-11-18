@@ -69,6 +69,7 @@ Sandbox is a robot motion-planning workspace. You build a move in a 3D simulatio
 - **Select the EE controller** — the simulator's robot cursor — to bring up a transform gizmo.
 - **Drag the gizmo axes** to move and rotate the robot pose. Inverse kinematics is solved in real time; if IK fails, the robot freezes until a solution is found again.
 - **Switch axes mode** between *world axes* (absolute positional changes) and *local axes* (changes relative to the current end-effector pose).
+- **Ctrl+click** adds an item to the selection (or takes it out), **Shift+click** selects a range, in the lists and in the 3D view alike (objects, the Aubo Arm, the Sim Arm Cursor, a gimbal, waypoints). With two items selected, a yellow dotted line joins them and Properties shows the distance between them (x, y, z and straight).
 
 ---
 
@@ -205,6 +206,9 @@ The timeline is where a move is timed and refined.
 - **Green diamond** — start recording.
 - **Red diamond** — stop recording.
 - Note that there is a delay in sending the command to a Sony camera, so the recorded range can differ slightly from the marked one.
+- Click a key to select it (yellow outline; Ctrl+click adds or removes one) and drag to retime the selected keys (they stop 0.02 s short of the keys that stay). Delete removes them; Ctrl+C / Ctrl+X copy / cut them and Ctrl+V pastes them at the playhead, keeping their spacing, on the selected camera row or the one they came from. Tracks added with the dev-mode **+** work the same way.
+
+**Selecting, deleting, copying and pasting.** Delete, Ctrl+C, Ctrl+X and Ctrl+V act on what is selected on the timeline after a click on it (a click in a list, in Properties or in the 3D view gives them back to that). On the arm track, Delete removes every selected waypoint (Ctrl+click several) in one undo step, and a placed saved path is removed whole when its bar is selected. Ctrl+C on a saved path copies it whole; Ctrl+V pastes the copied waypoints at the playhead, or, when the playhead's range is already taken by waypoints or sample frames, at the first free room after it (the status line says where). Animate keys and gimbal frames copy and paste the same way, on their own rows.
 
 A **snap-to-grid toggle** is available for frame placement — snap to the grid for simplicity, or place frames freely for fine tuning. A **cursor** marks the current position in time.
 
@@ -340,7 +344,7 @@ The **Animate component** (**+** in Properties > Animate) can be added to any 3D
 - **Keys**: place the object (gizmo or Properties), then press the **+** on its timeline row (or **+ Key at playhead** in the component) to key its transform at the playhead; a key at the same time is replaced. Each key is a waypoint in the 3D view: a sphere with arrows (its rotation), joined to the next by a lavender curve.
 - **Bezier handles**: a new span gets two handles at its thirds, like a cursor path span. Click a key (in 3D or on the timeline) to select it: its gizmo moves and turns it (its handles move with it), and the handles of its two spans show with dotted lines; click a handle for its move gizmo. Properties shows the selected key's time, position, rotation and scale, editable.
 - **Sample frames**: each span has frames on the timeline (not in 3D), spread evenly along the curve when the span is made, so the object moves at a steady speed; hover one for its speed and acceleration. Hops and frames over the component's **v** (m/s) or **a** (m/s²) limits are orange. Drag a frame to retime it (between its neighbours); a moved key or handle makes its spans' frames again.
-- **Dragging a key on the timeline stretches its two spans' frames with it** (they keep their share of the span), unlike the cursor track, where frames keep their times and turn red outside their span (that rule is kept in the code, `animate._cursor_rule_times`, switched off by `STRETCH_SAMPLES`). Ctrl / Shift select several keys; Delete removes the selected keys.
+- **Dragging a key on the timeline stretches its two spans' frames with it** (they keep their share of the span), unlike the cursor track, where frames keep their times and turn red outside their span (that rule is kept in the code, `animate._cursor_rule_times`, switched off by `STRETCH_SAMPLES`). Ctrl / Shift select several keys; Delete removes the selected keys; Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste them at the playhead (on the selected Animate row, or the object they came from).
 - **Playback**: when the playhead moves (scrubbing, Simulate, a run), every animated object takes its pose at that time. Moved by hand, an object stays put until the playhead moves again, so it can be placed and keyed. Keys of a parented object are in its parent's frame.
 - **Look At**: when an animated object is a Look At target, the bake aims each sample and waypoint at where the target is at that sample's time (only on bake, so editing stays quick); bake again after changing the animation. The live Look At (no bake) follows the object where it is.
 - Keys are saved with the object and are undo steps.

@@ -106,10 +106,8 @@ def ensure_sim_bot_marker():
     _sim_bot_viz["arrow"] = wp.add_forward_arrow(name, length=0.16, colors=SIM_BOT_RGB, pos=pos, wxyz=q)
     _sim_bot_viz["side"] = wp.add_side_arrow(name, length=0.07, colors=SIM_BOT_RGB, pos=pos, wxyz=q)
 
-    @sphere.on_click
-    def _(_e=None):
-        mode = "add" if wp._select_ctrl else "replace"
-        select_scene_object(arms.cid(SIM_BOT_ID), mode=mode)
+    _bot_id = arms.cid(SIM_BOT_ID)
+    wp.bind_pick(sphere, lambda mode: select_scene_object(_bot_id, mode="replace" if mode == "replace" else "add"))
 
 
 def _move_sim_bot_marker():
@@ -764,11 +762,8 @@ def _bind_mesh_click(obj):
     if handle is None:
         return
     oid = obj["id"]
-    def _on_mesh(_e=None, _oid=oid):
-        mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
-        select_scene_object(_oid, mode=mode)
     try:
-        handle.on_click(_on_mesh)
+        wp.bind_pick(handle, lambda mode, _oid=oid: select_scene_object(_oid, mode=mode))
     except Exception:
         pass
 
@@ -898,11 +893,8 @@ def _spawn_object_mesh(obj):
             pass
 
     oid = obj["id"]
-    def _on_mesh(_e=None, _oid=oid):
-        mode = "add" if wp._select_ctrl else ("range" if wp._select_shift else "replace")
-        select_scene_object(_oid, mode=mode)
     try:
-        handle.on_click(_on_mesh)
+        wp.bind_pick(handle, lambda mode, _oid=oid: select_scene_object(_oid, mode=mode))
     except Exception:
         pass
 

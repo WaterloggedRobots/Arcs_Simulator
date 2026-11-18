@@ -884,6 +884,66 @@ def _move_key_pos(anim, k, p):
     _unfold_ctrls(anim, _key_index(anim, k["id"]))
 
 
+_clip = {"keys": None, "oid": None}
+
+
+def copy_keys(oid, indices, cut=False):
+    """Copy (or cut) keys to the Animate clipboard, times relative to the first."""
+    o = _find(oid)
+    anim = anim_of(o)
+    if not anim:
+        return False, "no Animate component"
+    sel = sorted({int(i) for i in indices or [] if 0 <= int(i) < len(anim["keys"])})
+    if not sel:
+        return False, "no keys selected"
+    t0 = anim["keys"][sel[0]]["t"]
+    _clip["keys"] = [dict(anim["keys"][i], dt=anim["keys"][i]["t"] - t0) for i in sel]
+    _clip["oid"] = str(oid)
+    if cut:
+        return delete_keys(oid, indices=sel)
+    return True, ""
+
+
+def paste_keys(oid, t):
+    """Paste the clipboard's keys from time t (onto any animated object; a key at
+    the same time is replaced). Handles keep their offset from their key."""
+    o = _find(oid) if oid else None
+    if not anim_of(o):
+        o = _find(_clip.get("oid"))  # back onto the object they came from
+    anim = anim_of(o)
+    if not anim:
+        return False, "no Animate component"
+    if not _clip.get("keys"):
+        return False, "nothing copied"
+    t = _snap_t(t)
+    _wp()._push_history()
+    with _lock:
+        new_ids = []
+        for k in _clip["keys"]:
+            tk = _snap_t(t + k["dt"])
+            anim["keys"] = [x for x in anim["keys"] if abs(x["t"] - tk) >= 0.005]
+            nk = {"id": _new_key_id(), "t": tk, "pos": list(k["pos"]), "wxyz": list(k["wxyz"]),
+                  "scale": list(k["scale"]), "out": None if k.get("out") is None else list(k["out"]),
+                  "in": None if k.get("in") is None else list(k["in"])}
+            anim["keys"].append(nk)
+            new_ids.append(nk["id"])
+        anim["keys"].sort(key=lambda k: k["t"])
+        keys = anim["keys"]
+        # Spans between a pasted key and one that was there: handles at thirds.
+        for i in range(len(keys) - 1):
+            a, b = keys[i], keys[i + 1]
+            if (a["id"] in new_ids) != (b["id"] in new_ids):
+                a["out"], b["in"] = None, None
+                _place_ctrls(anim, i)
+        if keys:
+            keys[0]["in"] = None
+            keys[-1]["out"] = None
+        _resync_spans(anim)
+        _select(o, {"oid": str(o.get("id")), "kind": "key", "id": new_ids[0]})
+        _edited(o)
+    return True, ""
+
+
 def key_to_object(oid, index):
     """Put the object at a key's transform (and the playhead there)."""
     o = _find(oid)
