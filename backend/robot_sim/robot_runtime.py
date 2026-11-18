@@ -2385,19 +2385,22 @@ def _ik_sim_cursor():
     _last_good_q = q
 
 
-def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False, precise=False):
+def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False, precise=False, model=None, lock=None):
     """Offline 6-DOF IK. Current q first, then home. No position-only fallback.
     quiet: no prints (live Look At calls it every frame).
     precise: solve to IK_PRECISE_POS / IK_PRECISE_ANG instead of 2 mm / 0.05 rad
     (live Look At: with the loose stop, aim changes under ~3 deg returned the
-    seed unchanged and bigger ones jumped, so the arm tracked in steps)."""
+    seed unchanged and bigger ones jumped, so the arm tracked in steps).
+    model / lock: another IK model and its lock (the streamed Live run has its
+    own, so it never waits for the viewer's robot_ik)."""
     stop_pos, stop_ang = (IK_PRECISE_POS, IK_PRECISE_ANG) if precise else (0.002, 0.05)
     import builtins
 
     def print(*a, **k):  # noqa: A001  (silenced when quiet)
         if not quiet:
             builtins.print(*a, **k)
-    model = robot_ik
+    model = robot_ik if model is None else model
+    lock = _ik_lock if lock is None else lock
     if model is None:
         return None
     if seed_q is not None:
@@ -2474,7 +2477,7 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False, precise=F
         except Exception:
             return None
 
-    with _ik_lock:
+    with lock:
         try:
             alt = _j6_seed(seed)
             if alt is not None:
@@ -3509,6 +3512,10 @@ def upload_real_path(loops=0, delay=0.0):
         _rp["live"] = False
     if _rp["live"]:
         # Streamed run: nothing to upload (the points go out as the run plays).
+        try:
+            live_aim.own_model()  # its private IK model, loaded now (~1 s) rather than at Run
+        except Exception as e:
+            print("live run: private IK model failed:", e)
         if int(_rp.get("loops_left") or 0) != 0:
             print("live run: Repeat is not supported, playing once")
             _rp["loops_left"] = 0

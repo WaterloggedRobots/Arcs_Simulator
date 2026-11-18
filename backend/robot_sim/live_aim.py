@@ -149,8 +149,10 @@ def span_specs():
 
 
 class Aimer:
-    def __init__(self, specs=None):
+    def __init__(self, specs=None, model=None, lock=None):
         self.specs = span_specs() if specs is None else specs
+        self.model = model   # None: the viewer's rr.robot_ik / rr._ik_lock
+        self.lock = lock
         self.reset()
         self.err = ""
         self.dev_deg = 0.0
@@ -238,11 +240,12 @@ class Aimer:
             self.delta_t = self.delta_t + self.rate_t * dt
             return self._out(q_base, dt)
         spec = self._spec_at(t)
-        model = getattr(rr, "robot_ik", None)
+        model = self.model if self.model is not None else getattr(rr, "robot_ik", None)
+        lock = self.lock if self.lock is not None else rr._ik_lock
         if model is None:
             return self._out(q_base, dt, "no IK model")
         # The cursor where the baked joints put it.
-        with rr._ik_lock:
+        with lock:
             rr._set_q(model, q_base)
             p_ee, w_ee = rr._ee_frame(model)
         r_ee = R.from_quat(_xyzw(w_ee))
@@ -276,7 +279,8 @@ class Aimer:
         ee_pos, ee_wxyz = rr._ee_from_cursor(pos, _wxyz(corr * r_base), "sim")
         # Seed and jump check from the last answer's delta on today's base joints.
         ref = q_base + self.delta_t
-        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True, precise=True)
+        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True, precise=True,
+                               model=self.model, lock=self.lock)
         if q is None:
             return self._out(q_base, dt, "IK failed")
         q = bake._unwrap_toward(np.asarray(q, dtype=float), q_base)
@@ -378,24 +382,79 @@ def _sleep_until(t):
 LOG_MAX = 6000           # points kept for the speed export
 
 
+_own = {"path": None, "model": None, "lock": threading.Lock()}
+
+
+def own_model():
+    """A private IK model for the streamed run (loaded once per URDF, ~1 s):
+    on the viewer's robot_ik the aim waited for the viewer's own IK / FK under
+    _ik_lock, and points went out 80-360 ms apart."""
+    rr = _rr()
+    path = str(getattr(rr, "URDF_SIM_PATH", "") or "")
+    if _own["model"] is not None and _own["path"] == path:
+        try:
+            with _own["lock"]:
+                rr._apply_base(_own["model"])  # the arm's base as it is now
+        except Exception:
+            pass
+        return _own["model"], _own["lock"]
+    from skrobot.model import RobotModel
+    m = RobotModel()
+    m.load_urdf_file(path)
+    try:
+        rr.apply_aubo_i5_joint_limits(m)
+    except Exception:
+        pass
+    try:
+        rr._apply_base(m)
+    except Exception:
+        pass
+    _own.update(path=path, model=m)
+    return m, _own["lock"]
+
+
 class Streamer:
-    """Sends the baked path (aimed live) with trackJoint, a point every
-    STREAM_DT; the path time moves on only when a point is taken (a refused
-    point is sent again), every point stays within the joint speed the path
-    and the aim allow, and the run stops (stopJoint) when it can't keep to that
-    or the arm falls behind. stop() ends it (the run's stop then stops the arm)."""
+    """The streamed Live run, as two threads:
+
+    - the sender (`_run`): every STREAM_DT, the baked joints at the next path
+      time plus the aim's joint change (`delta`, filtered here at the send
+      rate), checked (`_limit`) and sent with trackJoint. It does nothing slow,
+      so the points go out evenly (with the aim solved in the same loop, IK and
+      the viewer's IK lock made the points 80-360 ms apart: jitter, and the
+      path ran at ~0.7 x speed).
+    - the aimer (`_aim_loop`): as often as it can, the Aimer at the path time
+      just ahead of the sender, on its own IK model; its answer (`aim_d`) and
+      rate (`aim_v`) are what the sender's filter follows, carried on at that
+      rate between answers.
+
+    The path time moves on only when a point is taken (a refused point is
+    sent again); the run stops (stopJoint) when the aim asks for more than the
+    limits allow or the arm falls behind. stop() ends it."""
 
     def __init__(self, bot, samples):
         self.bot = bot
         self.samples = list(samples)
         self.t_end = float(self.samples[-1]["t"]) if self.samples else 0.0
-        self.aimer = Aimer()
+        try:
+            model, lock = own_model()
+        except Exception as e:
+            print("live stream: no private IK model, sharing the viewer's:", e)
+            model, lock = None, None
+        self.aimer = Aimer(model=model, lock=lock)
         self.stop_ev = threading.Event()
         self.thread = None
+        self.aim_thread = None
         self.stats = {"sent": 0, "full": 0, "cleared": 0, "late": 0, "aim_err": "",
-                      "max_follow_deg": 0.0, "max_behind_deg": 0.0, "max_dps": 0.0}
+                      "max_follow_deg": 0.0, "max_behind_deg": 0.0, "max_dps": 0.0,
+                      "aims": 0, "max_aim_ms": 0.0}
         self.error = ""
         self.log = []
+        self.s_sent = 0.0
+        self.aim_d = np.zeros(6)      # the aimer's latest joint change (rad)
+        self.aim_v = np.zeros(6)      # its rate (rad/s)
+        self.aim_at = None            # perf_counter of that answer
+        self.delta = np.zeros(6)      # joint change as sent (filtered)
+        self.dv = np.zeros(6)
         # The arm stands on the first point (checked before the run).
         self.q_last = _interp(self.samples, 0.0) if self.samples else None
 
@@ -407,14 +466,67 @@ class Streamer:
                 fn()
             except Exception:
                 pass
+        self.aim_thread = threading.Thread(target=self._aim_loop, name="live_aim", daemon=True)
+        self.aim_thread.start()
         self.thread = threading.Thread(target=self._run, name="live_stream", daemon=True)
         self.thread.start()
 
     def stop(self):
         self.stop_ev.set()
-        if self.thread is not None and self.thread is not threading.current_thread():
-            self.thread.join(1.0)
+        for th in (self.thread, self.aim_thread):
+            if th is not None and th is not threading.current_thread():
+                th.join(1.0)
 
+    # -- aimer thread -------------------------------------------------------
+    def _aim_loop(self):
+        last = None
+        while not self.stop_ev.is_set():
+            t0 = time.perf_counter()
+            # Aim where the sender will be by the time this answer is used.
+            s = min(self.t_end, self.s_sent + (LEAD_POINTS + 1) * STREAM_DT)
+            if last is not None and s <= last + 1e-6:
+                if s >= self.t_end - 1e-9:
+                    time.sleep(0.005)
+                    continue
+                s = last + 0.002
+            try:
+                q_base = _interp(self.samples, s)
+                self.aimer(s, q_base)
+                d = np.asarray(self.aimer.delta_t, dtype=float).copy()
+            except Exception as e:
+                self.aimer.err = "aim failed: %s" % e
+                time.sleep(0.02)
+                continue
+            now = time.perf_counter()
+            if self.aim_at is not None and last is not None and s > last:
+                cap = math.radians(tune("joint_dps"))
+                self.aim_v = np.clip((d - self.aim_d) / (s - last), -cap, cap)
+            if self.aimer.err:
+                self.aim_v = np.zeros(6)  # held: don't carry it on
+            self.aim_d, self.aim_at, last = d, now, s
+            self.stats["aims"] += 1
+            self.stats["max_aim_ms"] = max(self.stats["max_aim_ms"], (now - t0) * 1000.0)
+            self.stats["aim_err"] = self.aimer.err
+            # Not faster than the points go out.
+            left = STREAM_DT - (time.perf_counter() - t0)
+            if left > 0:
+                time.sleep(left)
+
+    def _delta_goal(self):
+        """The aim's joint change for the next point: its last answer carried on
+        at its rate (up to 0.15 s past it)."""
+        if self.aim_at is None:
+            return self.delta
+        age = min(0.15, max(0.0, time.perf_counter() - self.aim_at))
+        return self.aim_d + self.aim_v * age
+
+    def _step_delta(self, dur, goal=None):
+        self.delta, self.dv = _follow(self.delta, self.dv, self._delta_goal() if goal is None else goal,
+                                      math.radians(tune("joint_dps")), math.radians(tune("joint_acc")),
+                                      dur, tune("joint_smooth_s"))
+        return self.delta
+
+    # -- sender thread ------------------------------------------------------
     def _limit(self, q, q_base, qb_prev, dur=STREAM_DT):
         """q held to the path's own step plus the aim's speed (and a margin) over dur."""
         lim = np.abs(q_base - qb_prev) + math.radians(tune("joint_dps") + STEP_MARGIN_DPS) * dur
@@ -454,30 +566,23 @@ class Streamer:
             while not self.stop_ev.is_set():
                 qn = self._queue(mc)
                 if qn is not None and qn >= QUEUE_MAX:
-                    # The controller has plenty queued: wait a little, send nothing.
-                    _sleep_until(time.perf_counter() + 0.004)
+                    _sleep_until(time.perf_counter() + 0.004)  # plenty queued: wait
                     continue
                 n += 1
                 due += STREAM_DT
                 if settle is None:
-                    # Normally one tick of path per point; behind the wall clock (a slow
-                    # loop: RPC, IK) a point covers the missed time, up to 4 ticks, and
-                    # its trackJoint duration says so: the same speed, and the run ends
-                    # with the timeline instead of long after it.
-                    behind = (now0 := time.perf_counter()) - t_wall0 - LEAD_POINTS * STREAM_DT - s
+                    # One tick of path per point; behind the wall clock (a stall) a point
+                    # covers the missed time, up to 4 ticks, with a matching duration.
+                    behind = time.perf_counter() - t_wall0 - LEAD_POINTS * STREAM_DT - s
                     step = min(4 * STREAM_DT, max(STREAM_DT, behind)) if behind > 2 * STREAM_DT else STREAM_DT
                     s_new = min(s + step, self.t_end)
+                    dur = max(STREAM_DT, s_new - s)
                     q_base = _interp(self.samples, s_new)
-                    every = int(tune("ik_every"))
-                    q = self.aimer(s_new, q_base, solve=(every <= 1 or n % every == 1))
-                    self.stats["aim_err"] = self.aimer.err
+                    q = q_base + self._step_delta(dur)
                 else:
-                    # Past the end: the last point, the aim's joints settling (no new aim).
-                    s_new = self.t_end
-                    q_base = qb_prev
-                    self.aimer.rate_t = np.zeros(6)
-                    q = self._settle_q(q_base)
-                dur = max(STREAM_DT, s_new - s) if settle is None else STREAM_DT
+                    # Past the end: the last point, the aim's joints coming to rest on its last answer.
+                    s_new, dur, q_base = self.t_end, STREAM_DT, qb_prev
+                    q = q_base + self._step_delta(dur, goal=self.aim_d)
                 q = self._limit(q, q_base, qb_prev, dur)
                 rc = self._send(mc, q, dur)
                 now = time.perf_counter()
@@ -487,6 +592,7 @@ class Streamer:
                     self.stats["max_dps"] = max(self.stats["max_dps"], dps)
                     self.q_last = q
                     s, qb_prev = s_new, q_base
+                    self.s_sent = s
                     self.stats["sent"] += 1
                     full_since = None
                     if last_sent is not None:
@@ -528,7 +634,7 @@ class Streamer:
                 if settle is None and s >= self.t_end - 1e-9:
                     settle = now
                 if settle is not None and (now - settle > SETTLE_MAX_S
-                                           or float(np.max(np.abs(self.aimer.dv))) < math.radians(0.5)):
+                                           or float(np.max(np.abs(self.dv))) < math.radians(0.5)):
                     break  # the last point is sent and the aim has come to rest
                 if now - due > RESYNC_S:
                     self.stats["late"] += 1
@@ -546,16 +652,10 @@ class Streamer:
                 pass
         finally:
             _fine_timer(False)
+            self.stop_ev.set()  # the aimer too
         self.stats["wall_s"] = round(time.perf_counter() - t_wall0, 3)
         self.stats["path_s"] = round(s, 3)
         print("live stream done", self.stats)
-
-    def _settle_q(self, q_base):
-        """The aim's joints coming to rest on the last answer (filter only)."""
-        a = self.aimer
-        a.delta, a.dv = _follow(a.delta, a.dv, a.delta_t, math.radians(tune("joint_dps")),
-                                math.radians(tune("joint_acc")), STREAM_DT, tune("joint_smooth_s"))
-        return np.asarray(q_base, dtype=float) + a.delta
 
 
 _stream = {"s": None}
