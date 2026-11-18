@@ -4046,6 +4046,36 @@ def _play_t():
     return None
 
 
+# The speed graph's tool speed: a straight-line fit through the last SPEED_WINDOW_S of readings.
+# The difference of two readings ~50 ms apart, timed when each came back over
+# the network, swung with every few ms of delay, read 0 then double when the
+# controller returned the same reading twice, and held its last value through
+# a gap over 0.35 s: the graph showed steps and plateaus.
+SPEED_WINDOW_S = 0.2
+
+
+def _window_speed(st, ee, now, clock):
+    win = st.get("_win")
+    if win is None or st.get("_win_clock") != clock or (win and now < win[-1][0] - 1e-6):
+        win = []  # first reading, another clock, or the clock went back (a seek)
+        st["_win"], st["_win_clock"] = win, clock
+    win.append((now, np.asarray(ee, dtype=float).copy()))
+    while len(win) > 2 and now - win[1][0] >= SPEED_WINDOW_S:
+        win.pop(0)  # keep one reading at least SPEED_WINDOW_S old
+    span = now - win[0][0]
+    if span < 1e-4:
+        return float(st.get("lin_mps") or 0.0)
+    # Least-squares slope through every reading in the window (evens out their timing).
+    ts = np.array([w[0] for w in win]) - now
+    ps = np.array([w[1] for w in win])
+    tc = ts - ts.mean()
+    den = float(np.dot(tc, tc))
+    if den < 1e-12:
+        return float(np.linalg.norm(win[-1][1] - win[0][1]) / span)
+    vel = (tc[:, None] * (ps - ps.mean(axis=0))).sum(axis=0) / den
+    return float(np.linalg.norm(vel))
+
+
 def _note_motion(which, q, ee, t=None):
     st = _motion[which]
     now = time.perf_counter() if t is None else float(t)
@@ -4059,8 +4089,8 @@ def _note_motion(which, q, ee, t=None):
         dt = now - prev_t
         if 1e-4 < dt < 0.35:
             st["qdot"] = [(q[i] - prev_q[i]) / dt for i in range(6)]
-            if ee is not None and prev_ee is not None:
-                st["lin_mps"] = float(np.linalg.norm(ee - prev_ee) / dt)
+    if ee is not None:
+        st["lin_mps"] = _window_speed(st, ee, now, "wall" if t is None else "path")
     if q is not None:
         st["q"] = list(q)
     st["t"] = now
