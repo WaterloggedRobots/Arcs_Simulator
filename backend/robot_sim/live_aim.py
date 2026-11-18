@@ -46,21 +46,22 @@ IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
 #   turn_dps / turn_acc      the aim's speed and acceleration limits
 #   joint_smooth_s           the joints' filter time constant (0 = none)
 #   joint_dps / joint_acc    the aim's joint change on top of the baked path, limits
-#   ik_every                 streamed run: IK every Nth point (the answer is carried on between)
+#   ik_every                 (unused since the streamed run aims on its own thread)
+#   aim_hz                   streamed run: aim answers per second of path, evenly spaced
 #   track_smooth / track_delay  trackJoint's smooth and delay scales
 TUNE_DEFAULTS = {
     "smooth_s": 0.1, "deadband_mm": 1.0, "predict_s": 0.1,
     "aim_deadband_deg": 0.2, "aim_response_s": 0.15,
     "turn_dps": 30.0, "turn_acc": 90.0,
     "joint_smooth_s": 0.03, "joint_dps": 45.0, "joint_acc": 180.0,
-    "ik_every": 1, "track_smooth": 0.5, "track_delay": 1.0,
+    "ik_every": 1, "aim_hz": 10.0, "track_smooth": 0.5, "track_delay": 1.0,
 }
 TUNE_RANGES = {
     "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0), "predict_s": (0.0, 0.5),
     "aim_deadband_deg": (0.0, 10.0), "aim_response_s": (0.0, 5.0),
     "turn_dps": (1.0, 180.0), "turn_acc": (1.0, 2000.0),
     "joint_smooth_s": (0.0, 1.0), "joint_dps": (1.0, 180.0), "joint_acc": (1.0, 2000.0),
-    "ik_every": (1, 10), "track_smooth": (0.0, 1.0), "track_delay": (0.0, 2.0),
+    "ik_every": (1, 10), "aim_hz": (2.0, 50.0), "track_smooth": (0.0, 1.0), "track_delay": (0.0, 2.0),
 }
 TUNE = dict(TUNE_DEFAULTS)
 
@@ -355,8 +356,6 @@ SETTLE_MAX_S = 0.5       # at the end, keep sending the last point while the aim
 LEAD_POINTS = 3          # points kept queued ahead on the controller (60 ms): a late tick doesn't starve it
 QUEUE_MAX = 8            # with getTrajectoryQueueSize: don't send while this many are queued
 RESYNC_S = 0.25          # a stall longer than this restarts the schedule (else late points go out back to back)
-AIM_LEAD_MIN_S = 0.08    # the aimer solves this far ahead of the sender at least ...
-AIM_LEAD_MAX_S = 0.5     # ... and at most (2 x the sender's path time between answers + the queued points)
 ANSWERS_KEPT = 12        # the aimer's recent answers the sender blends between
 
 
@@ -426,7 +425,7 @@ class Streamer:
       the viewer's IK lock made the points 80-360 ms apart: jitter, and the
       path ran at ~0.7 x speed).
     - the aimer (`_aim_loop`): as often as it can, the Aimer at a path time
-      ahead of the sender (`_aim_lead`: ~2 x the path time the sender covers between answers), on its own IK model;
+      on a fixed rhythm (path times k / aim_hz, each solved once the sender gets within `_aim_lead()`), on its own IK model;
       the sender blends between the two answers either side of each point
       (`_delta_goal`), and its filter smooths what is left.
 
@@ -456,7 +455,6 @@ class Streamer:
         self.aim_d = np.zeros(6)      # the aimer's latest joint change (rad)
         self.answers = []             # [(path time, joint change)] of the aimer's recent answers
         self.aim_gap = 0.1            # its time between answers (s), averaged
-        self.aim_ds = 0.1             # path time the sender covers between answers (s), averaged
         self.aim_at = None            # perf_counter of the latest answer
         self.delta = np.zeros(6)      # joint change as sent (filtered)
         self.dv = np.zeros(6)
@@ -484,24 +482,31 @@ class Streamer:
 
     # -- aimer thread -------------------------------------------------------
     def _aim_lead(self):
-        """How far ahead of the sender the aimer solves: twice the path time the
-        sender covers between answers (rising at once when that grows), plus the
-        queued points, so the sender's point always has an answer either side of
-        it to blend."""
-        return min(AIM_LEAD_MAX_S, max(AIM_LEAD_MIN_S, 2.0 * self.aim_ds + LEAD_POINTS * STREAM_DT))
+        """How far ahead of the sender the answers must reach: the queued points,
+        two rhythm steps, and the path a catching-up sender covers in one send."""
+        return LEAD_POINTS * STREAM_DT + 2.0 / max(1.0, float(tune("aim_hz"))) + 4 * STREAM_DT
 
     def _aim_loop(self):
+        """Answers on a fixed rhythm: at path times k / aim_hz (evenly spaced),
+        each solved once the sender gets within `_aim_lead()` of it, nothing in
+        between. (Solving as often as it could, at whatever path time the sender
+        had reached, gave unevenly spaced answers, and the aimer computing most
+        of the time kept the sender waiting for Python's interpreter.)"""
         last = None
-        s_at_last = None
         while not self.stop_ev.is_set():
-            t0 = time.perf_counter()
+            step = 1.0 / max(1.0, float(tune("aim_hz")))
             s_sent = self.s_sent
-            s = min(self.t_end, s_sent + self._aim_lead())
-            if last is not None and s <= last + 1e-6:
-                if s >= self.t_end - 1e-9 or last >= self.t_end - 1e-9:
-                    time.sleep(0.005)
-                    continue
-                s = min(self.t_end, last + 0.002)
+            if last is not None and last >= self.t_end - 1e-9:
+                time.sleep(0.01)  # the end's answer is in
+                continue
+            # The next grid time after the last answer (missed ones are skipped).
+            k = math.floor((last if last is not None else s_sent) / step + 1e-9) + 1
+            s = max(k * step, math.ceil(s_sent / step - 1e-9) * step)
+            s = min(self.t_end, s)
+            if last is not None and s - s_sent > self._aim_lead():
+                time.sleep(0.005)  # far enough ahead: wait for the sender
+                continue
+            t0 = time.perf_counter()
             try:
                 q_base = _interp(self.samples, s)
                 self.aimer(s, q_base)
@@ -512,13 +517,7 @@ class Streamer:
                 continue
             now = time.perf_counter()
             if self.aim_at is not None:
-                self.aim_gap = 0.8 * self.aim_gap + 0.2 * min(0.5, now - self.aim_at)
-            s_now = self.s_sent
-            if s_at_last is not None:
-                # Path time, not wall time: a sender catching up covers more path per second.
-                ds = max(s_now - s_at_last, s_now - s_sent)
-                self.aim_ds = max(0.6 * self.aim_ds + 0.4 * min(0.4, ds), min(0.4, ds))
-            s_at_last = s_now
+                self.aim_gap = 0.8 * self.aim_gap + 0.2 * min(1.0, now - self.aim_at)
             # A new list each time (the sender reads it without a lock).
             self.answers = (self.answers + [(s, d)])[-ANSWERS_KEPT:]
             self.aim_d, self.aim_at, last = d, now, s
@@ -526,11 +525,7 @@ class Streamer:
             self.stats["max_aim_ms"] = max(self.stats["max_aim_ms"], (now - t0) * 1000.0)
             self.stats["aim_err"] = self.aimer.err
             self.stats["aim_gap_ms"] = round(self.aim_gap * 1000.0, 1)
-            self.stats["aim_lead_ms"] = round(self._aim_lead() * 1000.0, 1)
-            # Not faster than the points go out.
-            left = STREAM_DT - (time.perf_counter() - t0)
-            if left > 0:
-                time.sleep(left)
+            self.stats["aim_ahead_ms"] = round((s - self.s_sent) * 1000.0, 1)
 
     def _delta_goal(self, s):
         """The aim's joint change at path time s: a smooth curve through the
