@@ -1736,26 +1736,40 @@ _smooth = {}
 
 
 def smooth_target(key, pos):
-    """The Look At target as followed by the live aim (key: one filter per user)."""
+    """The Look At target as followed live (key: one filter per user): carried
+    on at its speed between updates (predict_s: a camera target only changes at
+    the camera's frame rate, which stepped the aim), then held inside the
+    deadband and low-passed (Real Time Motion values)."""
     if pos is None:
         _smooth.pop(key, None)
         return None
-    raw = np.asarray(pos, dtype=float).reshape(3)
     import live_aim
+    raw = np.asarray(pos, dtype=float).reshape(3)
     tau = max(0.0, float(live_aim.tune("smooth_s") or 0.0))
     band = max(0.0, float(live_aim.tune("deadband_mm") or 0.0)) / 1000.0
+    pred_s = max(0.0, float(live_aim.tune("predict_s") or 0.0))
     now = time.monotonic()
     st = _smooth.get(key)
-    if st is None or float(np.linalg.norm(raw - st["p"])) > 0.5:
-        _smooth[key] = {"p": raw.copy(), "t": now}  # first time, or a jump to another target
+    if st is None or float(np.linalg.norm(raw - st["raw"])) > 0.5:
+        # First time, or a jump to another target.
+        _smooth[key] = {"p": raw.copy(), "t": now, "raw": raw.copy(), "raw_t": now, "v": np.zeros(3)}
         return raw
     dt = max(0.0, min(0.5, now - st["t"]))
     st["t"] = now
-    d = raw - st["p"]
+    if float(np.linalg.norm(raw - st["raw"])) > 1e-7:
+        # A new reading: its speed from the last one (averaged with the speed before).
+        gap = now - st["raw_t"]
+        v_new = (raw - st["raw"]) / gap if 1e-3 < gap < 0.5 else np.zeros(3)
+        st["v"] = 0.5 * st["v"] + 0.5 * v_new
+        st["raw"], st["raw_t"] = raw.copy(), now
+    elif now - st["raw_t"] > 0.5:
+        st["v"] = np.zeros(3)  # it has stopped
+    cur = st["raw"] + st["v"] * min(now - st["raw_t"], pred_s)
+    d = cur - st["p"]
     dist = float(np.linalg.norm(d))
     if dist <= band:
         return st["p"].copy()  # inside the deadband: hold
-    goal = raw - d / dist * band  # follow up to the deadband's edge
+    goal = cur - d / dist * band  # follow up to the deadband's edge
     k = 1.0 if tau <= 1e-6 else 1.0 - math.exp(-dt / tau)
     st["p"] = st["p"] + (goal - st["p"]) * k
     return st["p"].copy()

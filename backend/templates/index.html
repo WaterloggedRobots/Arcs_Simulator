@@ -1924,6 +1924,7 @@
               <label class="field" style="margin-top:10px;color:#cfd2da;">Target</label>
               <div class="rtm-row" title="Low-pass time constant on the followed target (0 = none). Higher hides jitter, adds lag."><label for="rtm_smooth_s">Target smoothing (s)</label><input id="rtm_smooth_s" data-rtm="smooth_s" type="number" min="0" step="0.01"></div>
               <div class="rtm-row" title="The target is held while it moves less than this (0 = none)."><label for="rtm_deadband_mm">Target deadband (mm)</label><input id="rtm_deadband_mm" data-rtm="deadband_mm" type="number" min="0" step="0.1"></div>
+              <div class="rtm-row" title="Between the target's updates (a camera target changes at the camera's frame rate) it is carried on at its speed this long, so the aim moves smoothly instead of in steps (0 = none)."><label for="rtm_predict_s">Target prediction (s)</label><input id="rtm_predict_s" data-rtm="predict_s" type="number" min="0" step="0.01"></div>
               <label class="field" style="margin-top:10px;color:#cfd2da;">Aim</label>
               <div class="rtm-row" title="Aim changes smaller than this are ignored; past it the aim follows at that distance (0 = none)."><label for="rtm_aim_deadband_deg">Aim deadband (°)</label><input id="rtm_aim_deadband_deg" data-rtm="aim_deadband_deg" type="number" min="0" step="0.05"></div>
               <div class="rtm-row" title="The turn is at most what is left per this time: higher eases in, lower reacts sooner (0 = only the limits below)."><label for="rtm_aim_response_s">Aim response time (s)</label><input id="rtm_aim_response_s" data-rtm="aim_response_s" type="number" min="0" step="0.01"></div>
@@ -9164,7 +9165,7 @@
       if (isFinite(v)) postRtm({ [el.dataset.rtm]: v });
     }));
     const RTM_PRESETS = {
-      low: { smooth_s: 0, deadband_mm: 0, aim_deadband_deg: 0.05, aim_response_s: 0.05, joint_smooth_s: 0.01, ik_every: 1 },
+      low: { smooth_s: 0.02, deadband_mm: 0, predict_s: 0.1, aim_deadband_deg: 0.05, aim_response_s: 0.05, joint_smooth_s: 0.01, ik_every: 1 },
       smooth: { smooth_s: 0.3, deadband_mm: 3, aim_deadband_deg: 0.5, aim_response_s: 0.5, joint_smooth_s: 0.08, ik_every: 2 },
     };
     document.querySelectorAll("[data-rtm-preset]").forEach((b) => b.addEventListener("click", () => {

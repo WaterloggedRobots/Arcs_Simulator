@@ -36,6 +36,8 @@ IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
 # same values). Used by the live aim (Simulate and the streamed Run) and, for
 # the target filter, by the Sim Arm Cursor's own Look At.
 #   smooth_s / deadband_mm   the target: low-pass time constant, held while it moves less
+#   predict_s                the target between its updates (a camera target changes at the
+#                            camera's frame rate: steps): carried on at its speed this long
 #   aim_deadband_deg         the aim's goal is held while the target's aim moves less than
 #                            this, then follows it at that distance (no stop-start: the
 #                            first version waited at rest for 0.4 deg, caught up and
@@ -47,14 +49,14 @@ IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
 #   ik_every                 streamed run: IK every Nth point (the answer is carried on between)
 #   track_smooth / track_delay  trackJoint's smooth and delay scales
 TUNE_DEFAULTS = {
-    "smooth_s": 0.1, "deadband_mm": 1.0,
+    "smooth_s": 0.1, "deadband_mm": 1.0, "predict_s": 0.1,
     "aim_deadband_deg": 0.2, "aim_response_s": 0.15,
     "turn_dps": 30.0, "turn_acc": 90.0,
     "joint_smooth_s": 0.03, "joint_dps": 45.0, "joint_acc": 180.0,
     "ik_every": 1, "track_smooth": 0.5, "track_delay": 1.0,
 }
 TUNE_RANGES = {
-    "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0),
+    "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0), "predict_s": (0.0, 0.5),
     "aim_deadband_deg": (0.0, 10.0), "aim_response_s": (0.0, 5.0),
     "turn_dps": (1.0, 180.0), "turn_acc": (1.0, 2000.0),
     "joint_smooth_s": (0.0, 1.0), "joint_dps": (1.0, 180.0), "joint_acc": (1.0, 2000.0),
@@ -345,7 +347,34 @@ STOP_BEHIND_DEG = 3.0    # ... and the stream stops if it falls this far behind 
 FOLLOW_STOP_DEG = 10.0   # the arm this far from the last point sent -> stop
 READ_EVERY = 5           # read the arm's joints every N points
 FULL_STOP_S = 1.0        # the controller refusing points (queue full) this long -> stop
-SETTLE_MAX_S = 1.5       # at the end, keep sending the last point while the aim settles
+SETTLE_MAX_S = 0.5       # at the end, keep sending the last point while the aim settles
+LEAD_POINTS = 3          # points kept queued ahead on the controller (60 ms): a late tick doesn't starve it
+QUEUE_MAX = 8            # with getTrajectoryQueueSize: don't send while this many are queued
+RESYNC_S = 0.25          # a stall longer than this restarts the schedule (else late points go out back to back)
+
+
+def _fine_timer(on):
+    """Windows sleeps in 15.6 ms steps unless the timer is set to 1 ms: the
+    stream's 20 ms ticks became ~31 ms, so the arm ran each point and waited
+    (motion in steps) and the path ran at ~0.6 x, ending long after the timeline."""
+    import os
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        (ctypes.windll.winmm.timeBeginPeriod if on else ctypes.windll.winmm.timeEndPeriod)(1)
+    except Exception:
+        pass
+
+
+def _sleep_until(t):
+    """Sleep to t: short sleeps, then a spin for the last 2 ms (exact on Windows too)."""
+    while True:
+        left = t - time.perf_counter()
+        if left <= 0:
+            return
+        if left > 0.002:
+            time.sleep(min(left - 0.0015, 0.005))
 LOG_MAX = 6000           # points kept for the speed export
 
 
@@ -386,9 +415,9 @@ class Streamer:
         if self.thread is not None and self.thread is not threading.current_thread():
             self.thread.join(1.0)
 
-    def _limit(self, q, q_base, qb_prev):
-        """q held to the path's own step plus the aim's speed (and a margin)."""
-        lim = np.abs(q_base - qb_prev) + math.radians(tune("joint_dps") + STEP_MARGIN_DPS) * STREAM_DT
+    def _limit(self, q, q_base, qb_prev, dur=STREAM_DT):
+        """q held to the path's own step plus the aim's speed (and a margin) over dur."""
+        lim = np.abs(q_base - qb_prev) + math.radians(tune("joint_dps") + STEP_MARGIN_DPS) * dur
         step = np.clip(q - self.q_last, -lim, lim)
         out = self.q_last + step
         behind = float(np.degrees(np.max(np.abs(q - out))))
@@ -397,24 +426,47 @@ class Streamer:
             raise RuntimeError("the aimed path asks for a %.1f deg jump, more than the arm may make: stopped" % behind)
         return out
 
-    def _send(self, mc, q):
-        return int(mc.trackJoint([float(v) for v in q], STREAM_DT, float(tune("track_smooth")), float(tune("track_delay"))))
+    def _send(self, mc, q, dur=STREAM_DT):
+        return int(mc.trackJoint([float(v) for v in q], float(dur), float(tune("track_smooth")), float(tune("track_delay"))))
+
+    def _queue(self, mc):
+        if self._qfn is False:
+            return None
+        try:
+            return int(mc.getTrajectoryQueueSize())
+        except Exception:
+            self._qfn = False  # not on this controller / SDK
+            return None
 
     def _run(self):
         mc = self.bot.mc
+        _fine_timer(True)
+        self._qfn = None
         t_wall0 = time.perf_counter()
-        due = t_wall0
+        due = t_wall0 - LEAD_POINTS * STREAM_DT  # the first LEAD_POINTS go out at once
         s = 0.0                      # path time of the last point taken
         qb_prev = _interp(self.samples, 0.0)
         full_since = None
         n = 0
         settle = None                # wall time the end's settling began
+        last_sent = None
         try:
             while not self.stop_ev.is_set():
+                qn = self._queue(mc)
+                if qn is not None and qn >= QUEUE_MAX:
+                    # The controller has plenty queued: wait a little, send nothing.
+                    _sleep_until(time.perf_counter() + 0.004)
+                    continue
                 n += 1
                 due += STREAM_DT
                 if settle is None:
-                    s_new = min(s + STREAM_DT, self.t_end)
+                    # Normally one tick of path per point; behind the wall clock (a slow
+                    # loop: RPC, IK) a point covers the missed time, up to 4 ticks, and
+                    # its trackJoint duration says so: the same speed, and the run ends
+                    # with the timeline instead of long after it.
+                    behind = (now0 := time.perf_counter()) - t_wall0 - LEAD_POINTS * STREAM_DT - s
+                    step = min(4 * STREAM_DT, max(STREAM_DT, behind)) if behind > 2 * STREAM_DT else STREAM_DT
+                    s_new = min(s + step, self.t_end)
                     q_base = _interp(self.samples, s_new)
                     every = int(tune("ik_every"))
                     q = self.aimer(s_new, q_base, solve=(every <= 1 or n % every == 1))
@@ -425,20 +477,27 @@ class Streamer:
                     q_base = qb_prev
                     self.aimer.rate_t = np.zeros(6)
                     q = self._settle_q(q_base)
-                q = self._limit(q, q_base, qb_prev)
-                rc = self._send(mc, q)
+                dur = max(STREAM_DT, s_new - s) if settle is None else STREAM_DT
+                q = self._limit(q, q_base, qb_prev, dur)
+                rc = self._send(mc, q, dur)
+                now = time.perf_counter()
+                gap = None
                 if rc == 0:
-                    dps = float(np.degrees(np.max(np.abs(q - self.q_last)))) / STREAM_DT
+                    dps = float(np.degrees(np.max(np.abs(q - self.q_last)))) / dur
                     self.stats["max_dps"] = max(self.stats["max_dps"], dps)
                     self.q_last = q
                     s, qb_prev = s_new, q_base
                     self.stats["sent"] += 1
                     full_since = None
+                    if last_sent is not None:
+                        gap = now - last_sent
+                        self.stats["max_gap_ms"] = max(self.stats.get("max_gap_ms", 0.0), gap * 1000.0)
+                    last_sent = now
                 elif rc == 2:
                     # Queue full: the same point again next time (the path time waits).
                     self.stats["full"] += 1
-                    full_since = full_since or time.perf_counter()
-                    if time.perf_counter() - full_since > FULL_STOP_S:
+                    full_since = full_since or now
+                    if now - full_since > FULL_STOP_S:
                         raise RuntimeError("the controller kept refusing points (queue full) for %.1f s" % FULL_STOP_S)
                 elif rc in (-3, -4):
                     # A stop left the path held: clear it and go on from where the arm is.
@@ -460,21 +519,24 @@ class Streamer:
                         if follow > FOLLOW_STOP_DEG:
                             raise RuntimeError("the arm is %.1f deg behind the stream: stopped" % follow)
                 if len(self.log) < LOG_MAX:
-                    self.log.append({"t": round(time.perf_counter() - t_wall0, 4), "s": round(s, 4), "rc": rc,
+                    self.log.append({"t": round(now - t_wall0, 4), "s": round(s, 4), "rc": rc,
+                                     "gap_ms": None if gap is None else round(gap * 1000.0, 1), "queue": qn,
+                                     "dur_ms": round(dur * 1000.0, 1),
                                      "q": [round(math.degrees(v), 3) for v in self.q_last],
                                      "follow_deg": None if follow is None else round(follow, 2),
                                      "dev_deg": round(self.aimer.dev_deg, 2), "aim_err": self.aimer.err})
                 if settle is None and s >= self.t_end - 1e-9:
-                    settle = time.perf_counter()
-                if settle is not None and (time.perf_counter() - settle > SETTLE_MAX_S
+                    settle = now
+                if settle is not None and (now - settle > SETTLE_MAX_S
                                            or float(np.max(np.abs(self.aimer.dv))) < math.radians(0.5)):
                     break  # the last point is sent and the aim has come to rest
-                left = due - time.perf_counter()
-                if left > 0:
-                    time.sleep(left)
-                else:
+                if now - due > RESYNC_S:
                     self.stats["late"] += 1
-                    due = time.perf_counter()  # late: don't send a burst to catch up
+                    due = now  # a long stall: start the schedule again (no burst)
+                elif qn is not None and qn <= 1:
+                    due = min(due, now)  # the controller is about to run dry: send the next one now
+                else:
+                    _sleep_until(due)
         except Exception as e:
             self.error = str(e)
             print("live stream stopped:", e)
@@ -482,6 +544,10 @@ class Streamer:
                 mc.stopJoint(3.0)
             except Exception:
                 pass
+        finally:
+            _fine_timer(False)
+        self.stats["wall_s"] = round(time.perf_counter() - t_wall0, 3)
+        self.stats["path_s"] = round(s, 3)
         print("live stream done", self.stats)
 
     def _settle_q(self, q_base):
