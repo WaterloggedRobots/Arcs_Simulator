@@ -65,23 +65,35 @@ _status = "drag a box around the target"
 # ---------------------------------------------------------------------------
 def set_box(x0, y0, x1, y1):
     """A rectangle dragged in the camera pane (image pixels)."""
-    global _pending
+    global _pending, _last_click
     try:
         x0, y0, x1, y1 = (float(v) for v in (x0, y0, x1, y1))
     except Exception:
         return
     _pending = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    _last_click = None
+    print("orbbec: box %.0f,%.0f - %.0f,%.0f" % _pending)
+
+
+_last_click = None
 
 
 def set_target(u, v):
-    """A click in the camera pane: track a small box around it."""
+    """A click in the camera pane: track a small box around it. The sandbox
+    passes the last click again on every frame: only a new click starts a new
+    box (re-boxing the same spot each frame kept the tracker from following)."""
+    global _last_click
+    u, v = float(u), float(v)
+    if _last_click is not None and abs(u - _last_click[0]) < 0.5 and abs(v - _last_click[1]) < 0.5:
+        return
     h = CLICK_BOX_PX / 2.0
-    set_box(float(u) - h, float(v) - h, float(u) + h, float(v) + h)
+    set_box(u - h, v - h, u + h, v + h)
+    _last_click = (u, v)
 
 
 def clear_target():
-    global _tracker, _box, _pending, primary_target, _status
-    _tracker, _box, _pending, primary_target = None, None, None, None
+    global _tracker, _box, _pending, primary_target, _status, _last_click
+    _tracker, _box, _pending, primary_target, _last_click = None, None, None, None, None
     _status = "drag a box around the target"
 
 
@@ -131,6 +143,7 @@ def _track(bgr, depth_m):
             _tracker.init(bgr, box)
             _box, _ok_at = box, time.time()
             _status = "tracking (%s)" % _tracker_name
+            print("orbbec: tracking %s from box %s in a %dx%d frame" % (_tracker_name, box, w, h))
         except Exception as e:
             _tracker, _box = None, None
             _status = "tracker failed: %s" % e
@@ -147,6 +160,8 @@ def _track(bgr, depth_m):
         _status = "tracking (%s)" % _tracker_name
     else:
         if now - _ok_at > LOST_AFTER_S:
+            if not _status.startswith("lost"):
+                print("orbbec: target lost")
             _status = "lost: drag a new box"
         primary_target = None  # the sandbox keeps aiming at the last place seen
         return

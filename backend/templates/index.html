@@ -2347,6 +2347,7 @@
             <div class="row name-row" id="camScriptRow" hidden>
               <label>Script</label>
               <button type="button" id="camScriptBtn">Choose .py…</button>
+              <button type="button" id="camScriptClear" class="track-trash" title="Remove the script from this camera (its camera is released)" hidden>✕</button>
               <input id="camScriptFile" type="file" accept=".py,text/x-python" hidden>
               <input id="camScript" type="hidden" value="">
             </div>
@@ -6167,10 +6168,13 @@
             const scp = document.getElementById("camScript");
             if (scp) scp.value = c.script || "";
             const btn = document.getElementById("camScriptBtn");
+            const scriptOn = !!c.script && !c.no_script;
             if (btn) {
-              const name = (c.script || "").split(/[/\\]/).pop();
+              const name = scriptOn ? (c.script || "").split(/[/\\]/).pop() : "";
               btn.textContent = name || "Choose .py…";
             }
+            const clr = document.getElementById("camScriptClear");
+            if (clr) clr.hidden = !scriptOn;
             const row = document.getElementById("camScriptRow");
             if (row) {
               const on = (c.type === "cv" || c.type === "opencv");
@@ -6827,6 +6831,21 @@
       const btn = document.getElementById("camScriptBtn");
       const file = document.getElementById("camScriptFile");
       if (!btn || !file) return;
+      const clr = document.getElementById("camScriptClear");
+      if (clr) clr.addEventListener("click", (e) => {
+        // Remove the script: the camera stops running it (and won't fall back to the default one).
+        e.preventDefault();
+        const id = (window.__lastObject && window.__lastObject.id) || "";
+        if (!id) return;
+        const hid = document.getElementById("camScript");
+        if (hid) hid.value = "";
+        btn.textContent = "Choose .py…";
+        clr.hidden = true;
+        file.value = "";
+        fetch("/api/object_props", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, camera: { script: "", no_script: true } }) })
+          .then(() => setTimeout(refresh, 150));
+      });
       btn.addEventListener("click", (e) => { e.preventDefault(); file.click(); });
       file.addEventListener("change", async () => {
         if (!file.files || !file.files[0]) return;

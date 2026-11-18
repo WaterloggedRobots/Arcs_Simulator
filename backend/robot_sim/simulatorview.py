@@ -1980,8 +1980,26 @@ def _tick_sony_cameras():
             cam["error"] = "Sony not connected"
 
 
+def _drop_cv_script(oid):
+    """The camera's script was removed: close it (its camera is released), and
+    drop its last frame and click (its targets go on the next pass)."""
+    mod = _cam_cv_mod.pop(oid, None)
+    if mod is not None:
+        for fn in ("close", "_close"):
+            if callable(getattr(mod, fn, None)):
+                try:
+                    getattr(mod, fn)()
+                except Exception as e:
+                    print("camera script close failed", e)
+                break
+        print("camera %s: script removed" % oid)
+    _cam_frame_jpeg.pop(oid, None)
+
+
 def _resolve_cv_script(cam):
     import os
+    if cam.get("no_script"):
+        return ""  # removed by hand: no fallback to the default script
     path = str(cam.get("script") or "").strip()
     if path and os.path.isfile(path):
         return path
@@ -2022,6 +2040,7 @@ def _tick_cv_cameras():
         path = _resolve_cv_script(cam)
         if not path:
             cam["error"] = "No OpenCV script attached"
+            _drop_cv_script(obj["id"])
             continue
         mod = _cam_cv_mod.get(obj["id"])
         try:
@@ -2062,6 +2081,8 @@ def _tick_cv_cameras():
             box = cam.pop("_box", None)
             if box is not None:
                 # A dragged rectangle: once. A script without set_box gets its centre as a click.
+                print("camera %s: box %s -> %s" % (obj.get("id"), [round(v) for v in box],
+                                                   "set_box" if hasattr(mod, "set_box") else "click at its centre"))
                 if hasattr(mod, "set_box"):
                     mod.set_box(*box)
                 else:
@@ -2156,6 +2177,8 @@ def set_camera_click(oid, u, v, box=None):
         if not isinstance(cam, dict):
             cam = {}
             obj["camera"] = cam
+        if str(cam.get("type") or "sim") not in ("cv", "opencv"):
+            print("camera click: %s is a %s camera, not OpenCV (no script gets it)" % (oid, cam.get("type") or "sim"))
         if box is not None:
             b = [float(x) for x in list(box)[:4]]
             if len(b) < 4:
@@ -2165,6 +2188,7 @@ def set_camera_click(oid, u, v, box=None):
             return True
         cam["click"] = [float(u), float(v)]
         return True
+    print("camera click: no camera object %r" % (oid,))
     return False
 
 

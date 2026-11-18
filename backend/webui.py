@@ -1794,6 +1794,8 @@ def api_cam_script():
                 cam = {}
                 obj["camera"] = cam
             cam["script"] = path
+            cam["no_script"] = False
+            cam.pop("click", None)
             break
     return jsonify({"ok": True, "path": path})
 
