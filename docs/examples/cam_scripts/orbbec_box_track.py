@@ -230,6 +230,11 @@ def _close():
     _pipe, _align, _cap, _mode = None, None, None, None
 
 
+def close():
+    """Release the camera (the sandbox calls it before reloading a changed script)."""
+    _close()
+
+
 def _pick_profile(plist):
     """The colour / depth profile nearest COLOR_SIZE at FPS, else the default."""
     try:

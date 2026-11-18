@@ -7,6 +7,7 @@ reads and writes it as wp.<name>. Every function defined here is also exposed
 as waypoints.<name> (see the end of the file), so existing callers such as
 wp.add_scene_object(...) keep working unchanged.
 """
+import os
 from pathlib import Path
 import numpy as np
 
@@ -2023,6 +2024,22 @@ def _tick_cv_cameras():
             cam["error"] = "No OpenCV script attached"
             continue
         mod = _cam_cv_mod.get(obj["id"])
+        try:
+            mtime = os.path.getmtime(path)
+        except Exception:
+            mtime = None
+        if mod is not None and getattr(mod, "_path", None) == path and getattr(mod, "_mtime", None) != mtime:
+            # The script file changed (edited, or replaced by a newer copy): close
+            # its camera and load it again, without restarting the sandbox.
+            for fn in ("close", "_close"):
+                if callable(getattr(mod, fn, None)):
+                    try:
+                        getattr(mod, fn)()
+                    except Exception as e:
+                        print("camera script close failed", e)
+                    break
+            print("camera script changed, reloading", path)
+            mod = None
         if mod is None or getattr(mod, "_path", None) != path:
             try:
                 import importlib.util
@@ -2030,6 +2047,7 @@ def _tick_cv_cameras():
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 mod._path = path
+                mod._mtime = mtime
                 _cam_cv_mod[obj["id"]] = mod
                 cam["error"] = ""
             except Exception as e:
