@@ -324,26 +324,53 @@ def _ensure():
 
 
 def _color_to_bgr(frame):
+    """An Orbbec colour frame as a BGR image. Formats by name, so one an SDK
+    version lacks doesn't break the others (SDK v2 hands out BGRA, e.g. after
+    the align filter)."""
     import cv2
-    from pyorbbecsdk import OBFormat
     w, h = frame.get_width(), frame.get_height()
     fmt = frame.get_format()
-    data = np.asanyarray(frame.get_data())
-    if fmt == OBFormat.RGB:
-        return cv2.cvtColor(data.reshape(h, w, 3), cv2.COLOR_RGB2BGR)
-    if fmt == OBFormat.BGR:
-        return data.reshape(h, w, 3).copy()
-    if fmt == OBFormat.MJPG:
-        return cv2.imdecode(data, cv2.IMREAD_COLOR)
-    if fmt == OBFormat.YUYV:
-        return cv2.cvtColor(data.reshape(h, w, 2), cv2.COLOR_YUV2BGR_YUY2)
-    if fmt == OBFormat.UYVY:
-        return cv2.cvtColor(data.reshape(h, w, 2), cv2.COLOR_YUV2BGR_UYVY)
-    if fmt == OBFormat.NV12:
-        return cv2.cvtColor(data.reshape(h * 3 // 2, w), cv2.COLOR_YUV2BGR_NV12)
-    if fmt == OBFormat.NV21:
-        return cv2.cvtColor(data.reshape(h * 3 // 2, w), cv2.COLOR_YUV2BGR_NV21)
-    raise RuntimeError("colour format %s not handled" % fmt)
+    name = str(getattr(fmt, "name", fmt)).split(".")[-1].upper()
+    data = np.asanyarray(frame.get_data()).reshape(-1)
+    n = data.size
+
+    def img(ch):
+        if n < w * h * ch:
+            raise RuntimeError("colour frame %s: %d bytes for %dx%d" % (name, n, w, h))
+        return data[:w * h * ch].reshape(h, w, ch) if ch > 1 else data[:w * h].reshape(h, w)
+
+    if name == "RGB":
+        return cv2.cvtColor(img(3), cv2.COLOR_RGB2BGR)
+    if name == "BGR":
+        return img(3).copy()
+    if name == "BGRA":
+        return cv2.cvtColor(img(4), cv2.COLOR_BGRA2BGR)
+    if name == "RGBA":
+        return cv2.cvtColor(img(4), cv2.COLOR_RGBA2BGR)
+    if name in ("MJPG", "MJPEG"):
+        out = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if out is None:
+            raise RuntimeError("colour frame: MJPG decode failed")
+        return out
+    if name in ("YUYV", "YUY2"):
+        return cv2.cvtColor(img(2), cv2.COLOR_YUV2BGR_YUY2)
+    if name == "UYVY":
+        return cv2.cvtColor(img(2), cv2.COLOR_YUV2BGR_UYVY)
+    if name in ("NV12", "NV21", "I420", "YV12"):
+        code = {"NV12": cv2.COLOR_YUV2BGR_NV12, "NV21": cv2.COLOR_YUV2BGR_NV21,
+                "I420": cv2.COLOR_YUV2BGR_I420, "YV12": cv2.COLOR_YUV2BGR_YV12}[name]
+        return cv2.cvtColor(data[:w * h * 3 // 2].reshape(h * 3 // 2, w), code)
+    if name in ("Y8", "GRAY", "GREY"):
+        return cv2.cvtColor(img(1), cv2.COLOR_GRAY2BGR)
+    # Anything else: guess from the byte count.
+    if n == w * h * 4:
+        return cv2.cvtColor(img(4), cv2.COLOR_BGRA2BGR)
+    if n == w * h * 3:
+        return img(3).copy()
+    out = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if out is not None:
+        return out
+    raise RuntimeError("colour format %s not handled" % name)
 
 
 def _grab():
