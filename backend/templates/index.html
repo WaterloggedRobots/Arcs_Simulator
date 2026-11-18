@@ -9198,7 +9198,8 @@
     }));
     const RTM_PRESETS = {
       low: { smooth_s: 0.02, deadband_mm: 0, predict_s: 0.1, aim_deadband_deg: 0.05, aim_response_s: 0.05, joint_smooth_s: 0.01, aim_hz: 20 },
-      smooth: { smooth_s: 0.3, deadband_mm: 3, aim_deadband_deg: 0.5, aim_response_s: 0.5, joint_smooth_s: 0.08, aim_hz: 10 },
+      smooth: { smooth_s: 0.5, deadband_mm: 5, aim_deadband_deg: 2, aim_response_s: 0.8, turn_dps: 20, turn_acc: 40,
+                joint_smooth_s: 0.15, aim_hz: 10, aim_solver: 1, aim_hold_mm: 20, horizon_s: 1.5, horizon_dead_deg: 2 },
     };
     document.querySelectorAll("[data-rtm-preset]").forEach((b) => b.addEventListener("click", () => {
       const k = b.dataset.rtmPreset;

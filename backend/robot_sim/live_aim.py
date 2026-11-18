@@ -56,13 +56,16 @@ IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
 #   stream_process           streamed run: 1 = send from a process of its own (stream_proc.py,
 #                            its own controller connection), 0 = from a thread in the app
 #   track_smooth / track_delay  trackJoint's smooth and delay scales
+# Smoothness before accuracy (the general direction is enough for live tracking):
+# in a test these made the joints' acceleration 4-20 x smaller for a pointing
+# error of ~4-6 deg instead of ~1 deg.
 TUNE_DEFAULTS = {
-    "smooth_s": 0.1, "deadband_mm": 1.0, "predict_s": 0.1,
-    "aim_deadband_deg": 0.2, "aim_response_s": 0.15,
-    "turn_dps": 30.0, "turn_acc": 90.0,
-    "joint_smooth_s": 0.03, "joint_dps": 45.0, "joint_acc": 180.0,
+    "smooth_s": 0.5, "deadband_mm": 5.0, "predict_s": 0.1,
+    "aim_deadband_deg": 2.0, "aim_response_s": 0.8,
+    "turn_dps": 20.0, "turn_acc": 40.0,
+    "joint_smooth_s": 0.15, "joint_dps": 45.0, "joint_acc": 180.0,
     "ik_every": 1, "aim_hz": 10.0, "track_smooth": 0.5, "track_delay": 1.0,
-    "stream_process": 1.0, "aim_solver": 1.0, "aim_hold_mm": 5.0, "horizon_s": 0.5, "horizon_dead_deg": 0.5,
+    "stream_process": 1.0, "aim_solver": 1.0, "aim_hold_mm": 20.0, "horizon_s": 1.5, "horizon_dead_deg": 2.0,
 }
 TUNE_RANGES = {
     "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0), "predict_s": (0.0, 0.5),
