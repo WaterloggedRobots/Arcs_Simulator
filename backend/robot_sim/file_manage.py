@@ -935,10 +935,6 @@ def _sim_track_record():
         "pos_offset": [float(v) for v in list(tr.get("pos_offset") or [0.0, 0.0, 0.0])[:3]],
         "tool": str(tr.get("tool") or ""),
         "live": bool(tr.get("live")),
-        "smooth_s": float(tr.get("smooth_s", rr.SMOOTH_S_DEFAULT)),
-        "deadband_mm": float(tr.get("deadband_mm", rr.DEADBAND_MM_DEFAULT)),
-        "turn_dps": float(tr.get("turn_dps", rr.TURN_DPS_DEFAULT)),
-        "turn_acc": float(tr.get("turn_acc", rr.TURN_ACC_DEFAULT)),
     }
 
 
@@ -955,10 +951,7 @@ def _restore_sim_track(rec):
             )
             rr._track["tool"] = str(rec.get("tool") or "")
             rr._track["live"] = bool(rec.get("live"))
-            rr._track["smooth_s"] = float(rec.get("smooth_s", rr.SMOOTH_S_DEFAULT))
-            rr._track["deadband_mm"] = float(rec.get("deadband_mm", rr.DEADBAND_MM_DEFAULT))
-            rr._track["turn_dps"] = float(rec.get("turn_dps", rr.TURN_DPS_DEFAULT))
-            rr._track["turn_acc"] = float(rec.get("turn_acc", rr.TURN_ACC_DEFAULT))
+            # (Smoothing values in older files are ignored: they are Real Time Motion preferences now.)
             if rr._track["tool"] and hasattr(rr, "_use_tool"):
                 # Offsets from the tool as it is now (a camera tool's saved
                 # offset from before pointed it away from the target).

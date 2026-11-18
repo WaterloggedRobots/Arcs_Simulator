@@ -29,37 +29,60 @@ from scipy.spatial.transform import Rotation as R
 MAX_DEV_DEG = 60.0      # largest turn away from the baked aim
 JUMP_MAX_DEG = 4.0      # a joint jump bigger than this between IK answers is refused
 STREAM_DT = 0.02        # streamed run: 50 points/s
-AIM_EVERY = 2           # streamed run: IK every 2nd point; the filters run on every point
-# Smoothing (the aim used to step at a constant rate toward a goal re-made on
-# every tick, and each IK answer / hold went straight to the joints: target and
-# IK jitter shook the arm). The aim now turns with a speed and an acceleration
-# limit (`rr._track` turn_dps / turn_acc, set in the Look At panel), starts only
-# when the goal is more than AIM_DEADBAND_DEG away and settles below
-# AIM_SETTLE_DEG; the joints follow the IK answers through a critically damped per-joint filter
-# (time constant JOINT_SMOOTH_S, capped at JOINT_DPS / JOINT_ACC); IK answers
-# changing less than IK_DEADBAND_DEG are noise. Between IK answers the answer is
-# carried on at its last rate (no steps for the filter to chatter on).
-AIM_DEADBAND_DEG = 0.4
-AIM_SETTLE_DEG = 0.05
-# Small corrections ease in: the turn's speed is also at most (what is left) /
-# AIM_RESPONSE_S, so a 1 deg correction starts at 2 deg/s and slows as it
-# closes (with only the speed / acceleration limits it was a quick
-# accelerate-and-brake step of ~10 deg/s for every small target movement).
-AIM_RESPONSE_S = 0.5
-JOINT_DPS = 45.0        # the aim's joint change on top of the baked path, deg/s
-JOINT_ACC = 180.0       # ... and its acceleration, deg/s^2
-JOINT_SMOOTH_S = 0.08
-IK_DEADBAND_DEG = 0.02
+IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
+
+# Real Time Motion tuning (Edit > Preferences > Real Time Motion, saved in
+# settings.json "live_tuning"; the Look At panel's smoothing fields edit the
+# same values). Used by the live aim (Simulate and the streamed Run) and, for
+# the target filter, by the Sim Arm Cursor's own Look At.
+#   smooth_s / deadband_mm   the target: low-pass time constant, held while it moves less
+#   aim_deadband_deg         the aim's goal is held while the target's aim moves less than
+#                            this, then follows it at that distance (no stop-start: the
+#                            first version waited at rest for 0.4 deg, caught up and
+#                            stopped again, so a moving target was followed in steps)
+#   aim_response_s           the turn's speed is at most (what is left) / this (0 = none)
+#   turn_dps / turn_acc      the aim's speed and acceleration limits
+#   joint_smooth_s           the joints' filter time constant (0 = none)
+#   joint_dps / joint_acc    the aim's joint change on top of the baked path, limits
+#   ik_every                 streamed run: IK every Nth point (the answer is carried on between)
+#   track_smooth / track_delay  trackJoint's smooth and delay scales
+TUNE_DEFAULTS = {
+    "smooth_s": 0.1, "deadband_mm": 1.0,
+    "aim_deadband_deg": 0.2, "aim_response_s": 0.15,
+    "turn_dps": 30.0, "turn_acc": 90.0,
+    "joint_smooth_s": 0.03, "joint_dps": 45.0, "joint_acc": 180.0,
+    "ik_every": 1, "track_smooth": 0.5, "track_delay": 1.0,
+}
+TUNE_RANGES = {
+    "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0),
+    "aim_deadband_deg": (0.0, 10.0), "aim_response_s": (0.0, 5.0),
+    "turn_dps": (1.0, 180.0), "turn_acc": (1.0, 2000.0),
+    "joint_smooth_s": (0.0, 1.0), "joint_dps": (1.0, 180.0), "joint_acc": (1.0, 2000.0),
+    "ik_every": (1, 10), "track_smooth": (0.0, 1.0), "track_delay": (0.0, 2.0),
+}
+TUNE = dict(TUNE_DEFAULTS)
+
+
+def tune(key):
+    return TUNE.get(key, TUNE_DEFAULTS[key])
+
+
+def set_tuning(data):
+    """Take the known keys of data (clamped to TUNE_RANGES); returns TUNE."""
+    for k, v in dict(data or {}).items():
+        if k not in TUNE_DEFAULTS:
+            continue
+        try:
+            lo, hi = TUNE_RANGES[k]
+            v = min(hi, max(lo, float(v)))
+            TUNE[k] = int(round(v)) if k == "ik_every" else v
+        except (TypeError, ValueError):
+            pass
+    return dict(TUNE)
 
 
 def _limits():
-    rr = _rr()
-    try:
-        vmax = float(rr._track.get("turn_dps", rr.TURN_DPS_DEFAULT))
-        amax = float(rr._track.get("turn_acc", rr.TURN_ACC_DEFAULT))
-    except Exception:
-        vmax, amax = 30.0, 90.0
-    return math.radians(max(1.0, vmax)), math.radians(max(1.0, amax))
+    return math.radians(tune("turn_dps")), math.radians(tune("turn_acc"))
 
 
 def _follow(x, v, goal, vmax, amax, dt, tau):
@@ -67,6 +90,12 @@ def _follow(x, v, goal, vmax, amax, dt, tau):
     acceleration caps, in substeps of at most 5 ms: steps of the goal (IK every
     other point, a held answer) come out as smooth curves, never as a stop-start
     chatter."""
+    if tau <= 1e-4:
+        # No smoothing: straight to the goal, still within the speed cap.
+        if dt <= 0:
+            return x, v
+        step = np.clip(goal - x, -vmax * dt, vmax * dt)
+        return x + step, step / dt
     n = max(1, int(math.ceil(dt / 0.005)))
     h = dt / n
     for _ in range(n):
@@ -129,7 +158,7 @@ class Aimer:
         self.corr = R.identity()      # the aim's turn from the bake (world rotation)
         self.corr_ok = R.identity()   # ... at the last IK answer taken
         self.w = np.zeros(3)          # its angular velocity, rad/s (world rotvec)
-        self.moving = False           # the aim is turning (else it waits for the deadband)
+        self.goal_f = R.identity()    # the goal through the aim deadzone
         self.delta_t = np.zeros(6)    # joints - baked joints, as the IK answered
         self.delta = np.zeros(6)      # ... as sent (filtered)
         self.dv = np.zeros(6)         # its rate, rad/s
@@ -155,30 +184,36 @@ class Aimer:
             self.corr = self.corr_ok
             self.w = np.zeros(3)
         self.delta, self.dv = _follow(self.delta, self.dv, self.delta_t,
-                                      math.radians(JOINT_DPS), math.radians(JOINT_ACC), dt, JOINT_SMOOTH_S)
+                                      math.radians(tune("joint_dps")), math.radians(tune("joint_acc")),
+                                      dt, tune("joint_smooth_s"))
         q = np.asarray(q_base, dtype=float) + self.delta
         self.q_prev = q
         return q
 
     def _turn(self, goal, dt):
-        """Move corr toward goal with the speed / acceleration limits and the deadband."""
+        """Move corr toward goal: the goal through a deadzone (goal_f, held
+        while the aim moves less than aim_deadband_deg, then dragged along at
+        that distance), the turn with the response time and speed /
+        acceleration limits. No rest state, so a moving target is followed
+        smoothly, not caught up in steps."""
         vmax, amax = _limits()
-        e = (goal * self.corr.inv()).as_rotvec()
-        dist = float(np.linalg.norm(e))
-        if not self.moving:
-            if math.degrees(dist) < AIM_DEADBAND_DEG:
-                return
-            self.moving = True
-        if math.degrees(dist) < AIM_SETTLE_DEG and float(np.linalg.norm(self.w)) < math.radians(2.0):
-            self.corr = goal
-            self.w = np.zeros(3)
-            self.moving = False
-            return
+        db = math.radians(tune("aim_deadband_deg"))
+        ge = (goal * self.goal_f.inv()).as_rotvec()
+        gd = float(np.linalg.norm(ge))
+        if gd > db:
+            self.goal_f = R.from_rotvec(ge * ((gd - db) / gd)) * self.goal_f
         if dt <= 0:
             return
-        # Speed along the error, braking in time; acceleration limited (vector).
+        e = (self.goal_f * self.corr.inv()).as_rotvec()
+        dist = float(np.linalg.norm(e))
+        if dist < 1e-7 and float(np.linalg.norm(self.w)) < 1e-6:
+            self.w = np.zeros(3)
+            return
         u = e / max(dist, 1e-12)
-        speed = min(vmax, math.sqrt(2.0 * amax * dist), dist / AIM_RESPONSE_S, dist / dt)
+        speed = min(vmax, math.sqrt(2.0 * amax * dist), dist / dt)
+        resp = tune("aim_response_s")
+        if resp > 1e-4:
+            speed = min(speed, dist / resp)
         dw = u * speed - self.w
         n = float(np.linalg.norm(dw))
         if n > amax * dt:
@@ -228,7 +263,7 @@ class Aimer:
         # How far the aim trails the target (deadband, speed / deviation limits).
         self.lag_deg = float(np.degrees((goal * corr.inv()).magnitude()))
         self.dev_deg = float(np.degrees(corr.magnitude()))
-        if self.dev_deg < 1e-3 and not self.moving:
+        if self.dev_deg < 1e-3 and float(np.linalg.norm(self.w)) < 1e-6:
             # No turn from the bake: the baked joints (the filter brings them back).
             self.delta_t = np.zeros(6)
             self.rate_t = np.zeros(6)
@@ -239,7 +274,7 @@ class Aimer:
         ee_pos, ee_wxyz = rr._ee_from_cursor(pos, _wxyz(corr * r_base), "sim")
         # Seed and jump check from the last answer's delta on today's base joints.
         ref = q_base + self.delta_t
-        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True)
+        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True, precise=True)
         if q is None:
             return self._out(q_base, dt, "IK failed")
         q = bake._unwrap_toward(np.asarray(q, dtype=float), q_base)
@@ -249,7 +284,8 @@ class Aimer:
             return self._out(q_base, dt, "joint jump")
         d = q - q_base
         if self.ik_d is not None and t > self.ik_t + 1e-6:
-            self.rate_t = np.clip((d - self.ik_d) / (t - self.ik_t), -math.radians(JOINT_DPS), math.radians(JOINT_DPS))
+            cap = math.radians(tune("joint_dps"))
+            self.rate_t = np.clip((d - self.ik_d) / (t - self.ik_t), -cap, cap)
         self.ik_d, self.ik_t = d, t
         if float(np.degrees(np.max(np.abs(d - self.delta_t)))) >= IK_DEADBAND_DEG:
             self.delta_t = d  # smaller changes are IK noise
@@ -352,7 +388,7 @@ class Streamer:
 
     def _limit(self, q, q_base, qb_prev):
         """q held to the path's own step plus the aim's speed (and a margin)."""
-        lim = np.abs(q_base - qb_prev) + math.radians(JOINT_DPS + STEP_MARGIN_DPS) * STREAM_DT
+        lim = np.abs(q_base - qb_prev) + math.radians(tune("joint_dps") + STEP_MARGIN_DPS) * STREAM_DT
         step = np.clip(q - self.q_last, -lim, lim)
         out = self.q_last + step
         behind = float(np.degrees(np.max(np.abs(q - out))))
@@ -362,7 +398,7 @@ class Streamer:
         return out
 
     def _send(self, mc, q):
-        return int(mc.trackJoint([float(v) for v in q], STREAM_DT, 0.5, 1.0))
+        return int(mc.trackJoint([float(v) for v in q], STREAM_DT, float(tune("track_smooth")), float(tune("track_delay"))))
 
     def _run(self):
         mc = self.bot.mc
@@ -380,7 +416,8 @@ class Streamer:
                 if settle is None:
                     s_new = min(s + STREAM_DT, self.t_end)
                     q_base = _interp(self.samples, s_new)
-                    q = self.aimer(s_new, q_base, solve=(AIM_EVERY <= 1 or n % AIM_EVERY == 1))
+                    every = int(tune("ik_every"))
+                    q = self.aimer(s_new, q_base, solve=(every <= 1 or n % every == 1))
                     self.stats["aim_err"] = self.aimer.err
                 else:
                     # Past the end: the last point, the aim's joints settling (no new aim).
@@ -450,8 +487,8 @@ class Streamer:
     def _settle_q(self, q_base):
         """The aim's joints coming to rest on the last answer (filter only)."""
         a = self.aimer
-        a.delta, a.dv = _follow(a.delta, a.dv, a.delta_t, math.radians(JOINT_DPS),
-                                math.radians(JOINT_ACC), STREAM_DT, JOINT_SMOOTH_S)
+        a.delta, a.dv = _follow(a.delta, a.dv, a.delta_t, math.radians(tune("joint_dps")),
+                                math.radians(tune("joint_acc")), STREAM_DT, tune("joint_smooth_s"))
         return np.asarray(q_base, dtype=float) + a.delta
 
 

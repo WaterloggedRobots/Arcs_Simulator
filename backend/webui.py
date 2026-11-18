@@ -286,6 +286,12 @@ def apply_settings(data):
             pass
     if "real_ghosts" in data:
         real_mirror.set_ghosts(data.get("real_ghosts") is not False)
+    if isinstance(data.get("live_tuning"), dict):
+        try:
+            import live_aim
+            live_aim.set_tuning(data.get("live_tuning"))
+        except Exception as e:
+            print("live tuning failed", e)
     if "snap_to_grid" in data:
         try:
             wp.snap_to_grid = bool(data.get("snap_to_grid"))
@@ -682,8 +688,17 @@ def api_settings():
         st = load_settings()
         if not st.get("robot_models"):
             st["robot_models"] = list(SETTINGS_DEFAULT.get("robot_models") or [])
-        return jsonify({"ok": True, "settings": _arm_settings(st)})
+        st = _arm_settings(st)
+        try:
+            import live_aim
+            st["live_tuning"] = dict(live_aim.TUNE)
+            st["live_tuning_defaults"] = dict(live_aim.TUNE_DEFAULTS)
+        except Exception:
+            pass
+        return jsonify({"ok": True, "settings": st})
     data = request.get_json(silent=True) or {}
+    if isinstance(data.get("live_tuning"), dict):
+        data["live_tuning"] = _set_live_tuning(data.pop("live_tuning"))
     if not arms.is_default():
         # Robot Settings of an added arm: its own address, not settings.json's.
         robot_keys = {k: data.pop(k) for k in ("robot_ip", "robot_port", "robot_model") if k in data}
@@ -1564,6 +1579,14 @@ def api_sim_poses():
     return jsonify({"ok": True, "pose": pose, "poses": _sim_poses_payload()})
 
 
+def _set_live_tuning(data):
+    """Real Time Motion tuning (live_aim.TUNE), saved in settings.json "live_tuning"."""
+    import live_aim
+    tun = live_aim.set_tuning(data)
+    save_settings({"live_tuning": tun})
+    return tun
+
+
 @app.route("/api/track_object", methods=["POST"])
 def api_track_object():
     data = request.get_json(silent=True) or {}
@@ -1571,13 +1594,10 @@ def api_track_object():
     if "live" in data:
         # Live Look At (live_aim): the aim follows the target during Simulate / Run.
         rr._track["live"] = bool(data.get("live"))
-    for key in ("smooth_s", "deadband_mm", "turn_dps", "turn_acc"):
-        # Look At smoothing of the followed target (rr.smooth_target).
-        if key in data:
-            try:
-                rr._track[key] = max(0.0, float(data.get(key)))
-            except (TypeError, ValueError):
-                pass
+    tun = {k: data[k] for k in ("smooth_s", "deadband_mm", "turn_dps", "turn_acc") if k in data}
+    if tun:
+        # The Look At panel's smoothing fields: Real Time Motion preferences (global).
+        _set_live_tuning(tun)
     if data and set(data) <= {"live", "smooth_s", "deadband_mm", "turn_dps", "turn_acc"}:
         return jsonify({"ok": True, "track": rr.track_status()})
     if hasattr(rr, "set_track_object"):
@@ -2005,10 +2025,7 @@ def api_speed_export():
         # Which code and Live state made this export (a run without "live_stream" wasn't streamed).
         doc["app"] = {"commit": _app_commit(), "live_on": bool(rr._track.get("live")),
                       "last_run_live": bool(rr._rp.get("live")), "stream_ran": bool(lv),
-                      "turn_dps": rr._track.get("turn_dps", rr.TURN_DPS_DEFAULT),
-                      "turn_acc": rr._track.get("turn_acc", rr.TURN_ACC_DEFAULT),
-                      "smooth_s": rr._track.get("smooth_s", rr.SMOOTH_S_DEFAULT),
-                      "deadband_mm": rr._track.get("deadband_mm", rr.DEADBAND_MM_DEFAULT)}
+                      "live_tuning": dict(live_aim.TUNE)}
     except Exception as e:
         print("speed export live stream failed", e)
     path.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")

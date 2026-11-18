@@ -1548,6 +1548,11 @@
     }
     .ctrl-tab { width: 100%; text-align: left; background: transparent; font-size: 12px; padding: 8px; }
     .ctrl-tab.on { background: #2a3344; }
+    .rtm-row { display: grid; grid-template-columns: 1fr 90px; gap: 6px; align-items: center; margin: 3px 0; }
+    .rtm-row label { font-size: 12px; color: #c8c9cf; }
+    .rtm-row input { width: 100%; }
+    .rtm-presets { display: flex; gap: 6px; margin: 0 0 4px; }
+    .rtm-presets button { flex: 1; font-size: 11px; padding: 4px 6px; }
     .ctrl-main { flex: 1; padding: 10px 14px 16px; display: flex; flex-direction: column; min-width: 0; }
     .lim-head, .lim-row { display: grid; grid-template-columns: 36px 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 6px; }
     .lim-head { font-size: 11px; color: var(--muted); }
@@ -1862,6 +1867,7 @@
             <button type="button" class="ctrl-tab" data-tab="wps">Waypoints</button>
             <button type="button" class="ctrl-tab" data-tab="pwin">Path window</button>
             <button type="button" class="ctrl-tab" data-tab="tl">Timeline</button>
+            <button type="button" class="ctrl-tab" data-tab="rtm">Real Time Motion</button>
             <button type="button" class="ctrl-tab" data-tab="prefs">Offline Mode</button>
             <button type="button" class="ctrl-tab" data-tab="dev">Developer Mode</button>
           </div>
@@ -1907,6 +1913,31 @@
               <label class="field">Grid spacing (s)</label>
               <input id="tlGrid" type="number" min="0.001" step="0.001" value="0.01" />
               <p style="font-size:11px;color:#8a8a92;margin:8px 0 0;">Snap-to-grid uses this step when the magnet is on.</p>
+            </div>
+            <div class="ctrl-pane" id="pane-rtm" hidden>
+              <p style="font-size:11px;color:#8a8a92;margin:0 0 6px;">Look At Live (Simulate and the streamed Run) and the Sim Arm Cursor's own Look At. Changes apply at once, also during a run. Hover a field for what it does.</p>
+              <div class="rtm-presets">
+                <button type="button" data-rtm-preset="low">Least lag</button>
+                <button type="button" data-rtm-preset="default">Defaults</button>
+                <button type="button" data-rtm-preset="smooth">Smoothest</button>
+              </div>
+              <label class="field" style="margin-top:10px;color:#cfd2da;">Target</label>
+              <div class="rtm-row" title="Low-pass time constant on the followed target (0 = none). Higher hides jitter, adds lag."><label for="rtm_smooth_s">Target smoothing (s)</label><input id="rtm_smooth_s" data-rtm="smooth_s" type="number" min="0" step="0.01"></div>
+              <div class="rtm-row" title="The target is held while it moves less than this (0 = none)."><label for="rtm_deadband_mm">Target deadband (mm)</label><input id="rtm_deadband_mm" data-rtm="deadband_mm" type="number" min="0" step="0.1"></div>
+              <label class="field" style="margin-top:10px;color:#cfd2da;">Aim</label>
+              <div class="rtm-row" title="Aim changes smaller than this are ignored; past it the aim follows at that distance (0 = none)."><label for="rtm_aim_deadband_deg">Aim deadband (°)</label><input id="rtm_aim_deadband_deg" data-rtm="aim_deadband_deg" type="number" min="0" step="0.05"></div>
+              <div class="rtm-row" title="The turn is at most what is left per this time: higher eases in, lower reacts sooner (0 = only the limits below)."><label for="rtm_aim_response_s">Aim response time (s)</label><input id="rtm_aim_response_s" data-rtm="aim_response_s" type="number" min="0" step="0.01"></div>
+              <div class="rtm-row" title="Fastest turn of the aim."><label for="rtm_turn_dps">Aim turn speed (°/s)</label><input id="rtm_turn_dps" data-rtm="turn_dps" type="number" min="0" step="1"></div>
+              <div class="rtm-row" title="How fast the turn speeds up and slows down."><label for="rtm_turn_acc">Aim turn acceleration (°/s²)</label><input id="rtm_turn_acc" data-rtm="turn_acc" type="number" min="0" step="5"></div>
+              <label class="field" style="margin-top:10px;color:#cfd2da;">Joints</label>
+              <div class="rtm-row" title="Time constant of the joints' filter after the IK (0 = none)."><label for="rtm_joint_smooth_s">Joint smoothing (s)</label><input id="rtm_joint_smooth_s" data-rtm="joint_smooth_s" type="number" min="0" step="0.01"></div>
+              <div class="rtm-row" title="Fastest joint change the aim may add on top of the baked path (a streamed Run also checks each point against it)."><label for="rtm_joint_dps">Joint speed cap (°/s)</label><input id="rtm_joint_dps" data-rtm="joint_dps" type="number" min="0" step="1"></div>
+              <div class="rtm-row" title="Acceleration of that change."><label for="rtm_joint_acc">Joint acceleration cap (°/s²)</label><input id="rtm_joint_acc" data-rtm="joint_acc" type="number" min="0" step="5"></div>
+              <label class="field" style="margin-top:10px;color:#cfd2da;">Streamed Run (trackJoint)</label>
+              <div class="rtm-row" title="1 = every point (50 per s, least lag); higher reuses the answer between."><label for="rtm_ik_every">IK every N points</label><input id="rtm_ik_every" data-rtm="ik_every" type="number" min="0" step="1"></div>
+              <div class="rtm-row" title="trackJoint's smooth_scale (0 to 1)."><label for="rtm_track_smooth">trackJoint smooth scale</label><input id="rtm_track_smooth" data-rtm="track_smooth" type="number" min="0" step="0.05"></div>
+              <div class="rtm-row" title="trackJoint's delay_scale (lower = less controller lag)."><label for="rtm_track_delay">trackJoint delay scale</label><input id="rtm_track_delay" data-rtm="track_delay" type="number" min="0" step="0.05"></div>
+              <p style="font-size:11px;color:#8a8a92;margin:8px 0 0;">Lag adds up from target smoothing, aim response time and joint smoothing (plus the controller's own queue). "Least lag" keeps the speed and acceleration limits.</p>
             </div>
             <div class="ctrl-pane" id="pane-prefs" hidden>
               <label class="field">Offline IK</label>
@@ -9000,6 +9031,7 @@
       if (pr && s && s.path_window_radius != null) pr.value = s.path_window_radius;
       const hl = document.getElementById("holdLinMps");
       if (hl && s && s.hold_lin_mps != null) hl.value = s.hold_lin_mps;
+      if (s && s.live_tuning) fillRtm(s.live_tuning, s.live_tuning_defaults);
       const ikp = document.getElementById("ikPref");
       if (ikp && s && s.ik_pref) ikp.value = s.ik_pref === "always_aubo" ? "always_aubo" : "backup";
       const bd = document.getElementById("burnerDur");
@@ -9113,6 +9145,33 @@
         wrap.classList.toggle("advanced", devMode);
       }
     }
+    // Preferences > Real Time Motion (live_aim.TUNE, settings.json "live_tuning").
+    let rtmDefaults = null;
+    function fillRtm(t, defs) {
+      if (defs) rtmDefaults = defs;
+      document.querySelectorAll("[data-rtm]").forEach((el) => {
+        const v = t[el.dataset.rtm];
+        if (v != null && document.activeElement !== el) el.value = Number(v);
+      });
+    }
+    function postRtm(patch) {
+      return fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ live_tuning: patch }) })
+        .then((r) => r.json()).then((d) => { if (d.settings && d.settings.live_tuning) fillRtm(d.settings.live_tuning); refresh(); });
+    }
+    document.querySelectorAll("[data-rtm]").forEach((el) => el.addEventListener("change", () => {
+      const v = Number(el.value);
+      if (isFinite(v)) postRtm({ [el.dataset.rtm]: v });
+    }));
+    const RTM_PRESETS = {
+      low: { smooth_s: 0, deadband_mm: 0, aim_deadband_deg: 0.05, aim_response_s: 0.05, joint_smooth_s: 0.01, ik_every: 1 },
+      smooth: { smooth_s: 0.3, deadband_mm: 3, aim_deadband_deg: 0.5, aim_response_s: 0.5, joint_smooth_s: 0.08, ik_every: 2 },
+    };
+    document.querySelectorAll("[data-rtm-preset]").forEach((b) => b.addEventListener("click", () => {
+      const k = b.dataset.rtmPreset;
+      const p = k === "default" ? rtmDefaults : RTM_PRESETS[k];
+      if (p) postRtm(p);
+    }));
     function saveCtrlSettings() {
       fetch("/api/settings", {
         method: "POST",
@@ -9135,7 +9194,7 @@
         tab.onclick = () => {
           ctrlSettings.querySelectorAll(".ctrl-tab").forEach((t) => t.classList.remove("on"));
           tab.classList.add("on");
-          ["robot", "pad", "wps", "pwin", "tl", "prefs", "dev"].forEach((id) => {
+          ["robot", "pad", "wps", "pwin", "tl", "rtm", "prefs", "dev"].forEach((id) => {
             const pane = document.getElementById("pane-" + id);
             if (pane) pane.hidden = tab.getAttribute("data-tab") !== id;
           });

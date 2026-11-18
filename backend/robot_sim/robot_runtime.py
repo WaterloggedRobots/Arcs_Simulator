@@ -1721,10 +1721,8 @@ def track_status():
         "tool": _track.get("tool") or "",
         "tool_pick": bool(_track.get("tool_pick")),
         "live": bool(_track.get("live")),
-        "smooth_s": float(_track.get("smooth_s", SMOOTH_S_DEFAULT)),
-        "deadband_mm": float(_track.get("deadband_mm", DEADBAND_MM_DEFAULT)),
-        "turn_dps": float(_track.get("turn_dps", TURN_DPS_DEFAULT)),
-        "turn_acc": float(_track.get("turn_acc", TURN_ACC_DEFAULT)),
+        # Real Time Motion tuning (global, live_aim.TUNE): the panel shows four of them.
+        **{k: float(__import__("live_aim").tune(k)) for k in ("smooth_s", "deadband_mm", "turn_dps", "turn_acc")},
         "tools": [{"id": str(o.get("id")), "name": str(o.get("name") or o.get("id"))} for o in _cursor_children()],
     }
 
@@ -1733,11 +1731,7 @@ def track_status():
 # the target is held still while it moves less than the deadband, and then
 # followed with a low-pass of that time constant, so small jitter of a tracked
 # target (a camera script's primary target) doesn't shake the arm.
-SMOOTH_S_DEFAULT = 0.25
-DEADBAND_MM_DEFAULT = 3.0
-# Live Look At (live_aim): how fast the aim may turn, deg/s, and its acceleration, deg/s^2.
-TURN_DPS_DEFAULT = 30.0
-TURN_ACC_DEFAULT = 90.0
+# (Time constant and deadband: live_aim.tune("smooth_s") / ("deadband_mm"), Real Time Motion.)
 _smooth = {}
 
 
@@ -1747,8 +1741,9 @@ def smooth_target(key, pos):
         _smooth.pop(key, None)
         return None
     raw = np.asarray(pos, dtype=float).reshape(3)
-    tau = max(0.0, float(_track.get("smooth_s", SMOOTH_S_DEFAULT) or 0.0))
-    band = max(0.0, float(_track.get("deadband_mm", DEADBAND_MM_DEFAULT) or 0.0)) / 1000.0
+    import live_aim
+    tau = max(0.0, float(live_aim.tune("smooth_s") or 0.0))
+    band = max(0.0, float(live_aim.tune("deadband_mm") or 0.0)) / 1000.0
     now = time.monotonic()
     st = _smooth.get(key)
     if st is None or float(np.linalg.norm(raw - st["p"])) > 0.5:
@@ -2376,9 +2371,13 @@ def _ik_sim_cursor():
     _last_good_q = q
 
 
-def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False):
+def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False, precise=False):
     """Offline 6-DOF IK. Current q first, then home. No position-only fallback.
-    quiet: no prints (live Look At calls it every frame)."""
+    quiet: no prints (live Look At calls it every frame).
+    precise: solve to IK_PRECISE_POS / IK_PRECISE_ANG instead of 2 mm / 0.05 rad
+    (live Look At: with the loose stop, aim changes under ~3 deg returned the
+    seed unchanged and bigger ones jumped, so the arm tracked in steps)."""
+    stop_pos, stop_ang = (IK_PRECISE_POS, IK_PRECISE_ANG) if precise else (0.002, 0.05)
     import builtins
 
     def print(*a, **k):  # noqa: A001  (silenced when quiet)
@@ -2415,11 +2414,12 @@ def solve_backup_ik(target_pos, target_wxyz, seed_q=None, quiet=False):
         _set_q(model, seed_use)
         p0, w0 = _ee_frame(model)
         dpos, dang = _pose_err(p0, w0)
-        if dpos <= 0.002 and dang <= 0.05:
+        if dpos <= stop_pos and dang <= stop_ang:
             print("backup IK already there", tag, "pos", round(dpos, 4), "ang", round(dang, 4))
             return np.array(seed_use, dtype=float)
         print("backup IK target", [round(float(v), 4) for v in pose], "seed", tag, [round(float(v), 4) for v in seed_use])
-        qq = _jacobian_ik6(model, p_des, rot, seed_use, iters=28)
+        qq = _jacobian_ik6(model, p_des, rot, seed_use, iters=28 if not precise else 40,
+                           stop_pos=stop_pos, stop_ang=stop_ang)
         if qq is None:
             print("backup IK fail", tag, "target", [round(float(v), 4) for v in pose])
             return None
@@ -2490,7 +2490,11 @@ IK6_ROT_WEIGHT = 0.5
 IK_ANG_TOL = 0.1
 
 
-def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28):
+IK_PRECISE_POS = 0.00005   # m
+IK_PRECISE_ANG = 0.0005    # rad (0.03 deg)
+
+
+def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28, stop_pos=0.002, stop_ang=0.05):
     """6-DOF damped Jacobian on hidden robot_ik (position + orientation)."""
     if model is None or seed_q is None:
         return None
@@ -2522,7 +2526,7 @@ def _jacobian_ik6(model, p_des, R_des, seed_q, iters=28):
     best = float(np.linalg.norm(W * e))
     best_dp, best_da = dp, da
     for _ in range(max(8, int(iters))):
-        if dp <= 0.002 and da <= 0.05:
+        if dp <= stop_pos and da <= stop_ang:
             break
         J = np.zeros((6, 6), dtype=float)
         ok = True
