@@ -2379,8 +2379,8 @@
               <label title="The target is held while it moves less than this, mm (0 = none)">dead mm</label><input id="trackDeadband" type="number" step="0.5" min="0" value="3">
             </div>
             <div class="row triple" id="trackTurnRow" hidden>
-              <label title="Live: fastest turn of the aim, deg/s (lower = calmer, more lag)">turn °/s</label><input id="trackTurnDps" type="number" step="5" min="1" value="60">
-              <label title="Live: acceleration of the aim's turn, deg/s² (lower = softer starts and stops)">acc °/s²</label><input id="trackTurnAcc" type="number" step="10" min="1" value="180">
+              <label title="Live: fastest turn of the aim, deg/s (lower = calmer, more lag)">turn °/s</label><input id="trackTurnDps" type="number" step="5" min="1" value="30">
+              <label title="Live: acceleration of the aim's turn, deg/s² (lower = softer starts and stops)">acc °/s²</label><input id="trackTurnAcc" type="number" step="10" min="1" value="90">
             </div>
             <div class="row triple track-xyz">
               <label>x</label><input id="trackX" type="number" step="0.001" readonly>
@@ -6930,8 +6930,8 @@
           fetch("/api/track_object", { method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ smooth_s: Number(document.getElementById("trackSmooth").value) || 0,
                                    deadband_mm: Number(document.getElementById("trackDeadband").value) || 0,
-                                   turn_dps: Number(document.getElementById("trackTurnDps").value) || 60,
-                                   turn_acc: Number(document.getElementById("trackTurnAcc").value) || 180 }) })
+                                   turn_dps: Number(document.getElementById("trackTurnDps").value) || 30,
+                                   turn_acc: Number(document.getElementById("trackTurnAcc").value) || 90 }) })
             .then(() => setTimeout(refresh, 80));
         });
       });

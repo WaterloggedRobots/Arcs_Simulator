@@ -27,7 +27,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 MAX_DEV_DEG = 60.0      # largest turn away from the baked aim
-JUMP_MAX_DEG = 8.0      # a joint jump bigger than this between IK answers is refused
+JUMP_MAX_DEG = 4.0      # a joint jump bigger than this between IK answers is refused
 STREAM_DT = 0.02        # streamed run: 50 points/s
 AIM_EVERY = 2           # streamed run: IK every 2nd point; the filters run on every point
 # Smoothing (the aim used to step at a constant rate toward a goal re-made on
@@ -41,8 +41,8 @@ AIM_EVERY = 2           # streamed run: IK every 2nd point; the filters run on e
 # carried on at its last rate (no steps for the filter to chatter on).
 AIM_DEADBAND_DEG = 0.4
 AIM_SETTLE_DEG = 0.05
-JOINT_DPS = 120.0
-JOINT_ACC = 720.0
+JOINT_DPS = 45.0        # the aim's joint change on top of the baked path, deg/s
+JOINT_ACC = 180.0       # ... and its acceleration, deg/s^2
 JOINT_SMOOTH_S = 0.08
 IK_DEADBAND_DEG = 0.02
 
@@ -53,7 +53,7 @@ def _limits():
         vmax = float(rr._track.get("turn_dps", rr.TURN_DPS_DEFAULT))
         amax = float(rr._track.get("turn_acc", rr.TURN_ACC_DEFAULT))
     except Exception:
-        vmax, amax = 60.0, 180.0
+        vmax, amax = 30.0, 90.0
     return math.radians(max(1.0, vmax)), math.radians(max(1.0, amax))
 
 
@@ -296,9 +296,24 @@ def _interp(samples, t):
     return np.asarray(samples[-1]["q"], dtype=float).reshape(-1)[:6]
 
 
+# Streamed run safety. The first version dropped a point the controller
+# refused (queue full) while its clock ran on, and let any joint step up to
+# 5 deg per point (250 deg/s) to catch up: after a delay the arm sped up hard.
+STEP_MARGIN_DPS = 20.0   # a point may move this much faster than the path + aim limits ...
+STOP_BEHIND_DEG = 3.0    # ... and the stream stops if it falls this far behind what it should send
+FOLLOW_STOP_DEG = 10.0   # the arm this far from the last point sent -> stop
+READ_EVERY = 5           # read the arm's joints every N points
+FULL_STOP_S = 1.0        # the controller refusing points (queue full) this long -> stop
+SETTLE_MAX_S = 1.5       # at the end, keep sending the last point while the aim settles
+LOG_MAX = 6000           # points kept for the speed export
+
+
 class Streamer:
-    """Sends the baked path (aimed live) with trackJoint, timed from its start,
-    until the path's end; stop() ends it (the run's stop then stops the arm)."""
+    """Sends the baked path (aimed live) with trackJoint, a point every
+    STREAM_DT; the path time moves on only when a point is taken (a refused
+    point is sent again), every point stays within the joint speed the path
+    and the aim allow, and the run stops (stopJoint) when it can't keep to that
+    or the arm falls behind. stop() ends it (the run's stop then stops the arm)."""
 
     def __init__(self, bot, samples):
         self.bot = bot
@@ -307,10 +322,11 @@ class Streamer:
         self.aimer = Aimer()
         self.stop_ev = threading.Event()
         self.thread = None
-        self.stats = {"sent": 0, "full": 0, "cleared": 0, "late": 0, "aim_err": ""}
+        self.stats = {"sent": 0, "full": 0, "cleared": 0, "late": 0, "aim_err": "",
+                      "max_follow_deg": 0.0, "max_behind_deg": 0.0, "max_dps": 0.0}
         self.error = ""
-        # The arm stands on the first point (checked before the run): the first
-        # point sent can't jump away from it either.
+        self.log = []
+        # The arm stands on the first point (checked before the run).
         self.q_last = _interp(self.samples, 0.0) if self.samples else None
 
     def start(self):
@@ -329,47 +345,94 @@ class Streamer:
         if self.thread is not None and self.thread is not threading.current_thread():
             self.thread.join(1.0)
 
+    def _limit(self, q, q_base, qb_prev):
+        """q held to the path's own step plus the aim's speed (and a margin)."""
+        lim = np.abs(q_base - qb_prev) + math.radians(JOINT_DPS + STEP_MARGIN_DPS) * STREAM_DT
+        step = np.clip(q - self.q_last, -lim, lim)
+        out = self.q_last + step
+        behind = float(np.degrees(np.max(np.abs(q - out))))
+        self.stats["max_behind_deg"] = max(self.stats["max_behind_deg"], behind)
+        if behind > STOP_BEHIND_DEG:
+            raise RuntimeError("the aimed path asks for a %.1f deg jump, more than the arm may make: stopped" % behind)
+        return out
+
+    def _send(self, mc, q):
+        return int(mc.trackJoint([float(v) for v in q], STREAM_DT, 0.5, 1.0))
+
     def _run(self):
         mc = self.bot.mc
-        t0 = time.perf_counter()
-        k = 0
-        clear = False
+        t_wall0 = time.perf_counter()
+        due = t_wall0
+        s = 0.0                      # path time of the last point taken
+        qb_prev = _interp(self.samples, 0.0)
+        full_since = None
+        n = 0
+        settle = None                # wall time the end's settling began
         try:
             while not self.stop_ev.is_set():
-                k += 1
-                due = t0 + k * STREAM_DT
-                s = min(k * STREAM_DT, self.t_end)
-                if clear:
+                n += 1
+                due += STREAM_DT
+                if settle is None:
+                    s_new = min(s + STREAM_DT, self.t_end)
+                    q_base = _interp(self.samples, s_new)
+                    q = self.aimer(s_new, q_base, solve=(AIM_EVERY <= 1 or n % AIM_EVERY == 1))
+                    self.stats["aim_err"] = self.aimer.err
+                else:
+                    # Past the end: the last point, the aim's joints settling (no new aim).
+                    s_new = self.t_end
+                    q_base = qb_prev
+                    self.aimer.rate_t = np.zeros(6)
+                    q = self._settle_q(q_base)
+                q = self._limit(q, q_base, qb_prev)
+                rc = self._send(mc, q)
+                if rc == 0:
+                    dps = float(np.degrees(np.max(np.abs(q - self.q_last)))) / STREAM_DT
+                    self.stats["max_dps"] = max(self.stats["max_dps"], dps)
+                    self.q_last = q
+                    s, qb_prev = s_new, q_base
+                    self.stats["sent"] += 1
+                    full_since = None
+                elif rc == 2:
+                    # Queue full: the same point again next time (the path time waits).
+                    self.stats["full"] += 1
+                    full_since = full_since or time.perf_counter()
+                    if time.perf_counter() - full_since > FULL_STOP_S:
+                        raise RuntimeError("the controller kept refusing points (queue full) for %.1f s" % FULL_STOP_S)
+                elif rc in (-3, -4):
+                    # A stop left the path held: clear it and go on from where the arm is.
                     mc.clearPath()
                     self.stats["cleared"] += 1
-                    clear = False
-                q_base = _interp(self.samples, s)
-                # IK every AIM_EVERY points; the aim / joint filters step on every one.
-                q = self.aimer(s, q_base, solve=(AIM_EVERY <= 1 or k % AIM_EVERY == 1))
-                self.stats["aim_err"] = self.aimer.err
-                if self.q_last is not None:
-                    # Never more than 5 deg per joint in one point (the controller trips on steps).
-                    lim = math.radians(5.0)
-                    q = self.q_last + np.clip(q - self.q_last, -lim, lim)
-                rc = int(mc.trackJoint([float(v) for v in q], STREAM_DT, 0.5, 1.0))
-                if rc == 0:
-                    self.q_last = q
-                    self.stats["sent"] += 1
-                elif rc == 2:
-                    self.stats["full"] += 1
-                elif rc in (-3, -4):
-                    clear = True
+                    cur = self.bot.GetJoints()
+                    if cur is not None:
+                        self.q_last = np.asarray(cur, dtype=float).reshape(-1)[:6]
                 elif rc == -22:
-                    raise RuntimeError("the controller predicts a self-collision at t %.2f" % s)
+                    raise RuntimeError("the controller predicts a self-collision at t %.2f" % s_new)
                 else:
-                    raise RuntimeError("trackJoint rc %s at t %.2f" % (rc, s))
-                if s >= self.t_end:
-                    break  # the last point is sent: the arm comes to rest on it
+                    raise RuntimeError("trackJoint rc %s at t %.2f" % (rc, s_new))
+                follow = None
+                if n % READ_EVERY == 0:
+                    cur = self.bot.GetJoints()
+                    if cur is not None:
+                        follow = float(np.degrees(np.max(np.abs(np.asarray(cur, dtype=float)[:6] - self.q_last))))
+                        self.stats["max_follow_deg"] = max(self.stats["max_follow_deg"], follow)
+                        if follow > FOLLOW_STOP_DEG:
+                            raise RuntimeError("the arm is %.1f deg behind the stream: stopped" % follow)
+                if len(self.log) < LOG_MAX:
+                    self.log.append({"t": round(time.perf_counter() - t_wall0, 4), "s": round(s, 4), "rc": rc,
+                                     "q": [round(math.degrees(v), 3) for v in self.q_last],
+                                     "follow_deg": None if follow is None else round(follow, 2),
+                                     "dev_deg": round(self.aimer.dev_deg, 2), "aim_err": self.aimer.err})
+                if settle is None and s >= self.t_end - 1e-9:
+                    settle = time.perf_counter()
+                if settle is not None and (time.perf_counter() - settle > SETTLE_MAX_S
+                                           or float(np.max(np.abs(self.aimer.dv))) < math.radians(0.5)):
+                    break  # the last point is sent and the aim has come to rest
                 left = due - time.perf_counter()
                 if left > 0:
                     time.sleep(left)
                 else:
                     self.stats["late"] += 1
+                    due = time.perf_counter()  # late: don't send a burst to catch up
         except Exception as e:
             self.error = str(e)
             print("live stream stopped:", e)
@@ -379,6 +442,13 @@ class Streamer:
                 pass
         print("live stream done", self.stats)
 
+    def _settle_q(self, q_base):
+        """The aim's joints coming to rest on the last answer (filter only)."""
+        a = self.aimer
+        a.delta, a.dv = _follow(a.delta, a.dv, a.delta_t, math.radians(JOINT_DPS),
+                                math.radians(JOINT_ACC), STREAM_DT, JOINT_SMOOTH_S)
+        return np.asarray(q_base, dtype=float) + a.delta
+
 
 _stream = {"s": None}
 
@@ -387,6 +457,7 @@ def stream_start(bot, samples):
     stream_stop()
     st = Streamer(bot, samples)
     _stream["s"] = st
+    _stream["last"] = st
     st.start()
     return st
 
@@ -395,6 +466,7 @@ def stream_stop():
     st = _stream.get("s")
     _stream["s"] = None
     if st is not None:
+        _stream["last"] = st
         st.stop()
 
 
@@ -402,6 +474,24 @@ def stream_q():
     """The last point sent by the streamed run (the sim arm shows it), or None."""
     st = _stream.get("s")
     return None if st is None or st.q_last is None else np.asarray(st.q_last, dtype=float)
+
+
+def stream_running():
+    st = _stream.get("s")
+    return st is not None and st.thread is not None and st.thread.is_alive()
+
+
+def stream_error():
+    st = _stream.get("s")
+    return "" if st is None else st.error
+
+
+def stream_log():
+    """The last streamed run's points (for the speed export), or None."""
+    st = _stream.get("last") or _stream.get("s")
+    if st is None:
+        return None
+    return {"stats": dict(st.stats), "error": st.error, "dt": STREAM_DT, "points": list(st.log)}
 
 
 def stream_status():

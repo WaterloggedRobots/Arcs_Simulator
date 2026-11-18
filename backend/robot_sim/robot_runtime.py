@@ -1736,8 +1736,8 @@ def track_status():
 SMOOTH_S_DEFAULT = 0.25
 DEADBAND_MM_DEFAULT = 3.0
 # Live Look At (live_aim): how fast the aim may turn, deg/s, and its acceleration, deg/s^2.
-TURN_DPS_DEFAULT = 60.0
-TURN_ACC_DEFAULT = 180.0
+TURN_DPS_DEFAULT = 30.0
+TURN_ACC_DEFAULT = 90.0
 _smooth = {}
 
 
@@ -3640,6 +3640,12 @@ def start_real_path(loops=0, delay=0.0):
 def pause_real_path():
     if not _rp["active"]:
         return False
+    if _rp.get("live") and _rp.get("motion_started"):
+        # A streamed Live run can't hold mid-path (the path's speed would step
+        # to 0): Pause stops it.
+        print("live run: pause stops the run")
+        stop_real_path()
+        return False
     _rp["paused"] = not _rp["paused"]
     _rp["wall"] = None
     if _rp["paused"]:
@@ -3761,13 +3767,29 @@ def tick_real_path():
         _start_path_buffer()
         _rp["motion_started"] = True
     path_t = max(0.0, raw_t - preroll)
+    live_busy = False
+    if _rp.get("live") and _rp.get("motion_started"):
+        # A streamed Live run: it ends when the stream has sent its last point
+        # and settled (its path time waits while the controller's queue is
+        # full, so the wall clock can be ahead), or stops on a stream error.
+        try:
+            import live_aim
+            live_busy = live_aim.stream_running()
+            err = live_aim.stream_error()
+        except Exception:
+            err = ""
+        if err:
+            print("live run stopped:", err)
+            stop_real_path()
+            _rp["phase"] = "live run stopped: " + err
+            return
     try:
         _apply_real_q_at_t(min(path_t, pe))
     except Exception:
         pass
     left = int(_rp.get("loops_left") or 0)
     looping = left < 0 or left > 0
-    if path_t >= pe - 1e-6 and _rp["finish_at"] is None:
+    if path_t >= pe - 1e-6 and _rp["finish_at"] is None and not live_busy:
         if looping and path_t < _gimbal_end() - 1e-6:
             pass  # gimbal frames past the arm's path: the next play waits for them
         elif looping:

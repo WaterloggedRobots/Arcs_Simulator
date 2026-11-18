@@ -1987,6 +1987,13 @@ def api_speed_export():
     doc = {"format": "speed_export", "title": fman.SESSION.get("title"), "units": {"speed": "m/s", "t": "s"},
            "sim_ee": series(data.get("sim")), "real_ee": series(data.get("real")),
            "overspeed": over, "gimbals": gimbals, "gimbal_runs": runs}
+    try:
+        import live_aim
+        lv = live_aim.stream_log()
+        if lv:
+            doc["live_stream"] = lv  # Look At Live run: each point sent (joints in deg), rc, arm lag
+    except Exception as e:
+        print("speed export live stream failed", e)
     path.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")
     return jsonify({"ok": True, "path": str(path), "sim": len(doc["sim_ee"]), "real": len(doc["real_ee"]),
                     "gimbals": len(gimbals), "doc": json.loads(json.dumps(doc, default=str))})
