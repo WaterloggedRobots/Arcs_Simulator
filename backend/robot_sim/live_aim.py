@@ -49,6 +49,10 @@ IK_DEADBAND_DEG = 0.01  # IK answers changing less than this are noise
 #   joint_dps / joint_acc    the aim's joint change on top of the baked path, limits
 #   ik_every                 (unused since the streamed run aims on its own thread)
 #   aim_hz                   streamed run: aim answers per second of path, evenly spaced
+#   aim_solver               1 = wrist first (`_wrist_first`: points the lens, the position may drift
+#                            up to aim_hold_mm, J4-J6 before J1-J3), 0 = the exact pose (precise IK)
+#   horizon_s / horizon_dead_deg  wrist first: the level horizon (roll about the lens) is
+#                            corrected with this time constant, errors under the deadband left
 #   stream_process           streamed run: 1 = send from a process of its own (stream_proc.py,
 #                            its own controller connection), 0 = from a thread in the app
 #   track_smooth / track_delay  trackJoint's smooth and delay scales
@@ -58,7 +62,7 @@ TUNE_DEFAULTS = {
     "turn_dps": 30.0, "turn_acc": 90.0,
     "joint_smooth_s": 0.03, "joint_dps": 45.0, "joint_acc": 180.0,
     "ik_every": 1, "aim_hz": 10.0, "track_smooth": 0.5, "track_delay": 1.0,
-    "stream_process": 1.0,
+    "stream_process": 1.0, "aim_solver": 1.0, "aim_hold_mm": 5.0, "horizon_s": 0.5, "horizon_dead_deg": 0.5,
 }
 TUNE_RANGES = {
     "smooth_s": (0.0, 5.0), "deadband_mm": (0.0, 50.0), "predict_s": (0.0, 0.5),
@@ -66,7 +70,7 @@ TUNE_RANGES = {
     "turn_dps": (1.0, 180.0), "turn_acc": (1.0, 2000.0),
     "joint_smooth_s": (0.0, 1.0), "joint_dps": (1.0, 180.0), "joint_acc": (1.0, 2000.0),
     "ik_every": (1, 10), "aim_hz": (2.0, 50.0), "track_smooth": (0.0, 1.0), "track_delay": (0.0, 2.0),
-    "stream_process": (0.0, 1.0),
+    "stream_process": (0.0, 1.0), "aim_solver": (0.0, 1.0), "aim_hold_mm": (0.5, 50.0), "horizon_s": (0.0, 10.0), "horizon_dead_deg": (0.0, 10.0),
 }
 TUNE = dict(TUNE_DEFAULTS)
 
@@ -152,6 +156,66 @@ def span_specs():
         if spec and t0 is not None and t1 is not None:
             out.append((float(t0), float(t1), dict(spec)))
     return out
+
+
+def _cursor_pose(model, q):
+    """The Sim Arm Cursor's pose for joints q (as Aimer places it), under the caller's lock."""
+    rr = _rr()
+    rr._set_q(model, q)
+    p_ee, w_ee = rr._ee_frame(model)
+    r_ee = R.from_quat(_xyzw(w_ee))
+    pos = np.asarray(p_ee, dtype=float).reshape(3) + r_ee.as_matrix() @ rr.CURSOR_POS_OFFSET["sim"]
+    return pos, R.from_euler("xyz", rr.CURSOR_RPY_OFFSET["sim"]) * r_ee
+
+
+WRIST_FIRST_STEPS = 3
+WRIST_FIRST_EPS = 1e-4                       # rad, for the numeric Jacobian
+WRIST_FIRST_JOINT_COST = np.array([4.0, 4.0, 3.0, 1.0, 1.0, 1.0])   # J1..J6: the wrist first
+WRIST_FIRST_DAMP = 2e-3
+
+
+def _wrist_first(model, lock, q0, p_d, r_d, look_local, roll_gain=1.0, roll_dead=0.0):
+    """Joints that point the lens like r_d, found by a few smooth damped
+    least-squares steps from q0 (the last answer). The position may drift up
+    to about aim_hold_mm from p_d and the wrist is preferred over J1-J3, so a
+    small aim change is mostly a small wrist move. The roll about the lens axis
+    (the level horizon Look At keeps) is corrected gently: errors under
+    roll_dead are left, and of the rest only the share roll_gain per answer
+    (holding it exactly turned J6 ~17 deg for a 3 deg aim change in a test
+    pose, so target jitter became large J6 swings)."""
+    q = np.asarray(q0, dtype=float).reshape(6).copy()
+    hold = max(0.5, float(tune("aim_hold_mm"))) / 1000.0
+    w_pos = math.radians(1.0) / hold           # hold_mm of drift costs as much as 1 deg of aim
+    lam = WRIST_FIRST_DAMP * WRIST_FIRST_JOINT_COST ** 2
+    with lock:
+        p0, r0 = _cursor_pose(model, q)
+        e_r0 = (r_d * r0.inv()).as_rotvec()
+        if look_local is not None:
+            # The turn to make: all of the pointing, part of the roll.
+            a0 = r0.apply(look_local)
+            e_roll = float(np.dot(e_r0, a0))
+            use = math.copysign(max(0.0, abs(e_roll) - roll_dead), e_roll) * roll_gain
+            r_t = R.from_rotvec(e_r0 - (e_roll - use) * a0) * r0
+        else:
+            r_t = r_d                          # no target: the whole turn back to the bake
+        for _ in range(WRIST_FIRST_STEPS):
+            p, r = _cursor_pose(model, q)
+            e_p = np.asarray(p_d, dtype=float) - p
+            e_r = (r_t * r.inv()).as_rotvec()
+            jac = np.zeros((6, 6))
+            for j in range(6):
+                qj = q.copy()
+                qj[j] += WRIST_FIRST_EPS
+                pj, rj = _cursor_pose(model, qj)
+                jac[:3, j] = (pj - p) / WRIST_FIRST_EPS
+                jac[3:, j] = (rj * r.inv()).as_rotvec() / WRIST_FIRST_EPS
+            jw = np.vstack([w_pos * jac[:3], jac[3:]])
+            ew = np.concatenate([w_pos * e_p, e_r])
+            dq = np.linalg.solve(jw.T @ jw + np.diag(lam), jw.T @ ew)
+            q = q + np.clip(dq, -0.1, 0.1)
+            if float(np.max(np.abs(dq))) < 1e-6:
+                break
+    return q
 
 
 class Aimer:
@@ -266,6 +330,13 @@ class Aimer:
                 return self._out(q_base, dt, "target %r not found" % spec.get("name"))
             aim = R.from_quat(_xyzw(rr._aim_wxyz(pos, tgt, spec.get("offset"), spec.get("pos_offset"))))
             goal = aim * r_base.inv()
+            # The cursor-local axis Look At points at the target (for the wrist-first solver).
+            lp = np.asarray(list(spec.get("pos_offset") or [0.0, 0.0, 0.0])[:3], dtype=float)
+            to_t = np.asarray(tgt, dtype=float).reshape(3) - (pos + aim.apply(lp))
+            nt = float(np.linalg.norm(to_t))
+            look_local = aim.inv().apply(to_t / nt) if nt > 1e-6 else None
+        else:
+            look_local = None
             ang = np.degrees(goal.magnitude())
             if ang > MAX_DEV_DEG:
                 goal = R.from_rotvec(goal.as_rotvec() * (MAX_DEV_DEG / ang))
@@ -282,11 +353,17 @@ class Aimer:
             self.corr_ok = self.corr
             self.err = ""
             return self._out(q_base, dt)
-        ee_pos, ee_wxyz = rr._ee_from_cursor(pos, _wxyz(corr * r_base), "sim")
         # Seed and jump check from the last answer's delta on today's base joints.
         ref = q_base + self.delta_t
-        q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True, precise=True,
-                               model=self.model, lock=self.lock)
+        if float(tune("aim_solver")) >= 0.5:
+            hs = float(tune("horizon_s"))
+            gain = 1.0 if hs <= 1e-3 else 1.0 - math.exp(-max(dt, 1e-3) / hs)
+            q = _wrist_first(model, lock, ref, pos, corr * r_base, look_local,
+                             roll_gain=gain, roll_dead=math.radians(float(tune("horizon_dead_deg"))))
+        else:
+            ee_pos, ee_wxyz = rr._ee_from_cursor(pos, _wxyz(corr * r_base), "sim")
+            q = rr.solve_backup_ik(ee_pos, ee_wxyz, seed_q=ref, quiet=True, precise=True,
+                                   model=self.model, lock=self.lock)
         if q is None:
             return self._out(q_base, dt, "IK failed")
         q = bake._unwrap_toward(np.asarray(q, dtype=float), q_base)
