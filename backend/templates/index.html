@@ -3026,7 +3026,9 @@
       }
       function camId() {
         const tab = window.__camTab;
-        return (tab && tab !== "all") ? tab : (window.__lastCamId || "");
+        if (tab && tab !== "all") return tab;
+        // The "All" tab: the camera whose live image is on show.
+        return (img && img.dataset.camId) || window.__lastCamId || "";
       }
       function send(body) {
         fetch("/api/cam_click", {
@@ -8407,6 +8409,7 @@
               nxt.onload = function () {
                 if (nxt.naturalWidth) {
                   el.src = url;
+                  el.dataset.camId = id;  // which camera the pane shows (clicks and boxes go to it)
                   if (window.__camHasFrame) window.__camHasFrame[id] = true;
                   missMap[id] = 0;
                 } else {

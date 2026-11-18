@@ -2171,6 +2171,13 @@ def set_camera_click(oid, u, v, box=None):
     """A click (u, v) or a dragged box [x0, y0, x1, y1] in a camera pane
     (image pixels). The click is kept and passed to the script every frame;
     a box is passed once (`set_box`), and replaces any click."""
+    if not oid:
+        # The page didn't say which camera: the one running a script (the first if several).
+        live = [o for o in wp.scene_objects
+                if (o.get("camera") or {}).get("enabled", True) is not False
+                and str((o.get("camera") or {}).get("type") or "sim") in ("cv", "opencv")]
+        if live:
+            oid = live[0].get("id")
     for obj in wp.scene_objects:
         if obj.get("id") != oid:
             continue
