@@ -194,6 +194,10 @@ Both actions only become available after a clean bake.
 
 The timeline is where a move is timed and refined.
 
+**Scrolling.** Track names and tracks are one scroll area with one set of scrollbars: scrolling up or down moves both together, and the names stay on the left when scrolling sideways. The time ruler stays on top however far down you scroll (click it to move the playhead). The mouse wheel over the tracks moves the playhead (Shift+wheel scrolls sideways, Alt+wheel zooms); over the names it scrolls the tracks up and down. Dragging a scrollbar only scrolls (it used to move the playhead too).
+
+**Speed graph panel.** *Panel > Speed graph* shows or hides the speed graph under the timeline; hidden, the timeline takes its room. The choice is remembered in this browser.
+
 **Track names.** Drag the right edge of the track-name column to widen or narrow it (the width is remembered in this browser). Right of the names is a column of small **+** buttons, the same as the lists' **+**: on an arm's row, orange adds a waypoint from the Real Arm Cursor and blue from the Sim Arm Cursor at the playhead (on another arm's row, that arm becomes the active arm first); on a gimbal's row, orange inserts a frame with the real gimbal's angles and blue with the Sim gimbal's; on a camera's row, the green ▶ and red ❚❚ add a start / stop recording key at the playhead. Only tracks you added (dev mode **+** under the names) have a 🗑; camera, gimbal and Look At tracks go with their object or component.
 
 **Arm track**

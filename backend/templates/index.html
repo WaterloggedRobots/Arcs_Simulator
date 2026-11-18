@@ -1122,22 +1122,32 @@
     .tl-body {
       flex: 1;
       min-height: 0;
-      display: grid;
-      grid-template-columns: var(--tl-names-w, 196px) 1fr;
+      display: flex;
       overflow: hidden;
       position: relative;
     }
+    .tl-inner { display: flex; width: max-content; min-width: 100%; align-items: flex-start; }
+    .tl-lanes { position: relative; flex: 0 0 auto; }
+    /* The time ruler: a copy of the canvas's top strip that stays on top while the tracks scroll. */
+    #tlRuler { position: sticky; top: 0; z-index: 2; display: block; margin-bottom: -28px; }
     .tl-names-resizer {
       position: absolute; top: 0; bottom: 0; left: calc(var(--tl-names-w, 196px) - 3px); width: 6px;
-      cursor: col-resize; z-index: 3;
+      cursor: col-resize; z-index: 6;
     }
     .tl-names-resizer:hover, .tl-names-resizer.drag { background: rgba(120, 160, 255, 0.35); }
     .tl-labels {
-      overflow-x: hidden;
-      overflow-y: auto;
+      position: sticky;
+      left: 0;
+      z-index: 4;
+      flex: 0 0 auto;
+      width: var(--tl-names-w, 196px);
+      align-self: stretch;
+      overflow: visible;
       background: #1a1b20;
       border-right: 1px solid #111;
     }
+    /* The corner above the names: stays put like the ruler beside it. */
+    .tl-labels .tl-corner { position: sticky; top: 0; z-index: 5; background: #1a1b20; border-bottom: 1px solid #111; }
     .tl-label {
       display: flex;
       align-items: center;
@@ -1189,9 +1199,14 @@
     .tl-add-track:hover { background: #2c2d36; color: #fff; }
     .tl-scroll {
       overflow: auto;
+      flex: 1;
       min-width: 0;
+      min-height: 0;
       background: #16171b;
     }
+    /* Panel > Speed graph off: the timeline takes the speed graph's rows. */
+    .layout.no-spd { grid-template-rows: 32px minmax(80px, 1fr) 10px calc(var(--tl-h) + var(--spd-h) + 10px) 0 0; }
+    .layout.no-spd .spd-resizer, .layout.no-spd .speed-graph { display: none; }
     .tl-scroll::-webkit-scrollbar { height: 12px; width: 12px; }
     .tl-scroll::-webkit-scrollbar-track { background: #121317; }
     .tl-scroll::-webkit-scrollbar-thumb { background: #4a4c56; border-radius: 6px; }
@@ -1612,6 +1627,12 @@
           <button data-act="pose-marks" id="poseMarksBtn">Saved Points</button>
           <button data-act="tl-samples" id="tlSamplesBtn">Timeline samples ✓</button>
           <button data-act="view-samples" id="viewSamplesBtn">Viewer samples ✓</button>
+        </div>
+      </div>
+      <div class="menu" id="menuPanel">
+        <button type="button">Panel</button>
+        <div class="menu-list">
+          <button data-act="speed-graph" id="spdPanelBtn" class="on">Speed graph ✓</button>
         </div>
       </div>
     </nav>
@@ -2517,11 +2538,18 @@
         </div>
       </div>
       <div class="tl-body">
-        <div class="tl-labels" id="tlLabels"></div>
-        <div class="tl-names-resizer" id="tlNamesResizer" title="Drag to resize the track names"></div>
+        <!-- One scroll area: the names column sticks to the left, the time ruler
+             to the top, so names and tracks scroll together (one scrollbar). -->
         <div class="tl-scroll" id="tlScroll">
-          <canvas id="tlCanvas"></canvas>
+          <div class="tl-inner">
+            <div class="tl-labels" id="tlLabels"></div>
+            <div class="tl-lanes">
+              <canvas id="tlRuler"></canvas>
+              <canvas id="tlCanvas"></canvas>
+            </div>
+          </div>
         </div>
+        <div class="tl-names-resizer" id="tlNamesResizer" title="Drag to resize the track names"></div>
       </div>
     </section>
     <div class="spd-resizer" id="spdResizer" title="Drag to resize speed graph"></div>
@@ -2696,6 +2724,11 @@
     const ctx = canvas.getContext("2d");
     const scrollEl = document.getElementById("tlScroll");
     const labelsEl = document.getElementById("tlLabels");
+    const rulerEl = document.getElementById("tlRuler");
+    // Width of the tracks part of the scroll area (the names column sticks over its left).
+    function tlViewW() {
+      return Math.max(100, (scrollEl.clientWidth || 400) - (labelsEl.offsetWidth || 0));
+    }
     const readoutEl = document.getElementById("tlReadout");
     const resizer = document.getElementById("tlResizer");
 
@@ -3367,13 +3400,13 @@
 
     const TL_PAD_LEFT = 14;
     function maxPps() {
-      const view = scrollEl.clientWidth || 400;
+      const view = tlViewW();
       const span = Math.max(1, Number(duration) || 1);
       return Math.max(MIN_PPS, Math.min(MAX_PPS, (MAX_CANVAS_W - TL_PAD_LEFT - 40) / span));
     }
     function contentWidth() {
       const raw = Math.ceil(duration * pps) + TL_PAD_LEFT + 40;
-      return Math.max(scrollEl.clientWidth || 400, Math.min(MAX_CANVAS_W, raw));
+      return Math.max(tlViewW(), Math.min(MAX_CANVAS_W, raw));
     }
     function contentHeight() {
       return RULER_H + TRACK_H * visibleTracks().length + ADD_H;
@@ -3412,6 +3445,7 @@
     function renderLabels() {
       labelsEl.innerHTML = "";
       const spacer = document.createElement("div");
+      spacer.className = "tl-corner";
       spacer.style.height = RULER_H + "px";
       spacer.style.flexShrink = "0";
       labelsEl.appendChild(spacer);
@@ -3477,7 +3511,6 @@
         add.title = "Add track";
         labelsEl.appendChild(add);
       }
-      labelsEl.scrollTop = scrollEl.scrollTop;
     }
 
     // Bind on the stable #tlLabels node. renderLabels() innerHTML-replaces the
@@ -4076,6 +4109,17 @@
       readoutEl.textContent =
         playhead.toFixed(2) + "s  ·  " + Math.round(pps) + " px/s  ·  tick " +
         tickStep() + "s  ·  " + vis.length + " tracks";
+      // The ruler (time marks and playhead) also on the sticky strip on top.
+      if (rulerEl) {
+        const rh = Math.floor(RULER_H * dpr);
+        if (rulerEl.width !== canvas.width) rulerEl.width = canvas.width;
+        if (rulerEl.height !== rh) rulerEl.height = rh;
+        rulerEl.style.width = w + "px";
+        rulerEl.style.height = RULER_H + "px";
+        const rctx = rulerEl.getContext("2d");
+        rctx.clearRect(0, 0, rulerEl.width, rh);
+        rctx.drawImage(canvas, 0, 0, canvas.width, rh, 0, 0, canvas.width, rh);
+      }
       } catch (err) {
         console.error("timeline draw", err);
         ctx.fillStyle = "#16171b";
@@ -4105,12 +4149,11 @@
     syncModeUi();
 
     function zoomAt(clientX, factor) {
-      const rect = scrollEl.getBoundingClientRect();
-      const localX = clientX - rect.left + scrollEl.scrollLeft;
-      const t = xToTime(localX);
+      const t = xToTime(clientX - canvas.getBoundingClientRect().left);
+      const off = clientX - (scrollEl.getBoundingClientRect().left + (labelsEl.offsetWidth || 0));
       pps = Math.max(MIN_PPS, Math.min(maxPps(), pps * factor));
       renderTimeline();
-      scrollEl.scrollLeft = Math.max(0, timeToX(t) - (clientX - rect.left));
+      scrollEl.scrollLeft = Math.max(0, timeToX(t) - off);
     }
 
     function mapSpanT(t, t0o, t1o, t0n, t1n) {
@@ -4154,9 +4197,9 @@
       renderTimeline();
       const x = timeToX(playhead);
       const viewL = scrollEl.scrollLeft;
-      const viewR = viewL + scrollEl.clientWidth;
+      const viewR = viewL + tlViewW();
       if (x < viewL + 24) scrollEl.scrollLeft = Math.max(0, x - 24);
-      else if (x > viewR - 24) scrollEl.scrollLeft = x - scrollEl.clientWidth + 24;
+      else if (x > viewR - 24) scrollEl.scrollLeft = x - tlViewW() + 24;
       if (sync !== false) {
         if (pathWinOn) syncPathWindow();
         fetch("/api/playhead", {
@@ -4168,6 +4211,8 @@
     }
 
     scrollEl.addEventListener("wheel", (e) => {
+      // Over the names: scroll the tracks up / down (names and tracks move together).
+      if (e.target && e.target.closest && e.target.closest("#tlLabels") && !e.altKey && !e.shiftKey) return;
       e.preventDefault();
       if (e.altKey) {
         zoomAt(e.clientX, e.deltaY < 0 ? 1.12 : 1 / 1.12);
@@ -4182,9 +4227,6 @@
       setPlayhead(playhead + dir * step);
     }, { passive: false });
 
-    scrollEl.addEventListener("scroll", () => {
-      labelsEl.scrollTop = scrollEl.scrollTop;
-    });
 
     function hitKeyframe(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
@@ -5049,6 +5091,18 @@
       const ae = document.activeElement;
       if (ae && ae !== document.body && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || "")) ae.blur();
       if (e.button === 2) return;
+      // The scroll area's own scrollbars: scroll only (a press there used to move the playhead).
+      const sr = scrollEl.getBoundingClientRect();
+      if (e.clientX >= sr.left + scrollEl.clientWidth || e.clientY >= sr.top + scrollEl.clientHeight) return;
+      // The names column has its own buttons; a press on a name does nothing here.
+      if (e.target && e.target.closest && e.target.closest("#tlLabels")) return;
+      if (e.target === rulerEl) {
+        // The ruler on top (stays while the tracks scroll): set the playhead.
+        tlFocus = true;
+        deselectGui();
+        setPlayhead(xToTime(e.clientX - canvas.getBoundingClientRect().left));
+        return;
+      }
       const otherArm = hitArmRow(e.clientY);
       if (otherArm) {
         // Edit that arm: its row becomes the editable one, its lists show.
@@ -5534,6 +5588,7 @@
       return null;
     }
     scrollEl.addEventListener("contextmenu", (e) => {
+      if (e.target && e.target.closest && (e.target.closest("#tlLabels") || e.target === rulerEl)) return;
       const gHit = hitGimFrame(e.clientX, e.clientY);
       const gRow = gHit ? gHit.tr : gimRowAt(e.clientY);
       if (gRow) {
@@ -8603,6 +8658,28 @@
         modal.hidden = true;
         if (timer) { clearInterval(timer); timer = null; }
       }
+      // Panel > Speed graph: off hides the speed graph and the timeline takes its room.
+      const spdBtn = document.getElementById("spdPanelBtn");
+      function applySpdPanel(on) {
+        layout.classList.toggle("no-spd", !on);
+        if (spdBtn) {
+          spdBtn.classList.toggle("on", on);
+          spdBtn.textContent = on ? "Speed graph ✓" : "Speed graph";
+        }
+        try { localStorage.setItem("spdPanel", on ? "1" : "0"); } catch (err) {}
+        requestAnimationFrame(() => {
+          try { renderTimeline(); } catch (err) {}
+          if (on) { try { renderSpeedGraph(); } catch (err) {} }
+        });
+      }
+      try { if (localStorage.getItem("spdPanel") === "0") applySpdPanel(false); } catch (err) {}
+      document.getElementById("menuPanel").addEventListener("click", (e) => {
+        const act = e.target.getAttribute("data-act");
+        if (act === "speed-graph") {
+          e.stopPropagation();
+          applySpdPanel(!(spdBtn && spdBtn.classList.contains("on")));
+        }
+      });
       document.getElementById("menuView").addEventListener("click", (e) => {
         const act = e.target.getAttribute("data-act");
         if (act === "console") {
@@ -9291,8 +9368,7 @@
         const pid = e.dataTransfer.getData("text/saved-path");
         if (!pid) return;
         e.preventDefault();
-        const rect = tlScrollDrop.getBoundingClientRect();
-        const x = e.clientX - rect.left + tlScrollDrop.scrollLeft;
+        const x = e.clientX - canvas.getBoundingClientRect().left;
         const t = snapToTick(xToTime(x));
         const place = (confirm) => fetch("/api/saved_paths", {
           method: "POST",
