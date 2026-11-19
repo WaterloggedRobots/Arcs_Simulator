@@ -278,12 +278,13 @@ Components attach extra behaviour to a 3D object — turning plain geometry into
 
 Adding a **Camera component** converts a 3D object into a working camera and automatically generates its view, its track on the timeline, and its properties panel.
 
-Three camera types are supported:
+Four camera types are supported:
 
 | Type | Use |
 | --- | --- |
 | **Sim** | Preview the camera inside the simulator and rehearse the video shoot against simulated 3D objects. |
 | **OpenCV** | Attach a custom Python script for USB webcams and advanced tracking — useful for vision work beyond shooting. |
+| **Webcam** | Show a plain USB or built-in webcam, no script needed. Type the camera's number in **Index** (0 is usually the built-in camera, then 1, 2, … in the order Windows lists them); changing it switches the feed at once. A number with no camera says so in the camera pane (*no webcam at index N*). The image is read with OpenCV (DirectShow on Windows) on a thread of its own and streamed to the pane; it records like the other cameras. A webcam used by another program, or by an OpenCV camera's script, may not open. |
 | **Sony** | Control a real Sony camera through the Sony SDK. |
 
 Camera recording controls:
@@ -549,7 +550,7 @@ backend/                  everything needed to run the app
   deck/                   Steam Deck controls (XInput) and Steam Deck Tools profile switch
   app_paths.py            folder constants
   templates/index.html    the page
-  cameras/                sony_liveview.py, libusb-1.0.dll (Sony camera support)
+  cameras/                sony_liveview.py, libusb-1.0.dll (Sony camera support), webcam.py (Webcam cameras)
   state/temp.json         autosave (internal, not for hand editing)
   robot_sim/
     robot_sim_run.py      Viser viewer loop and request queues

@@ -1937,6 +1937,49 @@ def rec_preroll_s():
     return 0.0
 
 
+_webcam_oids = set()
+
+
+def _tick_webcam_cameras():
+    """Webcam cameras: the newest frame from the camera at their index (cv_index),
+    read by backend/cameras/webcam.py on a thread per index."""
+    try:
+        import webcam
+    except Exception:
+        return
+    used, now = set(), set()
+    for obj in list(wp.scene_objects):
+        cam = obj.get("camera") or {}
+        if not cam or cam.get("enabled", True) is False or str(cam.get("type") or "sim") != "webcam":
+            continue
+        oid = obj.get("id")
+        try:
+            idx = int(cam.get("cv_index") if cam.get("cv_index") is not None else 0)
+        except Exception:
+            idx = 0
+        used.add(idx)
+        now.add(oid)
+        blob, err = webcam.grab(idx)
+        if blob:
+            _cam_frame_jpeg[oid] = blob
+            cam["error"] = ""
+            if camera_record_at(oid) and (bool(cam.get("manual")) or _real_playing()):
+                _record_bgr(oid, cam, webcam.latest_bgr(idx))
+            elif oid in _cam_recorders:
+                _record_bgr(oid, cam, None)
+        else:
+            _cam_frame_jpeg.pop(oid, None)
+            cam["error"] = err or "waiting for webcam %d" % idx
+    for oid in _webcam_oids - now:
+        # Switched to another type, disabled or deleted: drop its frame and recorder.
+        _cam_frame_jpeg.pop(oid, None)
+        if oid in _cam_recorders:
+            _record_bgr(oid, {}, None)
+    _webcam_oids.clear()
+    _webcam_oids.update(now)
+    webcam.keep_only(used)
+
+
 def _tick_sony_cameras():
     try:
         import sony_liveview
@@ -2040,10 +2083,11 @@ def _tick_cv_cameras():
         # of failing (and logging) every tick.
         for obj in list(wp.scene_objects):
             cam = obj.get("camera") or {}
-            if cam and str(cam.get("type") or "sim") in ("cv", "opencv"):
+            if cam and str(cam.get("type") or "sim") in ("cv", "opencv", "webcam"):
                 cam["error"] = "OpenCV (cv2) is not installed"
         return
     _tick_sony_cameras()
+    _tick_webcam_cameras()
     seen = {}
     for obj in list(wp.scene_objects):
         cam = obj.get("camera") or {}
@@ -2241,7 +2285,7 @@ def camera_status():
         "active": True,
         "id": obj.get("id"),
         "type": typ,
-        "connected": bool(frame) if typ in ("cv", "opencv", "sony") else typ == "sim",
+        "connected": bool(frame) if typ in ("cv", "opencv", "sony", "webcam") else typ == "sim",
         "has_frame": bool(frame),
         "error": str(cam.get("error") or ""),
         "script": cam.get("script") or "",

@@ -2371,6 +2371,7 @@
               <select id="camType" style="width:100%;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;">
                 <option value="sim">simulator</option>
                 <option value="opencv">opencv</option>
+                <option value="webcam">webcam</option>
                 <option value="sony">sony</option>
                 <option value="other">other</option>
               </select>
@@ -6208,9 +6209,9 @@
             const typ = document.getElementById("camType");
             if (typ && document.activeElement !== typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
             const idxRow = document.getElementById("camIndexRow");
-            if (idxRow) idxRow.hidden = typ.value !== "sony";
+            if (idxRow) idxRow.hidden = !camHasIndex(typ.value);
             const idxEl = document.getElementById("camIndex");
-            if (idxEl && document.activeElement !== idxEl) idxEl.value = (c.cv_index != null ? c.cv_index : 1);
+            if (idxEl && document.activeElement !== idxEl) idxEl.value = (c.cv_index != null ? c.cv_index : (typ.value === "webcam" ? 0 : 1));
             const recBtn = document.getElementById("camRecBtn");
             const manEl = document.getElementById("camManual");
             const manual = !!(c.manual);
@@ -6313,7 +6314,7 @@
         const typ = document.getElementById("camType");
         if (typ && document.activeElement !== typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
         const idxRow = document.getElementById("camIndexRow");
-        if (idxRow) idxRow.hidden = !typ || typ.value !== "sony";
+        if (idxRow) idxRow.hidden = !typ || !camHasIndex(typ.value);
         const scriptRow = document.getElementById("camScriptRow");
         if (scriptRow) {
           const ov = !!(typ && (typ.value === "opencv" || typ.value === "cv"));
@@ -6935,7 +6936,7 @@
           row.hidden = !(el.value === "opencv" || el.value === "cv");
           row.style.display = (el.value === "opencv" || el.value === "cv") ? "" : "none";
           const idxRow = document.getElementById("camIndexRow");
-          if (idxRow) idxRow.hidden = el.value !== "sony";
+          if (idxRow) idxRow.hidden = !camHasIndex(el.value);
         }
         sendPrim();
       });
@@ -8359,7 +8360,7 @@
             id: o.id,
             type: typ,
             active: true,
-            has_frame: typ === "sony" || typ === "cv" || typ === "opencv" ? !!o.has_frame : false,
+            has_frame: isLiveCamType(typ) ? !!o.has_frame : false,
             error: o.cam_error || "",
           });
         }
@@ -8423,7 +8424,7 @@
           const cam = o.camera || {};
           if (cam.enabled === false) return false;
           const t = o.cam_type || cam.type || "sim";
-          return t === "sony" || t === "cv" || t === "opencv";
+          return isLiveCamType(t);
         });
         const simCams = allCams.filter((o) => {
           const cam = o.camera || {};
@@ -8535,6 +8536,19 @@
               // each frame. At most CAM_STREAMS at once (the browser allows ~6 connections to
               // the page's server); others, and a camera whose stream failed, poll as before.
               const sFail = window.__camStreamFail || (window.__camStreamFail = {});
+              const errNow = !(window.__camHasFrame && window.__camHasFrame[id]) && window.__camErrors && window.__camErrors[id];
+              if (errNow) {
+                // No frame and an error (a webcam index with no camera): say why,
+                // instead of leaving the last frame of the stream up.
+                if (el.dataset.errMsg !== errNow) {
+                  delete el.dataset.streamId;
+                  el.onload = el.onerror = null;
+                  el.src = camMsgImage(errNow);
+                  el.dataset.errMsg = errNow;
+                }
+                return;
+              }
+              if (el.dataset.errMsg) delete el.dataset.errMsg;
               if (el.dataset.streamId === id) return;  // streaming
               const hasNow = window.__camHasFrame && window.__camHasFrame[id];
               if (hasNow && !sFail[id] && document.querySelectorAll("img[data-stream-id]").length < CAM_STREAMS) {
@@ -9638,6 +9652,17 @@
         if (!on) playRepeat.value = "0";
       };
     }
+    // Camera types with a real image (the pane shows their frames).
+    // A pane's stand-in image with a message (camera error).
+    function camMsgImage(msg) {
+      const esc = String(msg).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='640' height='360'><rect width='100%' height='100%' fill='#111214'/>" +
+        "<text x='50%' y='50%' fill='#c9c9cf' font-family='sans-serif' font-size='22' text-anchor='middle'>" + esc + "</text></svg>");
+    }
+    function isLiveCamType(t) { return t === "sony" || t === "cv" || t === "opencv" || t === "webcam"; }
+    // Types picked by a device index (the Index field).
+    function camHasIndex(t) { return t === "sony" || t === "webcam"; }
     function cameraRecordAtPlayhead(oid) {
       if (!oid) return false;
       const tid = "cam_" + oid;
