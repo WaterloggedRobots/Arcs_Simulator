@@ -2675,8 +2675,12 @@
       const bits = [];
       if (b.baking) bits.push("baking…");
       else if (b.fail) bits.push("bake fail " + b.fail);
-      if (realState.uploading) bits.push("uploading buffer…");
-      else if (realState.uploaded && !realState.active) bits.push("buffer on controller");
+      // Which motion control the run uses: the controller's own path buffer, or the app
+      // streaming it point by point (only Live Look At on a path with Look At spans).
+      const streamed = realState.mode === "stream";
+      if (realState.uploading) bits.push(streamed ? "starting the Live stream…" : "uploading buffer…");
+      else if (realState.uploaded && !realState.active) bits.push(streamed ? "streamed by the app (Live Look At)" : "buffer on controller");
+      else if (realState.active && streamed) bits.push("running: streamed by the app (Live Look At)");
       else if (realState.uploaded && !realState.armed) bits.push("uploaded — starting");
       else if (phase) bits.push("run: " + phase);
       if (window.__outOfSpan) bits.push(window.__outOfSpan);

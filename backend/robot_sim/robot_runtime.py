@@ -3508,9 +3508,17 @@ def upload_real_path(loops=0, delay=0.0):
     _rp["_loop_pending"] = False
     try:
         import live_aim
-        _rp["live"] = bool(live_aim.enabled())
+        # Streamed only for Live Look At on a path that has Look At spans: the
+        # switch is saved in the project, and a plain path in such a project was
+        # streamed by the app (trackJoint) instead of the controller's own path
+        # buffer (grinding on the arm).
+        _rp["live"] = bool(live_aim.enabled()) and bool(live_aim.span_specs())
+        if live_aim.enabled() and not _rp["live"]:
+            print("real run: Live is on but the path has no Look At spans: using the controller's path buffer")
     except Exception:
         _rp["live"] = False
+    _rp["mode"] = "stream" if _rp["live"] else "buffer"
+    print("real run mode:", "streamed by the app (Live Look At)" if _rp["live"] else "controller path buffer")
     if _rp["live"]:
         # Streamed run: nothing to upload (the points go out as the run plays).
         if int(_rp.get("loops_left") or 0) != 0:
@@ -3978,6 +3986,7 @@ def real_path_status():
         "ik_pref": IK_PREF,
         "ik_ok": ik_allowed(),
         "live": _live_status("real") if _rp.get("live") else None,
+        "mode": _rp.get("mode") or "",
     }
 
 
