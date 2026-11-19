@@ -1766,6 +1766,17 @@ def api_path_window():
     return jsonify({"ok": True})
 
 
+@app.route("/api/webcams", methods=["GET"])
+def api_webcams():
+    """Video devices for the Webcam camera type: [{index, name}] (DirectShow order)."""
+    try:
+        import webcam
+        devs = webcam.devices(refresh=bool(request.args.get("refresh")))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "devices": []})
+    return jsonify({"ok": True, "devices": devs, "listing": bool(webcam._list.get("busy"))})
+
+
 @app.route("/api/camera", methods=["POST"])
 def api_camera():
     data = request.get_json(silent=True) or {}

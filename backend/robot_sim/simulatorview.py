@@ -1948,6 +1948,8 @@ def _tick_webcam_cameras():
     except Exception:
         return
     used, now = set(), set()
+    webcam.devices()  # names, listed in the background (cached)
+    script_live = bool(_cam_cv_mod)
     for obj in list(wp.scene_objects):
         cam = obj.get("camera") or {}
         if not cam or cam.get("enabled", True) is False or str(cam.get("type") or "sim") != "webcam":
@@ -1957,8 +1959,14 @@ def _tick_webcam_cameras():
             idx = int(cam.get("cv_index") if cam.get("cv_index") is not None else 0)
         except Exception:
             idx = 0
-        used.add(idx)
         now.add(oid)
+        if script_live and webcam.is_depth_camera(idx):
+            # The Orbbec's colour camera is also a webcam: opening it took the
+            # device from the OpenCV camera's script (the app froze waiting on it).
+            _cam_frame_jpeg.pop(oid, None)
+            cam["error"] = "index %d is %s, used by an OpenCV camera's script" % (idx, webcam.device_name(idx))
+            continue
+        used.add(idx)
         blob, err = webcam.grab(idx)
         if blob:
             _cam_frame_jpeg[oid] = blob
@@ -2214,7 +2222,9 @@ def _ensure_cv_thread():
             except Exception as e:
                 print("cv camera loop", e)
             dt = time.time() - t0
-            time.sleep(max(0.0, 0.04 - dt))
+            # Always a short pause: a script that waits on its device inside the
+            # tick (Orbbec wait_for_frames) left no time for the rest of the app.
+            time.sleep(max(0.01, 0.04 - dt))
 
     _cam_cv_thread = threading.Thread(target=_loop, name="cam-cv", daemon=True)
     _cam_cv_thread.start()

@@ -16,6 +16,10 @@ python-can>=4.0
 pyusb>=1.2
 libusb-package>=1.0
 
+# Webcam camera type: camera names in Properties > Camera > Device (Windows,
+# DirectShow order = index); without it, ffmpeg if on PATH, else type the index.
+pygrabber>=0.2; sys_platform == "win32"
+
 # Viewer + URDF
 scikit-robot>=0.0.44
 viser>=0.2.23

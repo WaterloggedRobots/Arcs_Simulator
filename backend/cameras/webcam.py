@@ -1,20 +1,26 @@
 """Webcam camera type: a plain USB / built-in camera by its index (OpenCV).
 
-Each index in use gets one reader thread that keeps the newest frame (BGR and
-JPEG); `grab(index)` starts the reader if needed and returns the latest JPEG
-without waiting, so the camera tick never blocks on the device. Readers whose
-index is no longer used by any camera are closed by `keep_only(indexes)`.
+Each index in use is read by its own process (webcam_proc.py): opening a busy
+camera, or one whose driver waits, froze the app when it was read on a thread
+here. A thread per process reads its frames (JPEG) from the pipe; `grab(index)`
+returns the newest without waiting. `keep_only(indexes)` ends the processes no
+camera uses. `devices()` names the cameras (DirectShow order = index), listed
+by a process too and cached.
 """
 from __future__ import annotations
 
+import json
 import os
+import struct
+import subprocess
+import sys
 import threading
 import time
 
-JPEG_QUALITY = 80
-MAX_FPS = 30.0
-OPEN_RETRY_S = 2.0       # a camera that would not open is tried again after this
 STALE_S = 2.0            # no new frame for this long: reported as not delivering
+LIST_TTL_S = 30.0        # device names are listed again after this
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _readers = {}
 _lock = threading.Lock()
@@ -24,78 +30,67 @@ class _Reader:
     def __init__(self, index):
         self.index = int(index)
         self.jpeg = None
-        self.bgr = None
         self.t = 0.0
-        self.error = ""
-        self.size = None
+        self.error = "starting webcam %d" % self.index
+        self.proc = None
         self.stop = False
-        self.thread = threading.Thread(target=self._run, name="webcam-%d" % self.index, daemon=True)
+        try:
+            self.proc = subprocess.Popen(
+                [sys.executable, os.path.join(_HERE, "webcam_proc.py"), str(self.index)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW)
+        except Exception as e:
+            self.error = "webcam process failed to start: %s" % e
+            return
+        self.thread = threading.Thread(target=self._read, name="webcam-%d" % self.index, daemon=True)
         self.thread.start()
 
-    def _open(self, cv2):
-        if os.name == "nt":
-            # DirectShow opens quickly and gives indexes like the Windows camera list.
-            cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
-            if cap is not None and cap.isOpened():
-                return cap
-            if cap is not None:
-                cap.release()
-        cap = cv2.VideoCapture(self.index)
-        if cap is not None and cap.isOpened():
-            return cap
-        if cap is not None:
-            cap.release()
-        return None
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
 
-    def _run(self):
-        try:
-            import cv2
-        except ImportError:
-            self.error = "OpenCV (cv2) is not installed"
-            return
-        cap = None
+    def _read(self):
+        f = self.proc.stdout
         try:
             while not self.stop:
-                if cap is None:
-                    cap = self._open(cv2)
-                    if cap is None:
-                        self.error = "no webcam at index %d" % self.index
-                        self.jpeg = None
-                        time.sleep(OPEN_RETRY_S)
-                        continue
-                    self.error = ""
-                t0 = time.perf_counter()
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    self.error = "webcam %d stopped delivering frames" % self.index
-                    cap.release()
-                    cap = None
-                    time.sleep(0.5)
-                    continue
-                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-                if ok:
-                    self.bgr = frame
-                    self.jpeg = buf.tobytes()  # a new bytes object per frame (the MJPEG stream watches that)
+                head = f.read(5)
+                if not head or len(head) < 5:
+                    break
+                n = struct.unpack(">I", head[1:5])[0]
+                data = f.read(n)
+                if len(data) < n:
+                    break
+                if head[:1] == b"F":
+                    self.jpeg = data  # a new bytes object per frame (the MJPEG stream watches that)
                     self.t = time.time()
-                    self.size = (int(frame.shape[1]), int(frame.shape[0]))
                     self.error = ""
-                left = 1.0 / MAX_FPS - (time.perf_counter() - t0)
-                if left > 0:
-                    time.sleep(left)
-        finally:
-            if cap is not None:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
+                else:
+                    self.error = data.decode("utf-8", "replace")
+                    if not self.error.startswith("opening"):
+                        self.jpeg = None
+        except Exception:
+            pass
+        if not self.stop:
+            self.error = "webcam %d process ended" % self.index
+            self.jpeg = None
+
+    def close(self):
+        self.stop = True
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
 
 
 def _reader(index):
     index = int(index)
     with _lock:
         r = _readers.get(index)
-        if r is None or not r.thread.is_alive():
+        if r is None or (not r.alive() and time.time() - getattr(r, "born", 0) > 3.0):
+            if r is not None:
+                r.close()
             r = _Reader(index)
+            r.born = time.time()
             _readers[index] = r
         return r
 
@@ -110,17 +105,70 @@ def grab(index):
 
 def latest_bgr(index):
     r = _readers.get(int(index))
-    return None if r is None else r.bgr
+    if r is None or r.jpeg is None:
+        return None
+    try:
+        import cv2
+        import numpy as np
+        return cv2.imdecode(np.frombuffer(r.jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 def keep_only(indexes):
-    """Close the readers whose index no camera uses any more (frees the device)."""
+    """End the readers whose index no camera uses any more (frees the device)."""
     keep = {int(i) for i in indexes}
     with _lock:
         for idx in [i for i in _readers if i not in keep]:
-            _readers.pop(idx).stop = True
+            _readers.pop(idx).close()
 
 
-def status():
-    return {i: {"error": r.error, "size": r.size, "age_s": round(time.time() - r.t, 2) if r.t else None}
-            for i, r in list(_readers.items())}
+def close_all():
+    keep_only([])
+
+
+import atexit  # noqa: E402
+atexit.register(close_all)  # a camera stuck opening never notices the app is gone
+
+
+# -- device names -------------------------------------------------------------
+_list = {"names": None, "t": 0.0, "busy": False}
+
+
+def _list_now():
+    try:
+        r = subprocess.run([sys.executable, os.path.join(_HERE, "webcam_proc.py"), "--list"],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           timeout=15, creationflags=_NO_WINDOW)
+        names = json.loads((r.stdout or b"[]").decode("utf-8", "replace") or "[]")
+        _list["names"] = [str(n) for n in names]
+    except Exception:
+        _list["names"] = _list["names"] or []
+    _list["t"] = time.time()
+    _list["busy"] = False
+
+
+def devices(refresh=False):
+    """[{index, name}] of the video devices (empty when they can't be listed);
+    listed in the background, so the first call may return [] and list later."""
+    stale = _list["names"] is None or refresh or time.time() - _list["t"] > LIST_TTL_S
+    if stale and not _list["busy"]:
+        _list["busy"] = True
+        threading.Thread(target=_list_now, name="webcam-list", daemon=True).start()
+    return [{"index": i, "name": n} for i, n in enumerate(_list["names"] or [])]
+
+
+def device_name(index):
+    names = _list["names"] or []
+    try:
+        return names[int(index)]
+    except Exception:
+        return ""
+
+
+DEPTH_CAMERA_WORDS = ("orbbec", "astra", "gemini", "femto", "realsense")
+
+
+def is_depth_camera(index):
+    n = device_name(index).lower()
+    return any(w in n for w in DEPTH_CAMERA_WORDS)

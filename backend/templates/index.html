@@ -2386,6 +2386,13 @@
               <button type="button" id="camRecBtn" class="cam-rec-btn" title="Record">▶</button>
               <label class="rec-lab"><input id="camManual" type="checkbox"> Manual</label>
             </div>
+            <div class="row name-row" id="camWebcamRow" hidden>
+              <label>Device</label>
+              <span style="display:flex;gap:6px;min-width:0;">
+                <select id="camWebcamList" title="The cameras Windows lists; choosing one sets the Index" style="flex:1;min-width:0;background:#1c1d21;color:#e8e8ea;border:1px solid #111;border-radius:6px;padding:6px;"></select>
+                <button type="button" id="camWebcamRefresh" title="List the cameras again" style="flex:none;width:30px;padding:0;">↻</button>
+              </span>
+            </div>
             <div class="row name-row" id="camScriptRow" hidden>
               <label>Script</label>
               <button type="button" id="camScriptBtn">Choose .py…</button>
@@ -6210,6 +6217,7 @@
             if (typ && document.activeElement !== typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
             const idxRow = document.getElementById("camIndexRow");
             if (idxRow) idxRow.hidden = !camHasIndex(typ.value);
+            showWebcamList(typ.value === "webcam", c.cv_index);
             const idxEl = document.getElementById("camIndex");
             if (idxEl && document.activeElement !== idxEl) idxEl.value = (c.cv_index != null ? c.cv_index : (typ.value === "webcam" ? 0 : 1));
             const recBtn = document.getElementById("camRecBtn");
@@ -6315,6 +6323,7 @@
         if (typ && document.activeElement !== typ) typ.value = (c.type === "cv" ? "opencv" : (c.type || "sim"));
         const idxRow = document.getElementById("camIndexRow");
         if (idxRow) idxRow.hidden = !typ || !camHasIndex(typ.value);
+        showWebcamList(!!typ && typ.value === "webcam", c.cv_index);
         const scriptRow = document.getElementById("camScriptRow");
         if (scriptRow) {
           const ov = !!(typ && (typ.value === "opencv" || typ.value === "cv"));
@@ -6937,6 +6946,7 @@
           row.style.display = (el.value === "opencv" || el.value === "cv") ? "" : "none";
           const idxRow = document.getElementById("camIndexRow");
           if (idxRow) idxRow.hidden = !camHasIndex(el.value);
+          showWebcamList(el.value === "webcam", parseInt((document.getElementById("camIndex") || {}).value || "0", 10));
         }
         sendPrim();
       });
@@ -9653,6 +9663,51 @@
       };
     }
     // Camera types with a real image (the pane shows their frames).
+    // Webcam type: a list of the cameras by name, choosing one sets the Index.
+    function showWebcamList(show, cur) {
+      const row = document.getElementById("camWebcamRow");
+      if (!row) return;
+      row.hidden = !show;
+      row.style.display = show ? "" : "none";
+      if (!show) return;
+      const age = Date.now() - (window.__webcamsAt || 0);
+      if (!window.__webcamsBusy && (!window.__webcams || !window.__webcams.length && age > 3000 || age > 30000)) loadWebcams(false);
+      fillWebcamList(cur);
+    }
+    function loadWebcams(refresh) {
+      window.__webcamsBusy = true;
+      return fetch("/api/webcams" + (refresh ? "?refresh=1" : "")).then((r) => r.json()).then((d) => {
+        window.__webcams = (d && d.devices) || [];
+        window.__webcamsAt = Date.now();
+        window.__webcamsListing = !!(d && d.listing);
+      }).catch(() => {}).then(() => {
+        window.__webcamsBusy = false;
+        fillWebcamList(parseInt((document.getElementById("camIndex") || {}).value || "0", 10));
+      });
+    }
+    function fillWebcamList(cur) {
+      const sel = document.getElementById("camWebcamList");
+      if (!sel || document.activeElement === sel) return;
+      const devs = window.__webcams || [];
+      const n = Number(cur);
+      let opts = devs.map((d) => "<option value='" + d.index + "'" + (d.index === n ? " selected" : "") + ">" +
+        d.index + " · " + String(d.name).replace(/</g, "&lt;") + "</option>");
+      if (!devs.some((d) => d.index === n)) opts.unshift("<option value='' selected>" + (isFinite(n) ? "index " + n + (devs.length ? " (not listed)" : "") : "—") + "</option>");
+      if (!devs.length) opts.push("<option value='' disabled>" + (window.__webcamsListing || window.__webcamsBusy ? "listing cameras…" : "names not available: type the index") + "</option>");
+      const html = opts.join("");
+      if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+    }
+    (function setupWebcamList() {
+      const sel = document.getElementById("camWebcamList");
+      const btn = document.getElementById("camWebcamRefresh");
+      if (sel) sel.addEventListener("change", () => {
+        if (sel.value === "") return;
+        const idx = document.getElementById("camIndex");
+        if (idx) { idx.value = sel.value; idx.dispatchEvent(new Event("change")); }
+        sel.blur();
+      });
+      if (btn) btn.addEventListener("click", () => { loadWebcams(true); setTimeout(() => loadWebcams(false), 4000); });
+    })();
     // A pane's stand-in image with a message (camera error).
     function camMsgImage(msg) {
       const esc = String(msg).replace(/&/g, "&amp;").replace(/</g, "&lt;");
