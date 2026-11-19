@@ -1778,6 +1778,13 @@ def smooth_target(key, pos):
 def tick_track_object():
     if not _track.get("on"):
         return
+    if _pb.get("active") or _rp.get("active"):
+        # The path plays: its joints already hold each sample's Look At (and Live
+        # re-aims them). Aiming the cursor here re-solved the sim arm to the
+        # cursor's pinned place whenever the target moved, so the arm stopped
+        # following the path and only looked at the target.
+        _track["_ik_key"] = None  # aim again once the play ends
+        return
     refresh_tool_offsets()
     tgt = _track_target_pos(_track.get("name"))
     _track["valid"] = tgt is not None
