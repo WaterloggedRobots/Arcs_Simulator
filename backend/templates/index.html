@@ -719,6 +719,10 @@
     }
     #simExtraAdd.show { display: block; }
     .track-comp { padding: 8px 10px 10px; }
+    #trackComp [hidden] { display: none !important; }
+    #trackComp.wp-view input, #trackComp.wp-view select { opacity: 0.75; }
+    #trackComp.wp-view #trackTrash, #trackComp.wp-view #trackPickBtn,
+    #trackComp.wp-view #trackPrimaryBtn, #trackComp.wp-view #trackToolPick { display: none; }
     .track-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .track-head-right { display: flex; align-items: center; gap: 6px; }
     .track-trash {
@@ -2409,6 +2413,7 @@
               <div id="trackPoseMenu" class="pose-menu" hidden></div>
             </div>
             <div id="trackErr" class="track-err" hidden>no valid tracking target.</div>
+            <div class="col-note" id="trackWpNote" hidden></div>
             <label class="col-stop" id="trackLiveRow" hidden title="The path stays as baked; the aim follows the target where it is during Simulate and Run (a Run then streams the path point by point)"><input id="trackLive" type="checkbox"> Live: follow the moving target during Simulate / Run</label>
             <div class="col-note" id="trackLiveNote" hidden></div>
             <div class="row triple" id="trackSmoothRow" hidden>
@@ -6322,15 +6327,39 @@
       }
       const track = obj.track || {};
       if (isSim && window.__trackAdded && !track.added) track.added = true;
-      const showTrack = (isSim && !!track.added) || (obj.kind === "waypoint" && !!(track.added || track.on));
+      // A waypoint shows the Look At it stored when it was added (read-only).
+      const isWp = obj.kind === "waypoint";
+      const showTrack = (isSim && !!track.added) || isWp;
       const tc = document.getElementById("trackComp");
       const ts = document.getElementById("trackSep");
       if (tc) tc.hidden = !showTrack;
       if (ts) ts.hidden = !showTrack;
+      if (tc) tc.classList.toggle("wp-view", isWp);
       if (showTrack) {
+        const wpOn = isWp && !!(track.on && track.name);
+        const wpNote = document.getElementById("trackWpNote");
+        if (wpNote) {
+          wpNote.hidden = !isWp;
+          wpNote.textContent = !isWp ? "" : (wpOn
+            ? "Stored on this waypoint when it was added (read-only)."
+            : "This waypoint has no Look At: its rotation is used as recorded.");
+        }
+        ["trackName", "trackToggle", "trackTool", "trackPx", "trackPy", "trackPz", "trackRx", "trackRy", "trackRz"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          if (el.tagName === "INPUT") el.readOnly = isWp; else el.disabled = isWp;
+        });
+        // Target, offsets and tool rows only mean something when the waypoint has a Look At.
+        ["trackPosRow", "trackRotRow", "trackToolRow"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.hidden = isWp && !wpOn;
+          const lab = el.previousElementSibling;
+          if (lab && lab.tagName === "LABEL") lab.hidden = el.hidden;
+        });
         const tn = document.getElementById("trackName");
         if (tn && document.activeElement !== tn) tn.value = track.name || "";
-        const on = window.__trackUserSet ? !!window.__trackOn : !!track.on;
+        const on = isWp ? wpOn : (window.__trackUserSet ? !!window.__trackOn : !!track.on);
         const tw = document.getElementById("trackWrap");
         const tb = document.getElementById("trackToggle");
         if (tb) tb.classList.toggle("advanced", on);
@@ -6382,8 +6411,12 @@
         });
         // Offset from tool: the sim cursor's children; choosing one copies its local transform.
         const tsel = document.getElementById("trackTool");
-        const tools = track.tools || [];
-        if (tsel && document.activeElement !== tsel) {
+        const tools = isWp ? (track.tool ? [{ id: "", name: track.tool }] : []) : (track.tools || []);
+        if (isWp && tsel) {
+          const html = "<option value=''>" + (track.tool ? String(track.tool).replace(/</g, "&lt;") : "no tool (offsets typed in)") + "</option>";
+          if (tsel.dataset.html !== html) { tsel.innerHTML = html; tsel.dataset.html = html; }
+          tsel.disabled = true;
+        } else if (tsel && document.activeElement !== tsel) {
           const cur = track.tool || "";
           const opts = ["<option value=''>" + (tools.length ? "— choose a child —" : "no child objects") + "</option>"]
             .concat(tools.map((t) => "<option value='" + t.id + "'" + (t.name === cur ? " selected" : "") + ">" + t.name + "</option>"));
@@ -6395,7 +6428,7 @@
         if (tpick) tpick.classList.toggle("on", !!track.tool_pick);
         const oe = document.getElementById("trackOffErr");
         if (oe) {
-          oe.hidden = !!tools.length;
+          oe.hidden = isWp || !!tools.length;
           oe.textContent = "Parent objects to the Sim Arm Cursor to use them as tools.";
         }
       }
@@ -6984,6 +7017,8 @@
       });
     })();
     function postTrack(payload, opts) {
+      // A waypoint's Look At is shown read-only: never send its edits to the cursor's Look At.
+      if (window._propKind === "waypoint") return Promise.resolve({});
       payload = Object.assign({ offset: trackOffsetRad(), pos_offset: trackPosOffset() }, payload || {});
       if (window._propKind === "waypoint" && window._propIndex != null) payload.index = window._propIndex;
       return fetch("/api/track_object", {
