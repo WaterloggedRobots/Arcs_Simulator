@@ -119,7 +119,7 @@ Both control styles switch freely, so you can set some points on the real arm an
 
 **Saved points** store important poses for the sim bot to return to.
 
-- Add them with the same logic as waypoints (real-arm pose or simulator pose).
+- Add them with the same logic as waypoints (real-arm pose or simulator pose). Either way the point stores the **arm's end effector** (its flange) and joints, so a point from the sim arm and one from the real arm in the same pose are the same point; going to a point puts the end effector there. (Points from the sim arm used to store the Sim Arm Cursor, which sits 5 cm out from the flange or wherever its gizmo was dragged.)
 - Click the **arrow** button to teleport the sim bot straight to that pose.
 - Two poses are provided by default: **Home pose** (the right-angle pose) and **Real pose** (where the real arm currently is).
 

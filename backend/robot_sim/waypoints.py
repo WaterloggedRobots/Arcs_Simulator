@@ -1418,7 +1418,10 @@ def add_sim_pose(name=None, ik=None, q=None, q_deg=None, source=None, wxyz=None)
                 pos, wxyz = rr._cursor_pose_from_ee(rr.robot_actual, "real")
             q = rr.current_joint_q("real") if hasattr(rr, "current_joint_q") else q
         else:
-            pos, wxyz = rr.get_sim_cursor_pose()
+            # The sim arm's end effector, like the real side (was the Sim Arm
+            # Cursor's pose: the cursor's offset from the flange, or wherever its
+            # gizmo had been dragged, so sim and real points disagreed).
+            pos, wxyz = rr.get_ee_pose("sim")
             q = rr.current_joint_q("sim") if hasattr(rr, "current_joint_q") else q
         if pos is not None and wxyz is not None:
             ik = bake._ik_from_pos_wxyz(pos, wxyz) or ik
