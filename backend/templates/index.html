@@ -6369,7 +6369,9 @@
         // Live Look At: a setting of the arm (the Sim Arm Cursor's component).
         const liveRow = document.getElementById("trackLiveRow");
         const liveCb = document.getElementById("trackLive");
-        if (liveRow) liveRow.hidden = !isSim;
+        // Also on a waypoint with Look At: Live is how its Look At plays (and the
+        // only place to reach it while the cursor has no Look At component).
+        if (liveRow) liveRow.hidden = !(isSim || wpOn);
         const smRow = document.getElementById("trackSmoothRow");
         if (smRow) smRow.hidden = !isSim;
         const smEl = document.getElementById("trackSmooth");

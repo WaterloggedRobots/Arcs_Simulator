@@ -567,8 +567,12 @@ class Streamer:
         self.thread = threading.Thread(target=self._run, name="live_stream", daemon=True)
         self.thread.start()
 
-    def feed_answer(self, s, d):
-        """An aim answer from outside (external mode)."""
+    def feed_answer(self, s, d, dev=None, err=None):
+        """An aim answer from outside (external mode); dev / err: the app's aim
+        status, for the log (the stand-in aimer here logged 0 deg)."""
+        if dev is not None:
+            self.aimer.dev_deg = float(dev)
+            self.aimer.err = str(err or "")
         d = np.asarray(d, dtype=float).reshape(6)
         self.answers = (self.answers + [(float(s), d)])[-ANSWERS_KEPT:]
         self.aim_d = d
@@ -831,7 +835,7 @@ class ProcStreamer(Streamer):
         self.thread.start()
 
     def _on_answer(self, s, d):
-        self.child.send("aim", float(s), [float(v) for v in d])
+        self.child.send("aim", float(s), [float(v) for v in d], float(self.aimer.dev_deg), str(self.aimer.err or ""))
 
     def _heartbeat(self):
         sent_tune = dict(TUNE)

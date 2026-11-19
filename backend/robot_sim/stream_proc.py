@@ -8,7 +8,7 @@ to the same address, as a second client), and does nothing but send.
 
 Started as `python stream_proc.py <port> <authkey hex>`; talks to the app over
 multiprocessing.connection on 127.0.0.1:
-  app -> here:  ("start", {samples, tune}), ("aim", s, delta), ("tune", {...}),
+  app -> here:  ("start", {samples, tune}), ("aim", s, delta, dev_deg, err), ("tune", {...}),
                 ("hb",), ("stop",)
   here -> app:  ("ready", ok, error), ("sent", s, q), ("log", text),
                 ("done", stats, error, log)
@@ -87,7 +87,7 @@ def main():
                     last_msg[0] = time.perf_counter()
                     kind = m[0]
                     if kind == "aim":
-                        st.feed_answer(m[1], np.asarray(m[2], dtype=float))
+                        st.feed_answer(m[1], np.asarray(m[2], dtype=float), *m[3:5])
                     elif kind == "tune":
                         live_aim.set_tuning(m[1])
                     elif kind == "stop":

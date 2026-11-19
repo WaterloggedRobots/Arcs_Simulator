@@ -926,7 +926,9 @@ def _sim_track_record():
     """The sim cursor's Track component; waypoints keep their own track_object."""
     tr = getattr(rr, "_track", None) or {}
     if not tr.get("added") and not tr.get("on"):
-        return None
+        # Live is the arm's switch for the waypoints' Look At: kept even with the
+        # cursor's own Look At removed (it was lost on save, and the run used the bake).
+        return {"on": False, "added": False, "live": True} if tr.get("live") else None
     return {
         "on": bool(tr.get("on")),
         "name": str(tr.get("name") or ""),
