@@ -1029,11 +1029,30 @@ def api_redo():
     return jsonify({"ok": True})
 
 
+BAKE_WAIT_S = 120.0  # /api/bake waits this long for the result, then the status line follows it
+
+
 @app.route("/api/bake", methods=["POST"])
 def api_bake():
+    """Bake on the viewer loop and answer with its result. It used to answer at
+    once ("Bake 0/0", the button enabled again) before anything was baked, so a
+    click looked ignored and was repeated."""
     data = request.get_json(silent=True) or {}
-    viewer_main.bake_requests.append(data.get("spacing"))
-    return jsonify({"ok": True})
+    req = {"spacing": data.get("spacing"), "done": threading.Event(), "result": None}
+    viewer_main.bake_requests.append(req)
+    # The loop needs the arm lock this request holds: let go while waiting.
+    finished = _unlocked(req["done"].wait)(BAKE_WAIT_S)
+    res = dict(req["result"] or {})
+    out = {"ok": bool(res.get("ok")) if finished else False,
+           "baked": res.get("baked", 0), "total": res.get("total", 0),
+           "failed_at": res.get("failed_at"), "error": res.get("error") or ("" if finished else "still baking"),
+           "pending": not finished}
+    try:
+        out["bake"] = bake.status_dict()
+    except Exception:
+        pass
+    _status_dirty.set()
+    return jsonify(out)
 
 
 @app.route("/api/clear_bake", methods=["POST"])

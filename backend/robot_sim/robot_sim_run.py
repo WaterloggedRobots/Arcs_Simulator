@@ -213,7 +213,7 @@ def start_viewer():
                 gimbal.speed_check()
             except Exception as e:
                 print("gimbal speed check failed:", e)
-            return
+            return {"ok": True, "baked": 0, "total": 0, "note": "no arm path"}
         try:
             import path_bake as pb
             fn = getattr(pb, "run_bake", None) or getattr(pb, "bake", None)
@@ -224,7 +224,7 @@ def start_viewer():
                     "from",
                     getattr(pb, "__file__", pb),
                 )
-                return
+                return {"ok": False, "error": "path_bake has no bake function"}
             result = fn(_spacing)
             print("bake:", result)
             # Gimbal tracks: the speed check (joint speeds between frames).
@@ -236,8 +236,10 @@ def start_viewer():
                         break
             except Exception as e:
                 print("gimbal speed check failed:", e)
+            return result if isinstance(result, dict) else {"ok": bool(result)}
         except Exception as e:
             print("bake failed:", e)
+            return {"ok": False, "error": str(e)}
 
     keymap.setup_hotkeys(
         server,
@@ -381,11 +383,22 @@ def start_viewer():
             except Exception as e:
                 print("reset sim failed:", e)
         while bake_requests:
-            sp = bake_requests.pop(0)
-            for aid in arms.each():
-                with arms.using(aid):
-                    if len(getattr(wp, "waypoints", None) or []) >= 2 or aid == arms.active():
-                        _bake(sp)
+            req = bake_requests.pop(0)
+            # {"spacing", "done" (Event), "result"} from /api/bake (it waits for the
+            # result), or a bare spacing from older callers.
+            sp = req.get("spacing") if isinstance(req, dict) else req
+            res = None
+            try:
+                for aid in arms.each():
+                    with arms.using(aid):
+                        if len(getattr(wp, "waypoints", None) or []) >= 2 or aid == arms.active():
+                            r = _bake(sp)
+                            if aid == arms.active():
+                                res = r
+            finally:
+                if isinstance(req, dict):
+                    req["result"] = res
+                    req["done"].set()
         while sim_requests:
             dur = sim_requests.pop(0)
             try:

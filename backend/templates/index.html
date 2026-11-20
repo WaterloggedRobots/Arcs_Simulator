@@ -9096,7 +9096,8 @@
         if (!realOn) moveBtn.disabled = true;
       }
       const bake = document.getElementById("bake");
-      if (bake && !realOn && !ikOk) bake.disabled = true;
+      // (It used to stay disabled after this: nothing enabled it again.)
+      if (bake) bake.disabled = (!realOn && !ikOk) || bakingBusy || !!window.__bakeWaiting;
       document.body.classList.toggle("no-real", !realOn);
       document.body.classList.toggle("no-ik", !ikOk);
     }
@@ -9851,7 +9852,14 @@
     })();
 
     document.getElementById("bake").onclick = async () => {
-      if (lockEdits || bakingBusy) return;
+      if (window.__bakeWaiting) return;
+      if (lockEdits) {
+        // Ignored silently before (a click while Simulate / a run was active looked like a miss).
+        statusEl.textContent = "Stop Simulate / the run before baking";
+        return;
+      }
+      if (bakingBusy) { statusEl.textContent = "Baking…"; return; }
+      window.__bakeWaiting = true;
       bakingBusy = true;
       syncPlayButtons();
       const poseMove = document.getElementById("moveRobotPose");
@@ -9880,12 +9888,14 @@
           simRunnable = !!(d.bake.ik_ok || d.bake.runnable);
         }
         const tag = autoSampleOn ? "Auto Sample" : "Bake";
-        if (!d.ok) statusEl.textContent = tag + " failed" + (d.failed_at != null ? (" at span " + d.failed_at) : "") + (d.error ? (": " + d.error) : "");
+        if (d.pending) statusEl.textContent = tag + " still running…";
+        else if (!d.ok) statusEl.textContent = tag + " failed" + (d.failed_at != null ? (" at span " + d.failed_at) : "") + (d.error ? (": " + d.error) : "");
         else statusEl.textContent = tag + " " + (d.baked || 0) + "/" + (d.total || 0);
       } catch (err) {
         statusEl.textContent = "Bake failed: " + err;
       }
       bakingBusy = false;
+      window.__bakeWaiting = false;
       if (bakeBtn) bakeBtn.disabled = false;
       if (clearBtn) clearBtn.disabled = false;
       await refresh();
