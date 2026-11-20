@@ -136,7 +136,8 @@ Bookmarks can be stored **locally per project** or **globally** so they are shar
 | **Move real robot to sim bot pose** | Sends the real arm to wherever the simulator's cursor is. Linear speed is adjustable in Settings. |
 | **Bake path** | Generates the sample points that approximate the path and validates them (see below). One click is enough: the button stays disabled until the bake has finished and the status line then gives its result (it used to answer before the bake ran, showing *Bake 0/0*, so a click looked missed). A click while Simulate or a run is active says to stop it first. |
 | **Simulate** | Plays the baked path in the 3D world. |
-| **Run** | Runs the path on the real robot. |
+| **Run** | Runs the path on the real robot (after **Upload**; **Move** first takes the arm to the path's start). |
+| **Clear** | Right of **Move** / **Run** once a path is uploaded: empties the robot's path buffer and cancels the upload (back to **Upload**), without running it. For a Live run it also ends the waiting sender process. |
 | **Repeatable** | Marks the motion path as repeatable *(untested)*. |
 
 ---

@@ -343,6 +343,9 @@
     #bakeHint { font-size: 10px; color: #9aa0a8; min-height: 0; margin: 0; padding: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #status { font-size: 10px; line-height: 1.35; color: #9aa0a8; margin: 0 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .play-row button { flex: 1; margin: 0; }
+    /* Move / Run and Clear upload share the row 2 : 1. */
+    .play-row #runReal.with-clear { flex: 2 1 0; }
+    .play-row #clearUpload { flex: 1 1 0; }
     .repeat-pair { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
     .repeat-pair input { width: 52px; min-width: 52px; max-width: 52px; flex: 0 0 52px; margin: 0; }
     #playInf {
@@ -1669,6 +1672,7 @@
         <button id="simulate" class="play" disabled>Simulate</button>
         <button id="uploadReal" class="real" disabled>Upload</button>
         <button id="runReal" class="real move" disabled>Move</button>
+        <button id="clearUpload" class="stop" title="Clear the uploaded path: empties the robot's path buffer and cancels the upload" hidden>Clear</button>
         <button id="simToggle" class="play" hidden>Pause</button>
         <button id="simStop" class="stop" hidden>Stop</button>
         <button id="realToggle" class="play" hidden>Pause</button>
@@ -2721,6 +2725,10 @@
       setHidden(simBtn, playing);
       setHidden(upBtn, !showUpload);
       setHidden(realBtn, !(showMove || showRun));
+      const clearUp = document.getElementById("clearUpload");
+      setHidden(clearUp, !(showMove || showRun));
+      if (realBtn) realBtn.classList.toggle("with-clear", !!(showMove || showRun));
+      if (clearUp) clearUp.disabled = false;
       setHidden(tog, !simRun || realRun);
       setHidden(stop, !simRun || realRun);
       setHidden(realTog, true);
@@ -2739,11 +2747,11 @@
       }
       if (showMove) {
         realBtn.textContent = "Move";
-        realBtn.className = "real move";
+        realBtn.className = "real move with-clear";
         realBtn.disabled = bakingBusy || window.__realLinkOn === false;
       } else if (showRun) {
         realBtn.textContent = "Run";
-        realBtn.className = "real run";
+        realBtn.className = "real run with-clear";
         realBtn.disabled = !runnable || bakingBusy || window.__realLinkOn === false;
       }
     }
@@ -10310,6 +10318,20 @@
         refresh();
       });
     };
+    (function setupClearUpload() {
+      // After Upload, before Run: empty the robot's path buffer and cancel the
+      // upload (the same as Stop: the buffer is aborted and freed).
+      const b = document.getElementById("clearUpload");
+      if (!b) return;
+      b.addEventListener("click", () => {
+        b.disabled = true;
+        fetch("/api/real/stop", { method: "POST" }).then((r) => r.json()).then((d) => {
+          if (d && d.real) realState = mergeState(realState, d.real);
+          statusEl.textContent = "Upload cleared: the robot's path buffer is empty";
+        }).catch((e) => { statusEl.textContent = "Clear failed: " + e; })
+          .then(() => { b.disabled = false; syncPlayButtons(); refresh(); });
+      });
+    })();
     (function setupRealPath() {
       const upBtn = document.getElementById("uploadReal");
       const btn = document.getElementById("runReal");
