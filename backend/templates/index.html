@@ -1547,7 +1547,7 @@
       border-radius: 0; pointer-events: auto;
     }
     .ctrl-card {
-      display: flex; flex-direction: column; width: 560px; height: 540px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px);
+      display: flex; flex-direction: column; width: 588px; /* 5 % wider than 560 */ height: 540px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px);
       background: #16171c; border: 1px solid #3a3b44; border-radius: 10px; overflow: hidden;
     }
     .ctrl-title {
@@ -1565,6 +1565,13 @@
     .rtm-row { display: grid; grid-template-columns: 1fr 90px; gap: 6px; align-items: center; margin: 3px 0; }
     .rtm-row label { font-size: 12px; color: #c8c9cf; }
     .rtm-row input { width: 100%; }
+    /* Game-style effect line under each setting: what raising it does. */
+    .rtm-fx { font-size: 10.5px; color: #8a8a92; margin: -1px 0 7px; letter-spacing: 0.1px; }
+    .rtm-fx .fx-k { color: #6e6f78; margin-right: 4px; }
+    .rtm-fx .fx { margin-right: 10px; white-space: nowrap; }
+    .rtm-fx .fx b { font-weight: 600; margin-left: 2px; }
+    .rtm-fx .fx.good b { color: #4cc38a; }
+    .rtm-fx .fx.bad b { color: #e5484d; }
     .rtm-presets { display: flex; gap: 6px; margin: 0 0 4px; }
     .rtm-presets button { flex: 1; font-size: 11px; padding: 4px 6px; }
     .ctrl-main { flex: 1; padding: 10px 14px 16px; display: flex; flex-direction: column; min-width: 0; }
@@ -2602,8 +2609,8 @@
       <div class="tl-toolbar">
         <span>Timeline</span>
         <span class="readout" id="tlReadout">0.00s  ·  100 px/s</span>
-        <button type="button" id="tlSnapBtn" class="on" title="Snap to grid" aria-label="Snap to grid"><svg viewBox="0 0 24 24" fill="none" stroke="#f4f4f4" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4v4a4 4 0 0 0 8 0V4"/><path d="M8 4h2.2M13.8 4H16"/><path d="M12 12v8"/></svg></button>
-        <button type="button" id="tlMirrorBtn" title="Mirror the robot's motion path about the playhead (the selected keyframes, or the whole arm track): it plays backwards from the other side of the playhead. Gimbal, animation and camera tracks stay as they are." aria-label="Mirror robot path about the playhead"><svg viewBox="0 0 24 24" fill="none" stroke="#f4f4f4" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3v18" stroke-dasharray="2 2.4"/><path d="M9 7L4 12l5 5z"/><path d="M15 7l5 5-5 5z"/></svg></button>
+        <button type="button" id="tlSnapBtn" class="on" title="Snap to grid" aria-label="Snap to grid"><svg viewBox="0 0 24 24" fill="none" stroke-linecap="butt"><path d="M7 4v8a5 5 0 0 0 10 0V4" stroke="#f4f4f4" stroke-width="3.6"/><path d="M7 3.2v3.6M17 3.2v3.6" stroke="#e5484d" stroke-width="3.6"/><path d="M4.5 19.5l1.6-1.1M19.5 19.5l-1.6-1.1M12 22v-1.8" stroke="#f4f4f4" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <button type="button" id="tlMirrorBtn" title="Mirror the robot's motion path about the playhead: a reversed copy of the waypoints before it (the selected keyframes, or the whole arm track) is added after it, so the arm goes back the way it came. Gimbal, animation and camera tracks stay as they are." aria-label="Mirror robot path about the playhead"><svg viewBox="0 0 24 24" fill="none" stroke="#f4f4f4" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3v18" stroke-dasharray="2 2.4"/><path d="M9 7L4 12l5 5z"/><path d="M15 7l5 5-5 5z"/></svg></button>
         <div class="tl-mode simple dev-only" id="tlModeWrap">
           <span class="mode-simple">Simple</span>
           <button type="button" class="slide" id="tlMode" title="Simple (locked)" disabled></button>
@@ -3307,7 +3314,7 @@
           body: JSON.stringify({ t: playhead, indices: idx.size >= 2 ? Array.from(idx) : [] }) })
           .then((r) => r.json()).then((d) => {
             if (statusEl) statusEl.textContent = d && d.ok
-              ? "Mirrored " + d.count + " waypoints about " + Number(playhead).toFixed(2) + " s: bake again"
+              ? "Mirrored copy of " + d.count + " waypoints added after " + Number(playhead).toFixed(2) + " s: bake again"
               : "Mirror: " + ((d && d.error) || "failed");
             if (d && d.ok) { selectedKfs = new Set(); selectedKf = null; window.__selClipId = null; }
           }).finally(() => setTimeout(refresh, 150));
@@ -6416,7 +6423,10 @@
         const liveCb = document.getElementById("trackLive");
         // Also on a waypoint with Look At: Live is how its Look At plays (and the
         // only place to reach it while the cursor has no Look At component).
-        if (liveRow) liveRow.hidden = !(isSim || wpOn);
+        // Only for the camera script's primary target: other targets are still or
+        // animated, and the bake already aims at them.
+        const primaryTgt = String(track.name || "").trim().toLowerCase() === "primary target";
+        if (liveRow) liveRow.hidden = !((isSim || wpOn) && primaryTgt);
         const smRow = document.getElementById("trackSmoothRow");
         if (smRow) smRow.hidden = !isSim;
         const smEl = document.getElementById("trackSmooth");
@@ -6424,7 +6434,7 @@
         const dbEl = document.getElementById("trackDeadband");
         if (dbEl && document.activeElement !== dbEl && track.deadband_mm != null) dbEl.value = Number(track.deadband_mm).toFixed(1);
         const tnRow = document.getElementById("trackTurnRow");
-        if (tnRow) tnRow.hidden = !isSim || !track.live;
+        if (tnRow) tnRow.hidden = !isSim || !track.live || !primaryTgt;
         const tdEl = document.getElementById("trackTurnDps");
         if (tdEl && document.activeElement !== tdEl && track.turn_dps != null) tdEl.value = Number(track.turn_dps).toFixed(0);
         const taEl = document.getElementById("trackTurnAcc");
@@ -6435,7 +6445,7 @@
           const lv = (simState && simState.live) || (realState && realState.live) || null;
           const txt = !track.live ? "" : (lv ? ("aim turned " + Number(lv.dev_deg || 0).toFixed(1) + "° from the bake, " + Number(lv.lag_deg || 0).toFixed(1) + "° behind the target" + (lv.err ? " · held: " + lv.err : "")) : "");
           liveNote.textContent = txt;
-          liveNote.hidden = !isSim || !txt;
+          liveNote.hidden = !isSim || !txt || !primaryTgt;
         }
         const tp = track.pos || [null, null, null];
         ["trackX", "trackY", "trackZ"].forEach((id, i) => {
@@ -9281,19 +9291,75 @@
     }
     // Preferences > Real Time Motion (live_aim.TUNE, settings.json "live_tuning").
     let rtmDefaults = null;
+    // What raising each Real Time Motion value does, like gear stats in a game:
+    // [word, arrows (1 = up, 2 = a lot up, -1 / -2 down), a gain (true) or a cost].
+    // From the lag simulation (step / sweep / jittery target) and the arm tests.
+    const RTM_FX = {
+      smooth_s: [["Jitter", -2, true], ["Lag", 1, false]],
+      deadband_mm: [["Jitter", -1, true], ["Accuracy", -1, false]],
+      predict_s: [["Stepping", -1, true], ["Overshoot", 1, false]],
+      aim_deadband_deg: [["Jitter", -2, true], ["Accuracy", -2, false]],
+      aim_response_s: [["Smoothness", 2, true], ["Lag", 2, false]],
+      turn_dps: [["Speed", 1, true], ["Smoothness", -1, false]],
+      turn_acc: [["Snap", 1, true], ["Smoothness", -1, false]],
+      aim_hold_mm: [["Smoothness", 1, true], ["Drift", 1, false]],
+      horizon_s: [["Smoothness", 1, true], ["Tilt", 1, false]],
+      horizon_dead_deg: [["Smoothness", 1, true], ["Tilt", 1, false]],
+      joint_smooth_s: [["Smoothness", 1, true], ["Lag", 1, false]],
+      joint_dps: [["Speed", 1, true], ["Safety", -1, false]],
+      joint_acc: [["Snap", 1, true], ["Smoothness", -1, false]],
+      aim_hz: [["Lag", -1, true], ["Load", 1, false]],
+      track_smooth: [["Smoothness", 1, true], ["Lag", 1, false]],
+      track_delay: [["Smoothness", 1, true], ["Lag", 1, false]],
+    };
+    // Choices: the effect of the option picked (against the other one).
+    const RTM_FX_CHOICE = {
+      aim_solver: { "1": [["Smoothness", 2, true], ["Accuracy", -1, false]], "0": [["Accuracy", 2, true], ["Shake", 1, false]] },
+      stream_process: { "1": [["Steadiness", 2, true], ["Startup", 1, false]], "0": [["Steadiness", -2, false]] },
+    };
+    function rtmFxHtml(list, lead) {
+      const arrow = (n) => ({ 2: "⇈", 1: "↑", "-1": "↓", "-2": "⇊" })[n] || "";
+      return (lead ? "<span class='fx-k'>" + lead + "</span>" : "") +
+        list.map(([w, n, good]) => "<span class='fx " + (good ? "good" : "bad") + "'>" + w + "<b>" + arrow(n) + "</b></span>").join("");
+    }
+    function decorateRtm() {
+      document.querySelectorAll("#pane-rtm [data-rtm]").forEach((el) => {
+        const key = el.dataset.rtm;
+        const row = el.closest(".rtm-row");
+        if (!row) return;
+        let fx = row.nextElementSibling;
+        if (!fx || !fx.classList.contains("rtm-fx")) {
+          fx = document.createElement("div");
+          fx.className = "rtm-fx";
+          row.after(fx);
+        }
+        let html = "";
+        if (RTM_FX_CHOICE[key]) {
+          const list = RTM_FX_CHOICE[key][String(el.value)];
+          if (list) html = rtmFxHtml(list, "This choice:");
+        } else if (RTM_FX[key]) {
+          html = rtmFxHtml(RTM_FX[key], "Higher:");
+        }
+        fx.innerHTML = html;
+        fx.hidden = !html;
+      });
+    }
     function fillRtm(t, defs) {
       if (defs) rtmDefaults = defs;
       document.querySelectorAll("[data-rtm]").forEach((el) => {
         const v = t[el.dataset.rtm];
         if (v != null && document.activeElement !== el) el.value = Number(v);
       });
+      decorateRtm();
     }
     function postRtm(patch) {
       return fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ live_tuning: patch }) })
         .then((r) => r.json()).then((d) => { if (d.settings && d.settings.live_tuning) fillRtm(d.settings.live_tuning); refresh(); });
     }
+    decorateRtm();
     document.querySelectorAll("[data-rtm]").forEach((el) => el.addEventListener("change", () => {
+      decorateRtm();
       const v = Number(el.value);
       if (isFinite(v)) postRtm({ [el.dataset.rtm]: v });
     }));

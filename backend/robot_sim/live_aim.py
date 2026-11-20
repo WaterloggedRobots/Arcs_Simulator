@@ -147,8 +147,14 @@ def _wxyz(rot):
     return np.array([q[3], q[0], q[1], q[2]], dtype=float)
 
 
+def is_primary(name):
+    """Live follows only the camera script's primary target: every other Look At
+    target is still or animated, and the bake already aims at it."""
+    return str(name or "").strip().lower() == str(getattr(_rr(), "PRIMARY_TARGET_NAME", "Primary target")).lower()
+
+
 def span_specs():
-    """[(t0, t1, spec)] of the arm's spans with Look At (path time)."""
+    """[(t0, t1, spec)] of the arm's spans with Look At at the primary target (path time)."""
     import waypoints as wp
     bake = _bake()
     out = []
@@ -156,7 +162,7 @@ def span_specs():
     for i in range(max(0, len(wps) - 1)):
         spec = bake._track_spec_for_seg(i)
         t0, t1 = wps[i].get("t"), wps[i + 1].get("t")
-        if spec and t0 is not None and t1 is not None:
+        if spec and t0 is not None and t1 is not None and is_primary(spec.get("name")):
             out.append((float(t0), float(t1), dict(spec)))
     return out
 
