@@ -900,6 +900,13 @@
       cursor: pointer; flex-shrink: 0;
     }
     #tlSnapBtn svg { width: 14px; height: 14px; display: block; }
+    #tlMirrorBtn {
+      width: 28px; height: 22px; padding: 0; margin: 0 0 0 6px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid #3a3b44; border-radius: 5px; background: #2a2b32; cursor: pointer; flex-shrink: 0;
+    }
+    #tlMirrorBtn svg { width: 15px; height: 15px; display: block; }
+    #tlMirrorBtn:disabled { opacity: 0.4; cursor: default; }
     #tlSnapBtn.on { background: #243044; border-color: #5a86d4; }
     .tl-mode {
       display: flex;
@@ -2596,6 +2603,7 @@
         <span>Timeline</span>
         <span class="readout" id="tlReadout">0.00s  ·  100 px/s</span>
         <button type="button" id="tlSnapBtn" class="on" title="Snap to grid" aria-label="Snap to grid"><svg viewBox="0 0 24 24" fill="none" stroke="#f4f4f4" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4v4a4 4 0 0 0 8 0V4"/><path d="M8 4h2.2M13.8 4H16"/><path d="M12 12v8"/></svg></button>
+        <button type="button" id="tlMirrorBtn" title="Mirror the robot's motion path about the playhead (the selected keyframes, or the whole arm track): it plays backwards from the other side of the playhead. Gimbal, animation and camera tracks stay as they are." aria-label="Mirror robot path about the playhead"><svg viewBox="0 0 24 24" fill="none" stroke="#f4f4f4" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3v18" stroke-dasharray="2 2.4"/><path d="M9 7L4 12l5 5z"/><path d="M15 7l5 5-5 5z"/></svg></button>
         <div class="tl-mode simple dev-only" id="tlModeWrap">
           <span class="mode-simple">Simple</span>
           <button type="button" class="slide" id="tlMode" title="Simple (locked)" disabled></button>
@@ -3286,6 +3294,25 @@
         }).finally(() => setTimeout(refresh, 150));
       return true;
     }
+    (function setupMirror() {
+      const b = document.getElementById("tlMirrorBtn");
+      if (!b) return;
+      b.addEventListener("click", () => {
+        if (lockEdits) { if (statusEl) statusEl.textContent = "Stop Simulate / the run before mirroring"; return; }
+        const idx = new Set(selectedKfs);
+        if (selectedKf != null && !idx.size) idx.add(selectedKf);
+        const cid = window.__selClipId;
+        if (cid) keyframes.forEach((k) => { if (k.clip_id === cid) idx.add(k.index); });
+        fetch("/api/mirror_path", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ t: playhead, indices: idx.size >= 2 ? Array.from(idx) : [] }) })
+          .then((r) => r.json()).then((d) => {
+            if (statusEl) statusEl.textContent = d && d.ok
+              ? "Mirrored " + d.count + " waypoints about " + Number(playhead).toFixed(2) + " s: bake again"
+              : "Mirror: " + ((d && d.error) || "failed");
+            if (d && d.ok) { selectedKfs = new Set(); selectedKf = null; window.__selClipId = null; }
+          }).finally(() => setTimeout(refresh, 150));
+      });
+    })();
     function animOid(tid) { return String(tid).slice("anim_".length); }
     // Keys and frames of an Animate track as drawn: during a drag, the dragged
     // keys at their new times and the frames of their spans stretched with them.

@@ -199,6 +199,8 @@ The timeline is where a move is timed and refined.
 
 **Speed graph panel.** *Panel > Speed graph* shows or hides the speed graph under the timeline; hidden, the timeline takes its room. The choice is remembered in this browser.
 
+**Mirror.** The mirror button in the timeline toolbar (right of the snap button) mirrors the robot's motion path in time about the playhead: each waypoint at time *t* moves to 2 × playhead − *t*, so the path plays backwards on the other side of the playhead (with the playhead at the path's end, the reversed path follows it, which makes a return trip after moving the original elsewhere). It mirrors the selected keyframes (2 or more; a placed saved path whole), else every waypoint of the active arm; gimbal, animation and camera tracks stay where they are. Curve handles swap sides, so the curves keep their shape backwards. It is refused when the mirrored path would start before 0 s or land on a waypoint that isn't mirrored. One undo step; bake again afterwards.
+
 **Track names.** Drag the right edge of the track-name column to widen or narrow it (the width is remembered in this browser). Right of the names is a column of small **+** buttons, the same as the lists' **+**: on an arm's row, orange adds a waypoint from the Real Arm Cursor and blue from the Sim Arm Cursor at the playhead (on another arm's row, that arm becomes the active arm first); on a gimbal's row, orange inserts a frame with the real gimbal's angles and blue with the Sim gimbal's; on a camera's row, the green ▶ and red ❚❚ add a start / stop recording key at the playhead. Only tracks you added (dev mode **+** under the names) have a 🗑; camera, gimbal and Look At tracks go with their object or component.
 
 **Arm track**

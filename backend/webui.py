@@ -1310,6 +1310,20 @@ def api_delete_selected():
     return jsonify({"ok": True})
 
 
+@app.route("/api/mirror_path", methods=["POST"])
+def api_mirror_path():
+    """Timeline Mirror: the arm's waypoints (or the selected ones) in time about the playhead."""
+    data = request.get_json(silent=True) or {}
+    if rr.edits_locked():
+        return jsonify({"ok": False, "error": "edits are locked while the robot runs"})
+    t = data.get("t")
+    if t is None:
+        t = getattr(viewer_main, "playhead_t", 0.0)
+    out = wp.mirror_path(float(t), data.get("indices") or None)
+    _status_dirty.set()
+    return jsonify(out)
+
+
 @app.route("/api/delete_keyframes", methods=["POST"])
 def api_delete_keyframes():
     """Timeline Delete: the selected waypoints (a placed saved path whole)."""

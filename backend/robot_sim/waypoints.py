@@ -599,6 +599,69 @@ def _snapshot():
     }
 
 
+_CLIP_KEYS = ("clip_id", "clip_name", "clip_locked", "clip_path")
+
+
+def mirror_path(axis_t, indices=None):
+    """Mirror the arm's waypoints in time about axis_t (the playhead): each
+    chosen waypoint moves to 2 * axis_t - t, so the motion plays backwards from
+    the other side of the playhead. indices: the waypoints to mirror (2 or more;
+    a placed saved path whole), else every waypoint. Only the arm's own track
+    changes (not gimbals, animations or camera keys). One undo step.
+    Returns {ok, count} or {ok: False, error}."""
+    global selected_idx
+    n = len(waypoints)
+    if n < 2:
+        return {"ok": False, "error": "the arm's path needs 2 waypoints or more"}
+    axis = float(axis_t)
+    pick = sorted({int(i) for i in (indices or []) if 0 <= int(i) < n})
+    if pick:
+        # A placed saved path (clip) moves whole.
+        clips = {str(waypoints[i].get("clip_id")) for i in pick if waypoints[i].get("clip_id")}
+        pick = sorted(set(pick) | {j for j, w in enumerate(waypoints) if str(w.get("clip_id") or "") in clips and w.get("clip_id")})
+    if len(pick) < 2:
+        pick = list(range(n))
+    chosen = set(pick)
+    times = [None if w.get("t") is None else float(w["t"]) for w in waypoints]
+    if any(times[i] is None for i in pick):
+        return {"ok": False, "error": "a waypoint has no time"}
+    new_t = {i: 2.0 * axis - times[i] for i in pick}
+    lo = min(new_t.values())
+    if lo < -1e-6:
+        return {"ok": False, "error": "the mirrored path would start before 0 s (%.2f s): move the playhead later" % lo}
+    others = [times[i] for i in range(n) if i not in chosen and times[i] is not None]
+    for i, t in new_t.items():
+        if any(abs(t - o) < 1e-3 for o in others):
+            return {"ok": False, "error": "the mirrored path lands on another waypoint at %.2f s" % t}
+    _push_history()
+    _quit_sim()
+    doc = _snapshot()
+    snaps = doc["waypoints"]
+    extra = [{k: w.get(k) for k in _CLIP_KEYS} for w in waypoints]
+    rows = []
+    for i, s in enumerate(snaps):
+        s = dict(s)
+        if i in chosen:
+            s["t"] = max(0.0, new_t[i])
+            # Played backwards: a waypoint's way in is its old way out.
+            s["out_ctrl_pos"], s["in_ctrl_pos"] = s.get("in_ctrl_pos"), s.get("out_ctrl_pos")
+        rows.append((s["t"], i, s, extra[i]))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    doc["waypoints"] = [r[2] for r in rows]
+    doc["selected_idx"] = None
+    _rebuild_from_snapshot(doc, full=True)
+    for k, r in enumerate(rows):
+        if k < len(waypoints):
+            for key, v in r[3].items():
+                if v is not None:
+                    waypoints[k][key] = v
+    _bake_call("invalidate_from", 0)
+    _bake_call("bump_timeline_cache")
+    draw_path()
+    print("mirrored %d waypoint(s) about %.2f s" % (len(pick), axis))
+    return {"ok": True, "count": len(pick)}
+
+
 # Called after every new undo step (webui: autosave soon after an edit).
 on_edit = []
 
@@ -731,7 +794,9 @@ def _restore_objects_snapshot(doc):
     animate.refresh_all()
 
 
-def _rebuild_from_snapshot(doc):
+def _rebuild_from_snapshot(doc, full=False):
+    """full: rebuild every waypoint (the in-place update keeps handles a snapshot
+    entry has none for, and clip fields, by index)."""
     global _suspend_history, selected_idx, _drag_checkpointed
     _suspend_history = True
     _drag_checkpointed = False
@@ -744,7 +809,7 @@ def _rebuild_from_snapshot(doc):
         except Exception as e:
             print("undo arm base failed", e)
 
-    if len(snaps) == len(waypoints):
+    if not full and len(snaps) == len(waypoints):
         for i, s in enumerate(snaps):
             _apply_snap_fields(waypoints[i], s)
             if s.get("out_ctrl_pos") is not None:
